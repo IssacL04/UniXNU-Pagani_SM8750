@@ -1,3 +1,1822 @@
+diff --git a/.github/workflows/macos.yml b/.github/workflows/macos.yml
+index 53edfd2..ae3f1c4 100644
+--- a/.github/workflows/macos.yml
++++ b/.github/workflows/macos.yml
+@@ -20,6 +20,7 @@ on:
+         type: choice
+         options:
+           - kernel
++          - kernel payload
+           - kernel userdata
+           - kernel userdata payload
+         default: kernel userdata
+@@ -106,8 +107,10 @@ jobs:
+           done
+ 
+       - name: Select the device
++        env:
++          DEFCONFIG: ${{ inputs.defconfig }}
+         run: |
+-          ./unixnu defconfig "${{ inputs.defconfig }}" -D "$GITHUB_WORKSPACE/device"
++          ./unixnu defconfig "$DEFCONFIG" -D "$GITHUB_WORKSPACE/device"
+           ./unixnu fetch xnu libplatform libdispatch AvailabilityVersions libpthread \
+                           corecrypto-2023 IOStorageFamily -D "$GITHUB_WORKSPACE/device"
+ 
+@@ -181,6 +184,7 @@ jobs:
+           ./unixnu build payload "${args[@]}"
+ 
+       - name: Upload kernel and payload
++        if: always()
+         uses: actions/upload-artifact@v4
+         with:
+           name: unixnu-${{ inputs.defconfig }}
+diff --git a/docs/.vitepress/config.mts b/docs/.vitepress/config.mts
+index 6af746c..53fb8d1 100644
+--- a/docs/.vitepress/config.mts
++++ b/docs/.vitepress/config.mts
+@@ -75,6 +75,8 @@ export default withMermaid(defineConfig({
+               text: '移植',
+               items: [
+                 { text: '移植总览', link: '/zh/porting/' },
++                { text: 'SoC 移植路线', link: '/zh/porting/soc-porting' },
++                { text: '一加 13T 菜单启动', link: '/zh/porting/oneplus-13t-menu' },
+                 { text: '设备仓库', link: '/zh/porting/device-repository' },
+                 { text: 'UEFI 固件', link: '/zh/porting/uefi-firmware' },
+                 { text: '设备树', link: '/zh/porting/device-tree' },
+@@ -255,6 +257,8 @@ export default withMermaid(defineConfig({
+           text: 'Porting',
+           items: [
+             { text: 'Porting overview', link: '/porting/' },
++            { text: 'SoC porting roadmap', link: '/porting/soc-porting' },
++            { text: 'OnePlus 13T menu bring-up', link: '/porting/oneplus-13t-menu' },
+             { text: 'Device repository', link: '/porting/device-repository' },
+             { text: 'UEFI firmware', link: '/porting/uefi-firmware' },
+             { text: 'Device tree', link: '/porting/device-tree' },
+diff --git a/docs/building.md b/docs/building.md
+index 1fbb191..d41c273 100644
+--- a/docs/building.md
++++ b/docs/building.md
+@@ -40,7 +40,7 @@ The kernel, userdata and Data seed steps call Xcode, `hdiutil` and `diskutil`. A
+ | `device_repository` | Device repository as `owner/name` |
+ | `device_ref` | Ref of the device repository |
+ | `defconfig` | Defconfig name |
+-| `steps` | `kernel`, `kernel userdata` or `kernel userdata payload`. The default is `kernel userdata` |
++| `steps` | `kernel`, `kernel payload`, `kernel userdata` or `kernel userdata payload`. The default is `kernel userdata` |
+ | `ipsw_url` | Optional IPSW URL. An empty value uses `board.toml` |
+ | `pre_build` | Optional shell commands run in the UniXNU checkout before the kernel build. The device repository is at `DEVICE_DIR` |
+ | `trust_cache_url` | Optional trust cache bundle URL |
+@@ -68,6 +68,8 @@ The candidate names and the display or kernelcache inputs come from the device r
+ 
+ The workflow runs kernel, userdata and payload. Package, firmware and boot image steps run on any OS and stay outside the workflow. Public repositories use the free macOS runner quota. Private repositories consume Actions minutes.
+ 
++For early board bring-up, `[kernel] source_only = true` publishes the source XNU executable as `kernel/kernel.macho` and skips the kernelcache prelink. Do not combine it with `[kernel.prelink]`. This builds no root filesystem or Apple device drivers. The `kernel payload` workflow choice packages this kernel without running userdata; existing prelinked board profiles keep their default behavior. Logs are uploaded even when a build fails.
++
+ ## Commands
+ 
+ | Command | Action |
+@@ -200,6 +202,8 @@ The boot image step:
+ 
+ The ramdisk is the payload output when it exists, `--ramdisk FILE`, or an empty ramdisk with `--ramdisk none`.
+ 
++With `[bootimg] embed_payload = true`, the payload is appended to the firmware before compression. BootShim passes its address and size to SEC, which publishes a payload HOB for the board driver. The Android ramdisk field stays empty. This mode requires a nonempty payload and the matching BootShim/SEC changes; `--ramdisk none` is rejected. Unpacking verifies the complete embedded payload as part of the kernel image.
++
+ ## Local modules
+ 
+ A module can come from a local directory. The first match wins:
+diff --git a/docs/porting/index.md b/docs/porting/index.md
+index 6e71ecd..c2216c3 100644
+--- a/docs/porting/index.md
++++ b/docs/porting/index.md
+@@ -9,6 +9,10 @@ A device port has two repositories and one board configuration.
+ 
+ `UniXNU` supplies the build driver, the UEFI boot manager, DarwinBoot and the generic drivers. A device repository overrides any module with the same name.
+ 
++For another SoC, start with the [detailed SoC porting guide](/porting/soc-porting) to identify hardware dependencies, build inputs and acceptance criteria for each stage.
++
++For a OnePlus 13T that only needs to reach UEFI and the UniXNU menu, use the [first-stage menu guide](/porting/oneplus-13t-menu). That stage leaves XNU loading deferred.
++
+ ## Porting checklist
+ 
+ 1. [Port the UEFI firmware](/porting/uefi-firmware) so the device reaches a menu, a framebuffer and a payload volume.
+diff --git a/docs/porting/oneplus-13t-menu.md b/docs/porting/oneplus-13t-menu.md
+new file mode 100644
+index 0000000..eaa1a65
+--- /dev/null
++++ b/docs/porting/oneplus-13t-menu.md
+@@ -0,0 +1,228 @@
++# OnePlus 13T first-stage menu guide
++
++This page retains the first-stage `no-sdcc` / `menu-keys` baseline. Current development adds a source XNU profile, DarwinBoot, a read-only FAT payload driver and a single-CPU ADT. The macOS workflow uses `oneplus13t_defconfig` and `kernel payload`. These new paths remain untested on hardware; see the device repository `UniXNU-Sun_SM8750/README.md` for inputs, artifacts and commands.
++
++The acceptance point for the original menu stage is a OnePlus 13T entering UEFI through a temporary boot method allowed by the device, then displaying and running the UniXNU menu. Stop there. Do not load XNU, mount an Apple root or start iPadOS/macOS userland.
++
++XNU compilation, Apple ADT generation, IPSW, prelinking, trust caches, PMGR, native UFS, GPU and touch drivers can wait. This stage still needs a working UEFI platform, including memory, display or logging, a timer and necessary input. Existing UEFI drivers can be reused; missing interfaces require firmware-layer adaptation.
++
++## Device and current scope
++
++| Item | Information and status |
++| --- | --- |
++| Target | OnePlus 13T |
++| System version | User-reported `16.0.10.500` |
++| Android kernel | User-reported `6.6.118` |
++| SoC direction | SM8750; checked against user-exported sysinfo |
++| Desired result | UEFI entry, visible UniXNU menu and working menu interaction |
++| Device inspection in this session | Phone connected through ADB in Windows CMD; no direct connection to this build environment |
++| Implementation status | The no-sdcc build displays the menu and counts down on hardware; menu-keys adds side-button support, pending hardware interaction testing |
++| User-exported evidence | sysinfo confirms PKX110, project 24821, slot `_b`, DTB/DTBO indices 2 and the AA594 panel |
++| Menu application check | Three built-in entries displayed under QEMU/AAVMF; keyboard selection of Restart passed; phone firmware not tested |
++
++The Android Linux `6.6.118` kernel runs the existing OS. This path enters a separate UEFI firmware from the bootloader. It does not install an XNU compatibility module into Android or depend on Linux module ABI. The Android kernel version helps identify hardware references and matching stock images; it need not be rebuilt to display the UniXNU menu.
++
++## 1 The reusable pagani platform
++
++Reference firmware repository `uefi-sheng`, commit `8b7cc5d155ba147f461dea7121e91104544ab99e`, contains:
++
++```text
++Resources/Configs/pagani.toml
++Platforms/OnePlus/paganiPkg/pagani.dsc
++Platforms/OnePlus/paganiPkg/pagani.fdf
++Platforms/OnePlus/paganiPkg/Include/DXE.inc
++Platforms/OnePlus/paganiPkg/Library/MemoryMapLib/
++Platforms/OnePlus/paganiPkg/Library/ConfigurationMapLib/
++Silicon/Qualcomm/PakalaPkg/
++```
++
++This platform uses the SM8750 Pakala configuration. Its DSC identifies `13s`, `CPH2723` and `pagani`. The status page also identifies OnePlus 13s and reports working display, internal storage and side buttons. Those are reference-project records, not validation of the OnePlus 13T on `16.0.10.500`.
++
++Reuse this structure while checking 13T reservations, XBL/ABL, panel, side buttons and vendor DXE inputs. Changing the product name alone does not complete the adaptation.
++
++The reference status page also specifies an ARB Version 1 condition for 13s. Check the target 13T firmware's rollback constraints. Replacing XBL/ABL, downgrading firmware or changing rollback state is not a default step in this stage.
++
++## 2 Minimum boot chain
++
++```mermaid
++flowchart LR
++  A[Device bootloader] --> B[BootShim]
++  B --> C[UEFI derived from pagani]
++  C --> D[BDS]
++  D --> E[UniXNU.efi]
++  E --> F[Menu and diagnostics]
++```
++
++This stage remains inside UEFI. It does not invoke DarwinBoot, call ExitBootServices or enter XNU `start.s`. DarwinBoot's EL1 check, the contiguous XNU window, 4 KiB user ABI and XNU CPU/GIC drivers are outside acceptance here. UEFI's own CPU, GIC and timer initialization must still work.
++
++Embed UniXNU.efi and UniXNUDxe in the same firmware volume for the minimum path. UniXNUDxe registers the application as a `Boot####` option, and BDS starts it. The built-in menu can then be used without writing configuration to Android userdata or an EFI partition.
++
++## 3 Device information to establish first
++
++Once the phone is connected to ADB, begin with read-only queries:
++
++```sh
++adb devices -l
++adb shell getprop ro.product.model
++adb shell getprop ro.product.device
++adb shell getprop ro.product.board
++adb shell getprop ro.boot.hardware
++adb shell getprop ro.build.display.id
++adb shell getprop ro.build.fingerprint
++adb shell getprop ro.boot.slot_suffix
++adb shell getprop ro.boot.flash.locked
++adb shell getprop ro.boot.verifiedbootstate
++adb shell uname -a
++```
++
++These properties identify the device and firmware. They do not independently establish that the bootloader accepts a temporary image. Inspect relevant state in fastboot separately and retain complete results. This stage does not perform unlocking, erasing or flashing.
++
++| Open item | Purpose |
++| --- | --- |
++| Actual model, device and board identifiers | Establish the relationship between 13T and the pagani reference |
++| Bootloader state and temporary boot support | Establish whether `fastboot boot` is usable |
++| Stock boot/vendor_boot/DTB inputs matching `16.0.10.500` | Inspect actual image layout, DTB handoff and reservations |
++| XBL/ABL and rollback conditions | Check reference firmware prerequisites |
++| Actual framebuffer address, pitch, format and panel retention | Keep firmware and menu output visible |
++| Side-button to UEFI input path | Make the menu operable |
++
++Inspect the relevant inputs without first extracting an Apple restore image or rebuilding the Android kernel.
++
++## 4 Required change locations
++
++| Location | Reference platform | Local implementation and remaining work |
++| --- | --- | --- |
++| `Resources/Configs/pagani.toml` | Header v4 and FD settings | Separate `oneplus13t.toml` created; verify the load window on hardware |
++| `paganiPkg/Library/MemoryMapLib/` | Reference physical map | Separate 13T library reserves `0xD4E23000–0xD5100000` outside the DXE heaps |
++| `paganiPkg/pagani.dsc` | Firmware platform without UniXNU integration | Separate `oneplus13tPkg` includes UniXNU components and library mappings |
++| `paganiPkg/Include/DXE.inc` | Module list included by FDF | 13T FDF embeds the application and registrar; FD layout checked |
++| `[firmware] packages` | Package search paths | 13T board.toml includes the generic repository's `package/` |
++| `Binaries/pagani/` | Device-Binaries submodule inputs | Initialize and verify the reference inputs and their applicability to 13T |
++| `scripts/unixnu/bootimg.py` | Baseline verifier assumes the older header layout | v3/v4 checks and DTB-bundle preservation implemented and checked offline |
++| UniXNU configuration | Built-in menu works without a file | Add an action-only configuration later if needed |
++
++The firmware commit pins Binaries to `a1501e0c2e642d6ac0d8f52c85af2a67b75a7799`. Cloning only the outer repository does not populate its DXE files. A checkout lacking these inputs cannot perform the complete firmware build directly.
++
++### DSC and FDF integration
++
++Use the already integrated sheng DSC as a reference. Add these entries to the target DSC `[Components]`:
++
++```text
++UniXNUPkg/Application/UniXNU/UniXNU.inf
++UniXNUPkg/Driver/UniXNUDxe/UniXNUDxe.inf
++```
++
++Add at least these `[LibraryClasses]` mappings, retaining the platform's existing mappings:
++
++```text
++UniXNULib|UniXNUPkg/Library/UniXNULib/UniXNULib.inf
++FdtLib|MdePkg/Library/BaseFdtLib/BaseFdtLib.inf
++```
++
++Add the same two INF modules to the FDF module list:
++
++```text
++INF UniXNUPkg/Application/UniXNU/UniXNU.inf
++INF UniXNUPkg/Driver/UniXNUDxe/UniXNUDxe.inf
++```
++
++Leave DarwinBoot out of this stage. Building an EFI file alone does not make the phone run it. Connect the DSC build, firmware volume and BDS application launch path.
++
++### Display and buttons
++
++The pagani reference defaults to SimpleFbDxe and declares a `1216 × 2640`, 32-bit framebuffer. These are reference settings; verify the scanout base and actual pitch left by the current 13T firmware. Framebuffer reuse needs no XNU display driver, but the panel, power and memory must remain valid throughout UEFI execution.
++
++The no-sdcc build displays the menu on hardware, but ButtonsDxe returns before installing its input interface because OplusProject is absent. The menu-keys build replaces it with a separate 13T KeypadDeviceDxe and reuses the generic KeypadDxe. The exported DT maps volume up to PMK8550 PON RESIN, volume down to PM8550 GPIO6, and power to PON KPDPWR. These produce Up, Down and Enter respectively. Host tests cover reading and debounce; physical key behavior remains unverified.
++
++## 5 Header v4 and DTB bundles
++
++The baseline `bootimg.py::verify()` parses the older header and cannot validate the v4 selected by pagani.toml. The local implementation now checks v3/v4 headers, 4 KiB alignment and signature-region length separately, while retaining legacy address checks.
++
++The historical 13T vendor_boot input contains 13 candidate DTBs. The local packer validates and retains the complete bundle for bootloader hardware selection. This run neither guessed a single tree nor changed the phone's DTBO. Real mkbootimg.py round-trip checks passed for v0, v3 and v4. These checks do not establish device acceptance.
++
++The current menu candidate excludes UFSDxe, SdccDxe, OplusProject and PIL/PILProxy/SPSS and is `out/oneplus13t/boot/menu-keys/boot.img` in the generic repository. Its adjacent boot.json still records `hardware_tested: false`. Device control files are in sibling `UniXNU-Sun_SM8750/`, and the firmware working copy is `UEFI-Sun_SM8750/`. They use the oneplus13t board name and separate DSC/FDF files. See the device directory README.md for differences, actual build commands and unresolved hardware conditions.
++
++The new candidate retains the working menu baseline, adds side-button input and disables on-demand ConIn connection so input connects before the menu appears. The default timeout still returns to firmware after 10 seconds. Release all buttons, then briefly press volume down: selection should move down and the countdown should stop. A short power press confirms. If keys do not respond, capture every `13T keys:` log line.
++
++The subsequent sysinfo comparison found that the reference DXE heap covered the phone's hwfence-shmem reservation. The 13T DSC now selects an independent MemoryMapLib with an explicit reserved allocation HOB for that interval and usable heaps on either side. The device directory scripts/check-memory-map.py checks allocations against the exported DT. This does not replace boot-time handoff validation.
++
++## 6 Build scope and host
++
++Building only UEFI applications and firmware does not require the Xcode `iphoneos` SDK used by XNU. The reference firmware documentation recommends Linux. UniXNU package/firmware paths use EDK II, Python, make and LLVM CLANGPDB tools. Package and firmware builds passed in the current Linux workspace.
++
++The driver expects CLANGPDB tools `clang`, `lld-link`, `llvm-lib` and `llvm-rc`. BootShim also uses `llvm-objcopy` and `llvm-nm`. A system clang installation alone may be incomplete. Device USB/fastboot connectivity is a separate check from host compilation.
++
++The original menu-only board.toml defined only `[board]` and `[firmware]`, without `[ipsw]`, `[kernel]`, `[payload]` or `[userdata]`. After initializing submodules and preparing LLVM, Python and BaseTools, use the actual workspace paths from the generic repository:
++
++```sh
++./unixnu status -D ../UniXNU-Sun_SM8750
++./unixnu build firmware -D ../UniXNU-Sun_SM8750 \
++  --uefi ../UEFI-Sun_SM8750 --edk2 ../UEFI-Sun_SM8750/Mu_Basecore \
++  --local-module refer:edk2=../UEFI-Sun_SM8750/Mu_Basecore -j 4
++```
++
++UniXNU was built inside the firmware in this run. Avoid an unqualified `build` or `build all`, which enters the complete flow. See `UniXNU-Sun_SM8750/README.md` for environment variables and host dependencies.
++
++Pack with the extracted historical 13T vendor_boot DTB bundle:
++
++```sh
++./unixnu bootimg -D ../UniXNU-Sun_SM8750 --uefi ../UEFI-Sun_SM8750 \
++  --dtb ../UniXNU-Sun_SM8750/.cache/firmware/vendor_boot/dtb --ramdisk none \
++  -o out/oneplus13t/boot/xnu-loader/boot.img
++```
++
++The DTB input is a historical backup and still needs comparison with the current device. The no-sdcc menu display is now confirmed on hardware; the new side-key image remains a candidate. Other boot paths and vendor-driver compatibility are not covered by that result.
++
++## 7 Menu configuration and observation
++
++Use the built-in menu in Config.c first, without a configuration volume. It includes Return to firmware, Restart and Power off. Removable EFI loaders may also be discovered, so inspect the actual entries.
++
++The built-in configuration executes its default after about ten seconds, normally returning to firmware. An automatic return after showing the menu is not necessarily a crash. Once a readable configuration volume exists, this action-only configuration provides more observation time:
++
++```toml
++version = 1
++
++[boot]
++timeout = -1
++fallback_timeout = 300
++default = "exit"
++
++[kits]
++autoload = false
++
++[ui]
++title = "UniXNU"
++layout = "portrait"
++
++[[entry]]
++id = "exit"
++title = "Return to firmware"
++type = "action"
++action = "exit"
++```
++
++The path is `\EFI\UniXNU\unixnu.toml`. A negative timeout waits for input when an input device exists. Without one, the menu still uses the 300-second fallback. Do not create a `type = "xnu"` entry or supply an Apple kernel/Data seed in this stage.
++
++## 8 Acceptance order and remaining work
++
++| Order | Acceptance point | Then proceed to |
++| --- | --- | --- |
++| 1 | 13T identity, current firmware, temporary boot and recovery established | Firmware platform selection |
++| 2 | Target UEFI inputs complete; FD builds with correct module layout | Image packing |
++| 3 | v4 round trip succeeds; BootShim/FD addresses and sizes checked | Temporary hardware boot |
++| 4 | Sustained firmware logs or visible UEFI interface | UniXNU application startup |
++| 5 | `UNIXNU:` startup and `menu: shown`, or clearly visible UniXNU menu | Input verification |
++| 6 | Menu navigation/confirmation works, return behavior is explained and entry repeats | Stage complete |
++
++Without input, record menu display as achieved and menu interaction as remaining. QEMU success or a successful firmware build alone does not complete hardware acceptance.
++
++Step 5 is now confirmed: UniXNU is visible on the phone. Step 6, side-button interaction, remains to be tested. Temporarily boot the new menu-keys/boot.img; the device directory README.md identifies the artifact, key sequence and diagnostic logs. XNU native-driver work remains deferred.
++
++## Sources and later stages
++
++- [Reference pagani platform](https://github.com/UniXNU/uefi-sheng/tree/8b7cc5d155ba147f461dea7121e91104544ab99e/Platforms/OnePlus/paganiPkg)
++- [Reference image parameters](https://github.com/UniXNU/uefi-sheng/blob/8b7cc5d155ba147f461dea7121e91104544ab99e/Resources/Configs/pagani.toml)
++- [Reference device status](https://github.com/UniXNU/uefi-sheng/blob/8b7cc5d155ba147f461dea7121e91104544ab99e/Status.md#oneplus-13s)
++- [UniXNU firmware integration](https://github.com/UniXNU/UniXNU/blob/fb2bb310564ce66779e472a021881cf7c5764919/package/UniXNUPkg/Driver/UniXNUDxe/UniXNUDxe.c)
++- [Current boot image implementation](https://github.com/UniXNU/UniXNU/blob/fb2bb310564ce66779e472a021881cf7c5764919/scripts/unixnu/bootimg.py)
++- [Complete SoC guide](/porting/soc-porting), [UEFI firmware](/porting/uefi-firmware), [Boot configuration](/reference/boot-configuration)
+diff --git a/docs/porting/soc-porting.md b/docs/porting/soc-porting.md
+new file mode 100644
+index 0000000..6610489
+--- /dev/null
++++ b/docs/porting/soc-porting.md
+@@ -0,0 +1,531 @@
++# Detailed SoC porting guide
++
++Porting UniXNU to another SoC requires connecting UEFI, the XNU machine layer, native hardware drivers and the platform interfaces consumed by Apple userland. The boot manager, DarwinBoot, 4 KiB kernel patches, prelink tools and some IOKit drivers are reusable. The current storage, graphics and power paths retain explicit sheng dependencies. Start with an observable single-core kernel, add a read-only root and userland, then extend SMP, input and GPU support.
++
++This page describes UniXNU `fb2bb310564ce66779e472a021881cf7c5764919` and its pinned submodules. The device reference is UniXNU-sheng `7562a779ebdbdedc17c4c7274ba993acbbec8188`; the firmware reference is uefi-sheng `8b7cc5d155ba147f461dea7121e91104544ab99e`. Runtime results for sheng refer to the project's records. They do not establish boot support for another SoC. A checkout directory named `SM8750` does not establish support for that chip either.
++
++If the current goal is only a OnePlus 13T reaching UEFI and the UniXNU menu, start with the [first-stage menu guide](/porting/oneplus-13t-menu). The kernel, Apple userland and native-driver sections below belong to later stages.
++
++## 1 Boot chain and porting boundaries
++
++```mermaid
++flowchart TD
++  A[Device bootloader] --> B[BootShim and UEFI firmware]
++  B --> C[UniXNU menu and FAT payload]
++  C --> D[DarwinBoot]
++  D --> E[Source XNU and prelinked Apple components]
++  E --> F[Platform CPU interrupts and storage]
++  F --> G[Root launchd and Data]
++  G --> H[Display input GPU and system services]
++```
++
++| Layer | Entry and implementation | Work for another SoC |
++| --- | --- | --- |
++| Boot image | `scripts/unixnu/bootimg.py`, firmware `BootShim/BootShim.S` | Establish image format, load addresses, firmware window and bootloader interface |
++| UEFI | `scripts/unixnu/firmware.py`, device DSC/FDF and platform libraries | Establish the memory map, menu, file access and hardware handoff |
++| Boot manager | `package/UniXNUPkg/Library/UniXNULib/` | Usually reusable; check volume discovery and loader protocol |
++| Kernel loader | `drivers/DarwinBoot/DarwinBootPkg/Driver/` | Meet the EL1, Mach-O, ADT, memory-window and framebuffer contracts |
++| XNU and prelink | `scripts/build-xnu-4k-baseline.sh`, `kits/NativePrelink/` | Preserve the 4 KiB and Apple binary ABI contracts; adapt machine-specific paths |
++| Platform and hardware | `drivers/ArmDTPlatform/`, `drivers/ArmCpu/`, device drivers and kits | Describe real hardware and implement interrupts, DMA, storage, display and power |
++| Userland | IPSW, userdata image, Data seed and Metal plugin | Meet root-volume, signing, platform-identity and service dependencies |
++
++UEFI drivers run before boot services exit. Reading UFS, handling keys or drawing the menu establishes those capabilities at that stage. XNU needs its own drivers or a hardware-state takeover path verified on the target.
++
++Full Apple userland also depends on original kernelcache components from an IPSW. The current path prelinks source XNU with selected Apple components. Public XNU source alone cannot produce the complete iPadOS system used by this path.
++
++## 2 Check platform requirements first
++
++| Condition | Current implementation | Work if it differs |
++| --- | --- | --- |
++| Boot permission | Execution of a custom ARM64 image | Establish a boot method allowed by the device |
++| Exception level | DarwinBoot `Boot()` requires `CurrentEL == 4`, meaning EL1 | Implement and verify the firmware transition; removing the check does not establish a valid entry state |
++| Page tables | Hardware supports the current 4 KiB granule path | Redesign the machine profile and page-size patches |
++| Interrupts | `ArmCpu` currently parses and drives GICv3 | Implement a backend for GICv2 or another controller |
++| Timer | Virtual architectural counter, virtual timer and PPI 27 | Verify firmware access permissions and adapt the timer/interrupt path if required |
++| Memory | A sufficiently large contiguous `EfiConventionalMemory` run | Correct the real memory map, reduce occupancy or adjust the payload |
++| Storage | A native XNU block-read path can be implemented | Develop the UFS, eMMC, NVMe or other transport |
++| Debugging | At least one persistent way to observe the last checkpoint | Establish UART, framebuffer diagnostics or another board logging path first |
++
++Another board using the same SoC still needs panel, touch, GPIO, power and partition work. A newer SoC from the same vendor requires fresh checks of clocks, power control, SMMU, storage and GPU. A different vendor can retain boot protocols and generic XNU layers, while replacing the Qualcomm GCC, RPMh, GENI and GMU paths as appropriate.
++
++Set the first milestone to one core, verified timer interrupts and readable kernel checkpoints. Keep GPU, CPU frequency scaling, persistent Data and suspend disabled until then. A console itself needs a working UART or framebuffer path; `serial=3` selects behavior and does not supply a new UART driver.
++
++## 3 Collect hardware facts
++
++Preserve a working system and a recovery route before collecting the following data. Use the Linux BSP, the actual compiled board DTB and driver source to establish registers and initialization sequences. Observe the running stock system to establish the state firmware actually leaves behind.
++
++| Item | Facts to establish | Affected implementation |
++| --- | --- | --- |
++| Bootloader | Accepted header, compression, DTB handoff, load limits and temporary boot method | BootShim and `[bootimg.image]` |
++| DRAM | Physical regions, holes, reservations, secure-world and firmware use | UEFI memory map, DarwinBoot allocation and ADT |
++| CPU | Per-core MPIDR, boot CPU, available cores, PSCI conduit and permissions | `/cpus`, `/psci` and secondary startup |
++| Timer | `CNTFRQ_EL0`, counter access and timer PPI | CPU timebase, kernel time and interrupts |
++| GIC | Version, GICD/GICR addresses and sizes, redistributor stride and non-secure permissions | `ArmCpu::mapGic()` and initialization |
++| Storage | Host, PHY, clocks, reset, power, LUN, logical sectors and queue mode | Native block driver |
++| IOMMU | SMMU version, base, stream IDs, contexts, address widths and permissions | DMA mappings and isolation |
++| Display | Scanout address, pixel format, actual pitch, dimensions and panel retention | GOP, `boot_args.Video` and display driver |
++| Input | Controller, bus, pins, reset, IRQ, firmware and coordinate orientation | Bus driver, touch protocol and HID |
++| Power | Clock tree, regulators, votes, watchdog, idle and reset | Board power and recovery |
++| GPU | Hardware, firmware, power, SMMU, commands and compiler support | Native GPU and userland plugin |
++| Partitions | Actual GPT, LUN, userdata first/last LBA and logical block size | Userdata packing and persistence |
++
++Example collection commands, where the device supports them and reading is permitted:
++
++```sh
++fastboot getvar product
++fastboot getvar current-slot
++fastboot getvar max-download-size
++adb shell cat /proc/iomem
++adb shell cat /proc/interrupts
++adb shell ls -l /dev/block/by-name
++dtc -I dtb -O dts -o board-observed.dts board-observed.dtb
++```
++
++The DTB extraction method is device specific. Android's runtime tree may contain bootloader fixups, so a similarly named BSP DTS is not an equivalent input. `fastboot getvar` does not necessarily expose partition geometry; inspect GPT and the actual block device separately.
++
++## 4 Set up the device repository and build host
++
++### Repository responsibilities
++
++```text
++workspace/
++  UniXNU/                    Generic stack
++  UniXNU-target/
++    board.toml
++    configs/target_defconfig
++    scripts/                 Board generators and builders
++    drivers/                 Device drivers and necessary generic overrides
++    kits/
++    package/                 Becomes kits/target in the build tree
++    patches/                 Whole-module replacement rules apply
++    .cache/firmware/          External inputs
++  uefi-target/               Target Mu-Silicium port
++```
++
++In an existing main checkout:
++
++```sh
++git submodule update --init --recursive
++git submodule status --recursive
++cp -R examples/device ../UniXNU-target
++```
++
++Change the example's board name, SoC, kit, defconfig, UEFI configuration and paths. Remove `[board] example = true`, then supply real inputs. Leaving that flag enabled makes the driver refuse `build` and `bootimg`.
++
++The complete host build depends on macOS and Xcode's `iphoneos` SDK. Python must be 3.11 or newer. Other tools include LLVM/lld, make, cmake, ninja, unifdef, mtools and dtc. Userdata and some seed tools use `hdiutil`. Linux/WSL can support source reading and applicable host checks; the current scripts do not provide a complete replacement Linux XNU cross-build flow.
++
++```sh
++./unixnu defconfig target_defconfig -D ../UniXNU-target
++./unixnu status
++./unixnu fetch
++./unixnu tree
++```
++
++`defconfig` copies the source configuration to `out/target/.config`. Run it again after changing the source defconfig. Use `status` to inspect module origins; `fetch` writes the device's `unixnu.lock`. Generic submodules are pinned by main-repository gitlinks. Record device and UEFI commits separately too. Keep XNU/IPSW unchanged during initial porting instead of combining hardware bring-up with `fetch --update` and software upgrades.
++
++### Overrides and script paths
++
++Modules are selected by `(kind, name)`. Device `drivers/ArmCpu/` overrides the base ArmCpu, and device `patches/xnu/` replaces the entire base XNU patch set. To add board patches, retain the full base collection or explicitly extend the patch application logic. Placing a single patch in device `patches/xnu/` drops generic patches, including the 4 KiB work.
++
++`tree.py` links drivers, kits and patches, and copies build scripts. Reassemble after edits and inspect the actual `out/target/tree/scripts/` contents. Device `package/` becomes `kits/<board.kit>`; its contents are not automatically copied wholesale into the EFI payload.
++
++`kernel.py::build_archives()` prepends `tree/scripts/` to each archive builder entry. Use script names in `[kernel] archives`:
++
++```toml
++[kernel]
++defconfig = "target_defconfig"
++archives = [
++  "build-corecrypto-14.py",
++  "build-corecrypto-14.py --namespace",
++  "build-arm-driver.py ArmDTPlatform",
++  "build-arm-driver.py ArmCpu",
++  "build-libpthread-kernel.py",
++]
++```
++
++Do not use `scripts/build-arm-driver.py` here: it resolves to `tree/scripts/scripts/build-arm-driver.py`. Some existing documentation examples include that prefix; follow the current implementation and the actual sheng board file. The reference device repository supplies `build-arm-driver.py`; bring it into the new device and adapt it. This fragment illustrates a base archive order and is not a complete userland kernel recipe. By contrast, `firmware.preflight`, `payload.adt.tool` and `kernel.prelink.tool` resolve from the build-tree root and retain their `scripts/` or `kits/` prefix.
++
++## 5 Bring up UEFI and the boot image
++
++In `uefi-target/Resources/Configs/target.toml`, establish `[uefi_fd] base/size`, the BootShim header and Android image parameters. Put the actual board memory map and modules in DSC/FDF. Keep the firmware window clear of secure firmware, scanout, ramdisk, the BootShim source region and other memory still in use.
++
++`bootimg.py` requires the FD length to match the configured size exactly, `_Payload` to equal the shim binary length, and the ARM64 header to match its inputs. Packing currently produces `gzip(BootShim + FD) + DTB`, then invokes Mu-Silicium's `mkbootimg.py`. It does not select arbitrary compression based on `kernel_compression`. The local 13T implementation adds v3/v4 unpacking checks and concatenated-DTB support; the baseline commit only checks legacy headers. Other headers, separate DTBs or vendor_boot still require corresponding packing and verification changes.
++
++### Minimum usable firmware
++
++| Interface | Behavior to verify |
++| --- | --- |
++| Text output or GOP | Menu and failures remain observable; text operation is possible without GOP |
++| Simple Text Input | Menu can be operated; automatic boot replaces only some interactions |
++| Simple File System | Configuration and kernel can be read from the payload FAT volume |
++| Block I/O | Required block devices are accessible when the payload/storage design uses them |
++| Loader protocol | DarwinBoot installs `gUniXNULoaderProtocolGuid` |
++| UEFI memory services | Real free regions are allocatable; reservations are not handed to XNU |
++
++Include these INF modules in the appropriate DSC/FDF or loading flow:
++
++```text
++UniXNUPkg/Application/UniXNU/UniXNU.inf
++UniXNUPkg/Driver/UniXNUDxe/UniXNUDxe.inf
++DarwinBootPkg/Driver/DarwinBoot.inf
++```
++
++First verify firmware and the menu with an empty ramdisk:
++
++```sh
++./unixnu build package
++./unixnu build firmware --uefi ../uefi-target
++./unixnu bootimg --uefi ../uefi-target --dtb /path/to/target.dtb --ramdisk none
++fastboot boot out/target/boot/boot.img
++```
++
++These commands require an implemented target UEFI port. Use `fastboot boot` where temporary boot is supported; other platforms need a different launch container. This stage does not require flashing userdata.
++
++### Hardware state after boot services exit
++
++After exiting boot services, DarwinBoot masks exceptions, cleans the kernel window's cache state, invalidates instructions, disables the EL1 MMU and caches, puts the physical `boot_args` address in `x0` and branches to the physical kernel entry. Firmware must leave the transition code, data and framebuffer accessible under that handoff.
++
++If the menu works but the display goes black at exit, check ExitBootServices callbacks that disable the panel, scanout memory reservations, display power and SMMU mappings. The sheng splash reservation and platform-security-library handling belong to that device's implementation.
++
++## 6 Configure XNU and integrate drivers
++
++Keep the current `DEVELOPMENT_ARM64_BCM2837` build profile initially. It supplies the 4 KiB layout while patches replace machine-specific behavior. A different SoC name does not require immediately changing `MACHINE_CONFIGS`. The current source version is XNU `10063.141.1`, Darwin `23.6.0`; driver objects use ordinary ARM64 subtype 0 and the iOS 17 target ABI.
++
++An early single-core platform configuration can start with:
++
++```text
++CONFIG_XNU_SOURCE_CORECRYPTO14=y
++CONFIG_XNU_SOURCE_PTHREAD=y
++CONFIG_XNU_ARM_DT_PLATFORM=y
++CONFIG_XNU_ARMCPU=y
++CONFIG_XNU_NATIVE_ARCH_TIMER=y
++# CONFIG_XNU_ARMVIRT_PLATFORM is not set
++# CONFIG_XNU_NATIVE_UFS is not set
++# CONFIG_XNU_NATIVE_ADRENO is not set
++# CONFIG_XNU_BOOT_PROGRESS is not set
++```
++
++Match the crypto bootstrap mode to the selected prelinked components. Use `CONFIG_XNU_CRYPTO_BOOTSTRAP="prelinked"` when integrating the reference Apple crypto/AES path as required by that path. `CONFIG_XNU_NATIVE_PAN` requires the corresponding CPU capability. Avoid copying the complete sheng defconfig: it also enables owner root, graphics, verification-policy bundles and board power paths.
++
++`XNU_BOOT_PROGRESS=1` currently requires UFS, owner-root audit, VirtIO and source corecrypto, and invokes a device-supplied builder. Start with UART or an adapted entry probe. Adding `boot-progress=2` alone does not build a generic progress layer.
++
++Connect the full chain for a new built-in driver:
++
++1. Supply source and real resource handling, validating lengths, addresses, IRQs and hardware state.
++2. Build an archive using actual XNU `.cpo.json` compile records to preserve kernel macros, object layout and ABI.
++3. Add the archive builder to `[kernel] archives`.
++4. Add its switch, `KERNEL_EXTRA_ARCHIVES` and `KERNEL_ARCHIVE_DEPENDENCIES` to the kernel builder; use `-force_load` where required.
++5. Patch the `KernelConfigTables.cpp` personality and pass the macro controlling it.
++6. Publish the correct ADT provider and verify matching through `probe/start/registerService`.
++
++Editing the reference `Info.plist` alone does not update a built-in personality. UniXNU can stage external kexts, but current DarwinBoot rejects requests with `KextCount != 0`. Use the existing static-link path for early target drivers.
++
++When compile records are absent, the build driver first attempts a bootstrap compilation, builds the archives, then performs the final link and prelink. It tolerates a later bootstrap-pass error only after the required record exists. A failed final link remains a failed build.
++
++## 7 Generate the target ADT
++
++### Separate the two device-tree formats
++
++FDT/DTB uses the standard flattened device-tree encoding consumed by bootloaders, UEFI and Linux. XNU's `.adt` uses Apple node encoding; `dtc` does not directly convert an FDT into it. DarwinBoot reads `kernel.macho.adt` beside the kernel and rejects an additional FDT passed in the request. Omit `dtb` from an XNU menu entry.
++
++Use `node()` and CHRP NVRAM encoding from `scripts/qemu-entry/make-dt.py`, then study the device `make-sheng-adt.py` to implement the target generator. The QEMU tree includes fixture resources and compatibility nodes; copying that entire tree does not describe real target hardware.
++
++| Node | Required target content |
++| --- | --- |
++| Root | `name=device-tree`, actual platform `compatible`, and `model/target-type` as needed by userland |
++| `/chosen` | Fresh 64-byte `random-seed`, DRAM, OS environment and a usable CHRP NVRAM proxy |
++| `/chosen/memory-map` | Zeroed 16-byte placeholders corresponding exactly to supplied inputs |
++| `/cpus` | Boot CPU, later verified CPUs, actual MPIDR and timebase |
++| `/arm-io` | Bus window and children encoded for current driver consumers |
++| `/arm-io/intc` | GICv3 compatible, distributor/redistributor windows and any required stride |
++| `/defaults`, `/options` | Nodes required by the platform expert; disable suspend appropriately while unsupported |
++| `/psci` | Actual `smc` or `hvc` conduit when starting secondary CPUs |
++| `/product`, `/buttons` | Product and button properties actually consumed by Apple components and userland |
++
++`ArmDTPlatform::configure()` checks `/cpus`, `/arm-io`, `/defaults`, `/options` and the NVRAM proxy before calling the real `IODTPlatformExpert::configure()`. It creates nubs for `arm-io` children and attaches their service providers to the platform expert. Preserve that provider relationship so platform resource resolution works.
++
++### Follow the exact field encoding
++
++Apple node headers contain little-endian `u32 property_count, child_count`. Each property has a 32-byte name, little-endian length, data and padding to four bytes. Numeric data must also follow the individual reader's contract. Current `ArmCpu::mapGic()` requires exactly three `u64` values for `ranges`, four `u64` values for `reg`, and exactly NUL-terminated `arm,gic-v3` as its compatible value. Linux DT big-endian cells will not satisfy that contract unchanged.
++
++The address transformation is:
++
++```text
++ranges = [child_base, parent_physical_base, window_size]
++GIC reg = [dist_child_address, dist_size, redist_child_address, redist_size]
++physical = parent_physical_base + child_address - child_base
++```
++
++The current interface has one such bus range. Devices outside it need an adapted resource model or verified board physical constants, as used by existing UFS code. The sheng UFS node supplies matching only: `GccUfs.h` supplies actual MMIO addresses. Adding a different node `reg` does not change the driver address.
++
++### Identity and placeholders
++
++`unique-chip-id` and chosen `chip-id` contribute to `IOPlatformUUID`; missing values can leave user processes waiting for a UUID. These are platform-identity inputs here. `[ipsw] chip_id/board_id` instead select an Apple BuildIdentity from the restore image. Manage target silicon identifiers, chosen identity seeds and IPSW identifiers separately. The reference generator parses `--chip-id` and `--unique-chip-id` as hexadecimal.
++
++When supplying Data or a trust cache, generate matching zeroed `RAMDisk`, `PackedRAMDisk` or `TrustCache` address/length slots. `RAMDisk` and `PackedRAMDisk` are mutually exclusive. DarwinBoot checks the relationship between inputs and slots. Keeping packed Data also requires the native RAM block driver's subsequent decode path.
++
++The generator must accept options passed by `payload.py`: `--output`, `--dram-size` and enabled board options for `--owned-memory-size`, `--cpu-regs`, `--psci-method`, identity, root UUID and placeholders. Adding a `board.toml` key alone does not make the packer forward it.
++
++## 8 Memory windows and 4 KiB pages
++
++Maintain three independent sets of values: actual device DRAM regions, the contiguous window DarwinBoot hands to XNU, and the address range each DMA device can access.
++
++`AllocateWindow()` searches real `EfiConventionalMemory`, can merge adjacent free descriptors, and selects a physical base whose low 21 bits correspond to the kernel virtual base. The default window is 256 MiB. `/chosen/darwinboot-memory-size` can request 256 MiB through 8 GiB in 2 MiB steps. This changes a request; it cannot turn reservations or discontiguous DRAM into a usable contiguous run.
++
++The window contains kernel segments, boot args, ADT, Data and trust caches, with trailing headroom. `Args->MemorySize` and `MemorySizeActual` both equal this window. Increasing `/chosen/dram-size` does not make the loader hand over all installed RAM. Mach-O input currently has a 128 MiB file limit, and segment-span validation still contains fixed 256 MiB-related bounds. Increasing the owned window does not relax those checks.
++
++Choose a feasible window from the UEFI free map and actual payload size. For `NO WINDOW`, inspect the largest contiguous free run, address alignment and reservations before reducing the payload. Do not relabel MMIO, scanout or secure-world memory as ordinary RAM to satisfy allocation.
++
++Preserve and understand these mechanisms:
++
++| Patch or mechanism | Behavior to verify |
++| --- | --- |
++| `native-4k-bootstrap-capacity` | Enough bootstrap table pages for the selected mapping window |
++| `native-4k-user-abi` | Consistent policies for kernel pages, user maps, commpage and shared regions |
++| `native-4k-signature-hash-cache` | Validate original 16 KiB signing blocks before deriving 4 KiB digests |
++| `zzx-pmap-sync-64bit-pa` | Physical addresses above 4 GiB retain their high bits across shifts |
++| Non-Apple machine patches | Avoid Apple-only CPU tunables, monitor, UAT/SART and related paths |
++
++For DMA, independently verify device widths, SMMU input/output widths, cache attributes and clean/invalidate operations. CPU access to high RAM does not establish UFS or GPU DMA access to it.
++
++## 9 CPU GIC timer and SMP
++
++Describe only the boot CPU initially. Verify `armcpu_registered`, `armcpu_gic_ready` and an increasing timer count. Current ArmCpu uses `CNTVCT_EL0` and `CNTV_*`; dispatch sends INTID 27 to `rtclock_intr`. Derive the timebase from the actual architectural counter, not the sheng frequency or the CPU clock.
++
++GIC bring-up must verify the GICv3 system-register interface, Group 1 non-secure configuration, priority masks, GICD affinity routing and per-core redistributors. Stride may be inferred from hardware or set to one of the currently accepted explicit values: `0x20000`, `0x30000`, `0x40000`. Check frame walking against the target's accessible regions.
++
++After single-core operation is stable:
++
++1. Generate each CPU `reg` from actual MPIDR values and verify XNU's physical-to-logical numbering.
++2. Review startup assembly in `native-smp-secondary.patch`. The current BCM2837 path retains only the low 16 MPIDR bits and raises `MAX_CPUS` to 8 while keeping a single-cluster configuration.
++3. Adapt the reference ADT generator's validation. The sheng generator accepts boot CPU 0 and Affinity1-numbered CPUs only.
++4. The current enable argument remains `sheng-smp=1`; PSCI conduit comes from `/psci`. Check CPU_ON results, secondary entry and each core's `armcpu_smp_step`.
++5. Verify each core's timer and bidirectional IPI, then scheduling and TLB shootdown.
++
++ArmCpu also contains eight-slot arrays, partial affinity comparisons and SGI target limits. More than eight CPUs, higher affinity levels or a different cluster layout require coordinated ADT, XNU numbering, assembly and driver changes. Increasing `MAX_CPUS` alone is insufficient.
++
++`armcpu-spi-ipi=1` is the sheng alternative IPI path using SPIs 1008 through 1015. Verify standard SGIs on a new board first. Confirm those SPIs exist, are unused and can be routed correctly before considering this workaround. The current secondary resume path panics, so CPU_ON success does not establish suspend/resume support.
++
++## 10 Storage DMA and the root volume
++
++### Board dependencies in current UFS code
++
++NativeUfs includes a real root-read path, but remains specific to sheng:
++
++| Location | Current dependency | Porting action |
++| --- | --- | --- |
++| `NativeUfs::probe()` | `qcom,sm8550-ufshc` and a root-provider personality | Adapt matching, provider and startup order together |
++| `GccUfs.h` | SM8550 host and GCC registers | Establish target registers and prerequisites |
++| `NativeUfs.cpp` | apps SMMU physical window and UFS stream `0x60` | Verify SMMU version and stream routing |
++| `SmmuTakeover.h` | SMMUv2 SMR/S2CR/context-bank layout and VA64 bypass | Implement controlled takeover or translation for the actual IOMMU |
++| `RootLayout.h` | LUN 0, 4 KiB physical blocks, GPT and `SHNGROOT` | Match target media, image and sector format |
++
++Existing host bring-up takes over a live controller and request list left by firmware, and handles device power state. It does not provide generic cold initialization for every controller. Verify cold boot and warm reset separately. UEFI reads do not establish that PHY, clocks, queues and SMMU remain correct after XNU takeover.
++
++Verify controller identity, power/clock prerequisites, queue quiescence, DMA buffers, SMMU configuration, single-block reads, sequential reads, timeouts and errors before publishing IOMedia. Stop the old queue before takeover. Do not reuse a context bank still owned by another device. Retain address-width, stream-conflict and register-readback checks.
++
++ArmSmmu4K implements ARM SMMUv2-related paths. SMMUv3 and other designs need their own stream/context/command-queue support even when they also support 4 KiB translation tables. Bypass remains subject to address widths and VA64 state.
++
++### Image layout and block sizes
++
++The userdata image begins with a `SHNGROOT` manifest, followed by 1 MiB-aligned IPSW OS and SystemOS disk windows. The original disk windows are exposed with 512-byte blocks. Current physical UFS/GPT reads use 4096-byte blocks, and XNU kernel pages are also 4096 bytes. Treat these as separate contracts.
++
++The current GPT parser also validates header/entry CRCs, 128-byte entries, bounded entry counts and locations, partition bounds and READ(10) addressing. `[userdata] lba_bytes` changes the packer's capacity calculation but does not reconfigure the kernel storage parser. Different sectors, LUNs or queue formats require transport and parser changes together.
++
++`root_match_volume_uuid` matches the actual published IOMedia UUID. An Android userdata GPT partition GUID is not a substitute. After changing the OS image, recheck APFS media/volume matching and keep verified-root policy, Data UUID and owner-mount configuration consistent.
++
++Keep the root read-only initially. Later persistent Data and log writes require a new plan for the userdata tail, with no overlap with image windows or reserved logging areas. Leave board writeback arguments such as `sheng-data-persist=2` disabled during early bring-up.
++
++### PMGR and payload checks
++
++For `native-ufs-root=1`, `payload.py::check_native_root()` requires exactly one `sheng-pmgr=2` and checks `_sheng_pmgr_run` with `llvm-nm`. This is currently a sheng-specific native-root prerequisite. Implement and verify the platform provider required on the target, then make the check recognize it. Removing the check or renaming arguments does not satisfy original AMFI's PMGR dependency.
++
++Reference ShengPlatformPower mainly establishes the ApplePMGR/ApplePMGRNub ABI and publication relationship. Unimplemented virtual methods stop explicitly. It is not the target SoC's complete power controller and cannot supply actual clocks, idle, reset or suspend.
++
++## 11 Extend display input GPU and power
++
++### Display
++
++DarwinBoot `BootVideo.h` currently accepts only `PixelBlueGreenRedReserved8BitPerColor`. It derives row bytes from `PixelsPerScanLine * 4` and validates dimensions, capacity and addresses. A GOP exposing only BLT or another pixel format needs a compatible linear framebuffer or an extension of the full video-handoff path.
++
++First retain firmware scanout for the kernel console, then integrate the NativeMobileDisplay legacy/GOP presenter, swap validation and retirement. Calibrate resolution, pitch, rotation, scaling and touch coordinates independently. Retained scanout and CPU framebuffer writes do not establish native DPU mode setting, vblank or resume.
++
++### Input
++
++Proceed through bus/pins, controller identification, firmware loading, valid contacts and HID publication. The sheng reference keeps board GPIO/clock facts in `TouchBoard.h`, hardware access in `TouchProbe.cpp`, protocol and pure processing separate, and publishes events through NativeHidInput.
++
++NativeGeniSpi implements the Qualcomm GENI bus path. A different I2C/SPI controller or touch chip requires a replacement bus or protocol layer, with target reset, IRQ, DMA and matrix/coordinate parameters. Verify UEFI keys and XNU HID separately.
++
++### GPU
++
++The current runtime chain targets Adreno 740: `NativeMetal → metal2vulkan → Turnip/NIR/IR3 → Darwin KMD → NativeAdreno → GMU/CP/SMMU → scanout`. Board power and GMU configuration also live in the device package.
++
++A different Adreno still requires checks of firmware ABI, HFI, power votes, registers, PM4, SMMU, compiler target and the userspace/kernel interface. Mali or another GPU needs a corresponding kernel driver and userland backend. Advance the system with CPU/simple display first. Then verify firmware startup, submission/fences, buffer mappings, pixels and Metal publication in order.
++
++### Power
++
++Implement actual clock/reset/regulator control, watchdog, thermal management and the system PMGR interface separately. Avoid unimplemented idle/suspend paths early. Stage each power sequence by its prerequisites, observing before writing. Even reading MMIO from an unpowered peripheral can stall the bus.
++
++## 12 Apple binary ABI and external inputs
++
++Keep the same XNU, IPSW, kernelcache and prelinked components during initial SoC work so hardware changes can be evaluated separately. Changing the userland release introduces another ABI adaptation task.
++
++| Input or mechanism | Required consistency |
++| --- | --- |
++| `[ipsw]` | Product/version/build/device class/Apple chip and board identity |
++| `kernelcache_sha256` | Decompressed original cache with the arm64 slice selected |
++| Prelink roots and slide | Required component closure, imports and address layout |
++| `early_security_init` | Real entry and metadata of the selected original security component |
++| Original class bindings | C++ sizes, vtables, signatures and absolute addresses |
++| Trust cache and verified-root bundle | Inputs and policies matching code and disk content |
++| Data seed | Writable volume contents, UUID and required initialization state |
++
++AES and other builders can use recorded original binding addresses in `scripts/data/`. The PMGR builder also reads a previous candidate kernel and report to check fixed original methods and vtables. These addresses belong to the pinned kernelcache. Re-establish the evidence when changing IPSW; updating hashes alone cannot make the bindings correct.
++
++The complete sheng configuration also references policy archives not produced by its archive-builder list. In a clean workspace, establish the origin, generation procedure and policy for each `_ARCHIVE` input. `kernel.py` refuses missing files. Having all Git sources does not establish that these generated inputs are available.
++
++The 4 KiB signing adaptation must still validate original 16 KiB signing blocks. `--owner-trust-cache` changes the packer's allow-list path and does not replace runtime validation. Current patches also include specific work-interval and GPU user-client sandbox policy changes. Retaining AMFI does not establish equivalence to Apple's native secure-boot system.
++
++## 13 Build and boot in stages
++
++After implementing target `board.toml`, ADT generation, archive builders and native drivers, run the stages on a macOS build host. Replace example input paths with actual target inputs.
++
++```sh
++./unixnu defconfig target_defconfig -D ../UniXNU-target
++./unixnu status
++./unixnu fetch
++./unixnu tree
++./unixnu ipsw info
++./unixnu ipsw fetch
++./unixnu build kernel
++./unixnu build package
++./unixnu build firmware --uefi ../uefi-target
++```
++
++`build kernel` includes prelink. If only the prelink selection changes, use `./unixnu build prelink`. It replaces that output and report, so preserve candidates needed for comparison first.
++
++With an already qualified prelinked kernel, use `--kernel` to skip kernel compilation and exercise packaging:
++
++```sh
++./unixnu build payload --uefi ../uefi-target \
++  --kernel /path/to/qualified-kernel.macho \
++  --unique-chip-id "$TARGET_PLATFORM_SEED" \
++  --trust-cache /path/to/qualified-trustcache.bundle \
++  --data-ramdisk /path/to/qualified-data.dbr
++
++./unixnu bootimg --uefi ../uefi-target --dtb /path/to/target.dtb
++fastboot boot out/target/boot/boot.img
++```
++
++Set `TARGET_PLATFORM_SEED` to a valid hexadecimal identity value beforehand. Supply trust cache/Data only when the stage requires them, and generate matching ADT slots. The packer needs `payload.adt.tool` and `payload.dram_size`. Disable `payload.panic_screen` initially until the target entry probe is adapted. The reference probe comes from the device repository and includes addresses/counter constants tied to a known kernel.
++
++The payload generator recreates `unixnu.toml` with kit autoload disabled. Device package contents and manual staging edits are not automatically preserved. An extra `--kernel-arg NAME=VALUE` replaces a board argument with the same name; the generated command line has a 1000-byte limit. Do not copy the full sheng argument list into an initial target build.
++
++Build userdata:
++
++```sh
++./unixnu build userdata --dry-run
++./unixnu build userdata
++```
++
++Current `--dry-run` primarily reads IPSW member information and declared partition capacity. It does not expand disk images or perform the final expanded-image fit check. The real build obtains expanded sizes with `hdiutil imageinfo` before checking actual capacity.
++
++Flashing `userdata-root.img` replaces Android userdata content. Back up data and confirm recovery, partition and capacity first. Deploy only after the target storage and root path have been verified:
++
++```sh
++fastboot flash userdata out/target/userdata/userdata-root.img
++fastboot reboot bootloader
++fastboot boot out/target/boot/boot.img
++```
++
++Temporary boot does not flash the boot partition, but the running kernel may still write storage. Keep native writeback disabled while verifying the boot chain alone.
++
++## 14 Acceptance and fault isolation
++
++| Stage | Acceptance criterion | Next check after failure |
++| --- | --- | --- |
++| BootShim/UEFI | Repeatable firmware entry with sustained output | Header, source/destination overlap, FD size, cache and entry |
++| UniXNU | `UNIXNU:` logs, parsed configuration and expected entries | FAT/ramdisk, configuration path, kit matching and load order |
++| DarwinBoot | Loader v2 installed, inputs validated, sensible handoff addresses | EL1, protocol, Mach-O, ADT, slots and allocation window |
++| Kernel entry | An identifiable entry or machine-init checkpoint | `x0`, physical mappings, table budget, exceptions and video/UART |
++| Single-core platform | Platform configured and real timer IRQ count increases | ADT bytes, GIC, PPI, counter frequency and permissions |
++| Block reads | Repeatable known data with explainable failures | Power, clocks, queues, DMA/SMMU, cache and timeout |
++| Root | Correct IOMedia, UUID and root binding; launchd executes | Manifest, windows, APFS, policies and signing |
++| Userland | Data mounted and required processes remain running | pthread/crypto, platform UUID, PMGR and watchdog |
++| SMP | Every CPU schedules, with timer and bidirectional IPI evidence | MPIDR, PSCI, GICR, SGI and TLB shootdown |
++| Graphics/input | Correct actual frames, coordinates and events | Pitch/format, synchronization, bus, HID and compositor |
++| Sustained operation | Repeated cold/warm boots, stress and error recovery pass | Resource retirement, clocks, power and persistence consistency |
++
++The DarwinBoot green bar establishes that its entry-handoff code ran. `inputs validated; exiting boot services` does not establish XNU execution. `armdt_platform_*` counters describe platform nubs, not successful startup of every child driver. Enumerating a Metal device does not establish GPU correctness or stability.
++
++Isolate common failures at their transition boundary:
++
++| Symptom | Check first |
++| --- | --- |
++| Menu works; DarwinBoot returns Unsupported | EL, nonempty FDT, staged kexts or unsupported GOP format |
++| Compromised Data | ADT size/encoding, duplicate fields or Data/trust input-slot mismatch |
++| NO WINDOW | Actual contiguous conventional memory, alignment and requested size |
++| Handoff stalls and timer is absent | GIC/PPI, firmware traps and frequency; independently verify the log channel |
++| No PMGR | Original security-component dependencies, provider publication and ABI |
++| Low addresses work; high-address DMA fails | Device/SMMU widths, VA64, truncation and cache |
++| No root device | GPT/LUN/sectors, manifest, IOMedia UUID and policy |
++| configd or another process waits | Platform UUID inputs/publication, then the actual wait stack |
++| Warm boot sometimes works; cold boot fails | Firmware residue, PHY/clocks, SMMU and queue takeover |
++
++## 15 Checks and their scope
++
++Source inspection, packaging checks, QEMU tests and hardware boots establish different facts. `hardware_tested: false` in `boot.json`, `payload.json` and userdata reports does not change because an artifact was built successfully.
++
++| Check | Prerequisites and scope |
++| --- | --- |
++| `git submodule status --recursive`, `unixnu status` | Establish source and module origins, not bootability |
++| Built-in `bootimg.py` verify | Round-trip the current header, gzip, FD, DTB and ramdisk |
++| `check-xnu-granules.py` | Requires the corresponding XNU source/toolchain; checks granule fields |
++| `check-native-4k-policy.py` | Requires patched source; executes the extracted page-size policy |
++| `check-code-signing-granules.py` | Requires source and Xcode; checks the signing-page gate, not the entire validator |
++| `check-darwinboot-window-parser.py` | Requires the reference device ADT helper and clang; exercises the parser without UEFI allocation |
++| `test-armcpu.py` | Requires a runnable kernel/QEMU fixture; checks CPU, timer, missing GIC and commpage |
++| Storage/touch/SMMU host tests | Check pure logic, bounds and refusals without driving real hardware |
++
++Run applicable scripts in the assembled tree with their prerequisites installed, for example:
++
++```sh
++cd out/target/tree
++python3 scripts/check-xnu-granules.py
++python3 scripts/check-native-4k-policy.py
++python3 scripts/check-code-signing-granules.py
++```
++
++Some historical fixtures still reference old build directories. Inspect their inputs against current artifacts before use. Missing historical reports are not target failures, and existing QEMU PASS results are not hardware acceptance. QEMU's PSCI, GIC, VirtIO and memory model do not cover target power sequencing, UFS PHY, SMMU stream permissions or panel retention.
++
++## 16 Implementation order for a new platform
++
++For SM8750 or another platform without confirmed support:
++
++1. Complete the hardware facts and recovery plan; identify actual UEFI, DTB, memory and CPU interfaces.
++2. Create a separate device repository, retain the Apple software baseline and account for all external inputs.
++3. Boot target UEFI and the empty-payload menu; calibrate GOP/logging and verify EL1 handoff prerequisites.
++4. Complete single-core ADT and machine adaptation so timer and platform initialization repeat reliably.
++5. Implement target storage/DMA, validate read-only data, then satisfy Apple provider/PMGR and root dependencies.
++6. Mount root and Data, run launchd, then bring up display services and input.
++7. Add SMP, CPU power and GPU independently; enable persistent writes and sustained-operation testing last.
++
++Keep reconstructible configuration, input versions and logs for each stage. Describe support by stages actually passed. Suspend, USB, wireless, audio and sensors remain separate work when unimplemented; reaching a desktop does not complete them.
++
++## Source index
++
++| Topic | Pinned source |
++| --- | --- |
++| Build dispatch, module resolution and packaging | [UniXNU build driver](https://github.com/UniXNU/UniXNU/tree/fb2bb310564ce66779e472a021881cf7c5764919/scripts/unixnu) |
++| Kernel switches and linking | [build-xnu-4k-baseline.sh](https://github.com/UniXNU/UniXNU/blob/fb2bb310564ce66779e472a021881cf7c5764919/scripts/build-xnu-4k-baseline.sh), [XNU patches](https://github.com/UniXNU/UniXNU/tree/fb2bb310564ce66779e472a021881cf7c5764919/patches/xnu) |
++| UEFI menu handoff | [UniXNULib](https://github.com/UniXNU/UniXNU/tree/fb2bb310564ce66779e472a021881cf7c5764919/package/UniXNUPkg/Library/UniXNULib) |
++| Kernel loading, windows and video | [DarwinBoot](https://github.com/UniXNU/DarwinBoot/tree/85332b317ee80898fc78939ea64e6ca52d3837a3/DarwinBootPkg/Driver) |
++| ADT platform expert | [ArmDTPlatform.cpp](https://github.com/UniXNU/ArmDTPlatform/blob/0d544705c2e89725caabc0542bb96bc8febd8c70/ArmDTPlatform.cpp) |
++| CPU, GIC and timer | [ArmCpu.cpp](https://github.com/UniXNU/ArmCpu/blob/1951cc8444b340d7d8879e9418220cf29eb711d7/ArmCpu.cpp) |
++| Storage, queues and GPT | [NativeUfs](https://github.com/UniXNU/NativeUfs/tree/af785c1777161a62931425c2faaa536ce0bebd5b) |
++| SMMUv2 | [ArmSmmu4K](https://github.com/UniXNU/ArmSmmu4K/tree/4d0d6598b1a36aeec3de01091893fa6660e49388) |
++| Prelink | [NativePrelink](https://github.com/UniXNU/NativePrelink/tree/3380d3006068cdaab69454b37668e6b532ed2584) |
++| Device configuration, ADT, PMGR and probes | [UniXNU-sheng](https://github.com/UniXNU/UniXNU-sheng/tree/7562a779ebdbdedc17c4c7274ba993acbbec8188) |
++| BootShim, memory map and firmware modules | [uefi-sheng](https://github.com/UniXNU/uefi-sheng/tree/8b7cc5d155ba147f461dea7121e91104544ab99e) |
++
++Related: [Device repository](/porting/device-repository), [Device tree](/porting/device-tree), [4 KiB pages](/xnu/four-k-page-tables), [XNU drivers](/drivers/xnu-drivers), [Troubleshooting](/reference/troubleshooting).
+diff --git a/docs/reference/configuration.md b/docs/reference/configuration.md
+index 3085f63..97ce88d 100644
+--- a/docs/reference/configuration.md
++++ b/docs/reference/configuration.md
+@@ -48,6 +48,7 @@ A device repository has four configuration files: `board.toml`, `configs/<name>_
+ | --- | --- | --- |
+ | `defconfig` | string | File name under `configs/` |
+ | `archives` | array | Archive builder scripts of the build tree, run in order before the kernel link |
++| `source_only` | boolean | Export source XNU without a kernelcache prelink; default false, incompatible with `[kernel.prelink]` |
+ 
+ ### [kernel.prelink]
+ 
+@@ -80,6 +81,10 @@ A device repository has four configuration files: `board.toml`, `configs/<name>_
+ | --- | --- | --- |
+ | any | string | `-D NAME=VALUE` for the EDK II build |
+ 
++### [bootimg]
++
++`embed_payload = true` places the `--ramdisk` input after the firmware inside the compressed kernel image and leaves the Android ramdisk field empty. It requires a nonempty payload, the ARM64 image header, and BootShim/SEC support for the payload handoff. Use this on devices whose bootloader takes the generic ramdisk from `init_boot` during `fastboot boot`; the default remains the Android ramdisk field.
++
+ ### [bootimg.image]
+ 
+ | Key | Type | Meaning |
+diff --git a/docs/zh/building.md b/docs/zh/building.md
+index 959b2b3..d1f1e6d 100644
+--- a/docs/zh/building.md
++++ b/docs/zh/building.md
+@@ -40,7 +40,7 @@ git submodule update --init --recursive
+ | `device_repository` | 设备仓库，格式 `owner/name` |
+ | `device_ref` | 设备仓库的 ref |
+ | `defconfig` | defconfig 名称 |
+-| `steps` | `kernel`、`kernel userdata` 或 `kernel userdata payload`，默认 `kernel userdata` |
++| `steps` | `kernel`、`kernel payload`、`kernel userdata` 或 `kernel userdata payload`，默认 `kernel userdata` |
+ | `ipsw_url` | 可选 IPSW URL，空值使用 `board.toml` |
+ | `pre_build` | 可选 shell 命令，在内核构建前于 UniXNU 检出目录运行。设备仓库位于 `DEVICE_DIR` |
+ | `trust_cache_url` | 可选 trust cache 包 URL |
+@@ -68,6 +68,8 @@ cp out/<board>/kernel/kernel.macho \
+ 
+ workflow 运行 kernel、userdata 和 payload。package、firmware 和 boot image 步骤可以在任意系统运行，不在 workflow 中。公开仓库使用免费的 macOS runner 配额，私有仓库消耗 Actions 分钟。
+ 
++早期板级适配可设置 `[kernel] source_only = true`，将源码 XNU 输出到 `kernel/kernel.macho` 并跳过 kernelcache 预链接。它不能与 `[kernel.prelink]` 同时使用，也不提供根文件系统或 Apple 设备驱动。workflow 的 `kernel payload` 选项可打包该内核而不运行 userdata；已有预链接设备配置保持原行为。构建失败时也会上传已有日志。
++
+ ## 命令
+ 
+ | 命令 | 作用 |
+@@ -198,6 +200,8 @@ userdata 步骤构建 `userdata` 分区的原始镜像，保存 IPSW 中未修
+ 
+ ramdisk 优先使用负载输出，也可以用 `--ramdisk FILE`，或用 `--ramdisk none` 使用空 ramdisk。
+ 
++设置 `[bootimg] embed_payload = true` 后，负载在压缩前追加到固件之后。BootShim 把地址和长度交给 SEC，由 SEC 生成负载 HOB，供板级驱动读取；Android ramdisk 字段留空。此模式需要非空负载和配套 BootShim/SEC 修改，拒绝 `--ramdisk none`。解包验证会把内嵌负载作为内核镜像的一部分逐字节比对。
++
+ ## 本地模块
+ 
+ 模块可以来自本地目录，第一个匹配生效：
+diff --git a/docs/zh/porting/index.md b/docs/zh/porting/index.md
+index 91f276a..f1761cb 100644
+--- a/docs/zh/porting/index.md
++++ b/docs/zh/porting/index.md
+@@ -9,6 +9,10 @@
+ 
+ `UniXNU` 提供构建驱动、UEFI 启动管理器、DarwinBoot 和通用驱动。设备仓库会覆盖同名模块。
+ 
++移植到另一款 SoC 时，先阅读[跨 SoC 移植详细指南](/zh/porting/soc-porting)，核对代码中的硬件依赖、构建输入和分阶段验收条件。
++
++若当前只需要一加 13T 进入 UEFI 与 UniXNU 菜单，使用[首阶段菜单启动指南](/zh/porting/oneplus-13t-menu)。该阶段暂不加载 XNU。
++
+ ## 移植清单
+ 
+ 1. [移植 UEFI 固件](/zh/porting/uefi-firmware)，让设备能进入菜单、使用 framebuffer 和负载卷。
+diff --git a/docs/zh/porting/oneplus-13t-menu.md b/docs/zh/porting/oneplus-13t-menu.md
+new file mode 100644
+index 0000000..6082f7f
+--- /dev/null
++++ b/docs/zh/porting/oneplus-13t-menu.md
+@@ -0,0 +1,228 @@
++# 一加 13T 首阶段菜单启动指南
++
++本页保留 `no-sdcc` / `menu-keys` 的首阶段菜单基线。当前开发已转入 XNU 源码内核适配：13T 配置新增 DarwinBoot、只读 FAT 负载驱动和单核 ADT，macOS Actions 使用 `oneplus13t_defconfig` 与 `kernel payload`。这些新增路径尚未真机验证；具体输入、产物与操作见设备目录 `UniXNU-Sun_SM8750/README.md`。
++
++菜单基线阶段的验收点是：一加 13T 从设备允许的临时启动路径进入 UEFI，随后显示并运行 UniXNU 菜单，到此停止。暂不加载 XNU，不挂载 Apple 根卷，不启动 iPadOS/macOS 用户态。
++
++因此可以暂缓 XNU 内核编译、Apple 格式 ADT、IPSW、预链接、trust cache、PMGR、原生 UFS、GPU 和触控驱动。本阶段仍需要可工作的 UEFI 平台，以及它的内存、显示或日志、定时器和必要输入。已有 UEFI 驱动可以复用，尚未满足的接口需要在固件层适配。
++
++## 设备与当前范围
++
++| 项目 | 信息与状态 |
++| --- | --- |
++| 目标设备 | 一加 13T |
++| 系统版本 | 用户提供：`16.0.10.500` |
++| 当前 Android 内核 | 用户提供：`6.6.118` |
++| SoC 适配方向 | SM8750；已结合用户导出的 sysinfo 核对 |
++| 目标结果 | UEFI 可进入，UniXNU 菜单可显示并响应操作 |
++| 本轮设备读取 | 手机已通过 Windows CMD 连接 ADB；本构建环境未直连 |
++| 用户导出资料 | sysinfo 确认 PKX110、24821、槽位 `_b`、DTB/DTBO 均为 2，AA594 面板 |
++| 本轮实现状态 | `no-sdcc` 已真机显示菜单、正常倒计时；`menu-keys` 新增侧键适配，交互待真机验证 |
++| 菜单程序检查 | QEMU/AAVMF 下显示三个内置项，键盘选择 Restart 成功；不验证手机固件 |
++
++Android 的 Linux `6.6.118` 内核在原系统中运行；本方案从 bootloader 转入另一套 UEFI 固件，不向 Android 安装 XNU 兼容模块，也不依赖 Linux 的模块 ABI。当前内核版本主要帮助选择硬件资料和匹配原厂镜像，不需要为显示 UniXNU 菜单重编它。
++
++## 1 可复用的 pagani 平台
++
++参考 UEFI 仓库 `uefi-sheng` 在提交 `8b7cc5d155ba147f461dea7121e91104544ab99e` 中包含以下平台文件：
++
++```text
++Resources/Configs/pagani.toml
++Platforms/OnePlus/paganiPkg/pagani.dsc
++Platforms/OnePlus/paganiPkg/pagani.fdf
++Platforms/OnePlus/paganiPkg/Include/DXE.inc
++Platforms/OnePlus/paganiPkg/Library/MemoryMapLib/
++Platforms/OnePlus/paganiPkg/Library/ConfigurationMapLib/
++Silicon/Qualcomm/PakalaPkg/
++```
++
++该平台引用 SM8750 的 Pakala 配置。其 DSC 中的产品标识为 `13s`、`CPH2723`、`pagani`；状态页也将其列为一加 13s，并报告显示、内部存储和侧键可用。这里的状态属于参考项目记录，不能直接扩展为一加 13T `16.0.10.500` 的验证结果。
++
++先沿用这套平台结构，再检查 13T 的内存保留区、XBL/ABL、面板、侧键和厂商 DXE 输入。不要只改产品名称就把固件视为适配完成。
++
++参考状态页还注明 13s 的 ARB Version 1 条件。需要核对目标 13T 当前固件的回滚约束；本阶段不以更换 XBL/ABL、降级固件或调整回滚状态作为默认步骤。
++
++## 2 最小启动链
++
++```mermaid
++flowchart LR
++  A[设备 bootloader] --> B[BootShim]
++  B --> C[pagani 衍生 UEFI]
++  C --> D[BDS]
++  D --> E[UniXNU.efi]
++  E --> F[菜单与诊断]
++```
++
++这一阶段一直运行在 UEFI 环境内，不调用 DarwinBoot，不执行 ExitBootServices，不进入 XNU 的 `start.s`。DarwinBoot 的 EL1 检查、连续 XNU 内存窗口、4 KiB 用户 ABI 和 XNU CPU/GIC 驱动都不在当前验收范围内。UEFI 自身的 CPU、GIC 和 timer 初始化仍需工作。
++
++最小方案把 `UniXNU.efi` 和 `UniXNUDxe` 放入同一个固件卷。`UniXNUDxe` 注册固件卷中的应用为 `Boot####`，BDS 随后启动它。这样可以先使用内置菜单，不要求把配置写进手机的 Android userdata 或 EFI 分区。
++
++## 3 首轮需要核对的设备信息
++
++真机连接 ADB 后，可先执行只读查询：
++
++```sh
++adb devices -l
++adb shell getprop ro.product.model
++adb shell getprop ro.product.device
++adb shell getprop ro.product.board
++adb shell getprop ro.boot.hardware
++adb shell getprop ro.build.display.id
++adb shell getprop ro.build.fingerprint
++adb shell getprop ro.boot.slot_suffix
++adb shell getprop ro.boot.flash.locked
++adb shell getprop ro.boot.verifiedbootstate
++adb shell uname -a
++```
++
++这些属性用于定位设备与固件，不能单独证明 bootloader 接受临时镜像。进入 fastboot 后再读取相应状态，并保留完整命令结果；当前阶段不执行解锁、擦除或刷写。
++
++| 待确认项 | 用途 |
++| --- | --- |
++| 实际型号、device 与 board 标识 | 检查 13T 与 pagani 参考平台的对应关系 |
++| bootloader 状态、临时启动能力 | 确定能否使用 `fastboot boot` |
++| 匹配 `16.0.10.500` 的原厂 boot/vendor_boot/DTB 等输入 | 分析实际镜像结构、DTB 交接及保留区 |
++| XBL/ABL 与回滚条件 | 判断参考 UEFI 的前置条件是否适用 |
++| 实际 framebuffer 地址、pitch、格式与面板保活 | 使固件和菜单持续可见 |
++| 侧键到 UEFI 输入的路径 | 使菜单可操作 |
++
++本阶段只需分析相关输入，不需要为了显示菜单先提取 Apple 恢复镜像或重建 Android 内核。
++
++## 4 需要改到哪些位置
++
++| 位置 | 参考平台情况 | 本地实现与剩余工作 |
++| --- | --- | --- |
++| `Resources/Configs/pagani.toml` | header 为 v4，带 FD 配置 | 已建立独立 `oneplus13t.toml`；加载窗口仍待实机核对 |
++| `paganiPkg/Library/MemoryMapLib/` | 参考平台的物理内存图 | 13T 已建立独立库，将 `0xD4E23000–0xD5100000` 从 DXE 堆隔离为保留内存 |
++| `paganiPkg/pagani.dsc` | 包含固件平台，尚未集成 UniXNU | 新建 `oneplus13tPkg`，已加入 UniXNU 的组件和库映射 |
++| `paganiPkg/Include/DXE.inc` | FDF 使用的模块列表 | 13T FDF 已加入 UniXNU 应用与 registrar，FD 布局检查通过 |
++| `[firmware] packages` | 包搜索路径 | 13T `board.toml` 已加入通用仓库的 `package/` 路径 |
++| `Binaries/pagani/` | 来自 Device-Binaries 子模块 | 初始化并核对参考输入，确认与 13T 的匹配关系 |
++| `scripts/unixnu/bootimg.py` | 基准 verifier 使用旧 header 布局 | 已实现 v3/v4 校验和 DTB 集合保留，离线检查通过 |
++| UniXNU 配置 | 默认即可显示内置菜单 | 有需要时再提供只含 action 的配置 |
++
++`Binaries` 在该 UEFI 提交固定到 `a1501e0c2e642d6ac0d8f52c85af2a67b75a7799`。仅克隆外层仓库不会取得其中的 DXE 文件；缺少这些输入的目录不能直接进行完整固件构建。
++
++### DSC 与 FDF 集成
++
++参考已集成 UniXNU 的 sheng DSC，把以下两项加入目标 DSC 的 `[Components]`：
++
++```text
++UniXNUPkg/Application/UniXNU/UniXNU.inf
++UniXNUPkg/Driver/UniXNUDxe/UniXNUDxe.inf
++```
++
++目标 `[LibraryClasses]` 至少补齐以下库映射，并保留平台其它已有映射：
++
++```text
++UniXNULib|UniXNUPkg/Library/UniXNULib/UniXNULib.inf
++FdtLib|MdePkg/Library/BaseFdtLib/BaseFdtLib.inf
++```
++
++在 FDF 的模块列表中加入同样两个 INF：
++
++```text
++INF UniXNUPkg/Application/UniXNU/UniXNU.inf
++INF UniXNUPkg/Driver/UniXNUDxe/UniXNUDxe.inf
++```
++
++当前不加入 DarwinBoot INF。仅构建出 `.efi` 文件不会使手机自动运行它，DSC、固件卷和 BDS 的应用启动路径需要全部接通。
++
++### 显示和按键
++
++参考 pagani 平台默认使用 `SimpleFbDxe`，DSC 写有 `1216 × 2640`、32 位显示参数。这些是参考配置值，仍需核对 13T 当前固件留下的扫描输出基址与真实 pitch。复用 framebuffer 不要求实现 XNU 显示驱动，但要求面板、电源与该内存在 UEFI 阶段保持有效。
++
++`no-sdcc` 已在真机显示菜单，但 ButtonsDxe 因缺少 OplusProject 协议而提前返回，没有安装侧键输入。`menu-keys` 用独立的 13T KeypadDeviceDxe 替换它，并复用通用 KeypadDxe。按本机设备树，音量加读取 PMK8550 PON RESIN，音量减读取 PM8550 GPIO6，电源读取 PON KPDPWR，分别上报上、下和 Enter。读取与去抖已通过主机测试，物理侧键仍待真机确认。
++
++## 5 header v4 与 DTB 集合
++
++基准版本的 `bootimg.py::verify()` 按旧 header 布局解析，不能验证 `pagani.toml` 所选的 v4。本地实现已为 v3/v4 加入独立的 header、4 KiB 对齐和 signature 区域长度检查，同时保留旧格式的地址检查。
++
++13T 历史 vendor_boot 输入包含 13 棵候选 DTB。本地打包器现在保留并逐棵检查整个集合，交给 bootloader 按实际硬件选择；本轮没有猜选其中一棵，也没有改写手机上的 DTBO。结构往返验证已使用实际 `mkbootimg.py` 通过 v0、v3、v4 检查，但不代表设备已接受这些镜像。
++
++当前停用 UFSDxe、SdccDxe、OplusProject 和 PIL/PILProxy/SPSS 的菜单候选为通用仓库中的 `out/oneplus13t/boot/menu-keys/boot.img`，同目录报告 `boot.json` 仍记录 `hardware_tested: false`。目标控制文件位于同级 `UniXNU-Sun_SM8750/`，固件工作副本位于 `UEFI-Sun_SM8750/`。它们分别使用 `oneplus13t` 板名与独立 DSC/FDF，详细差异、构建命令及尚未确认的硬件条件见设备目录的 `README.md`。
++
++新候选保留已经显示菜单的基础配置，新增侧键驱动，并关闭 ConIn 按需连接以提前接入输入。内置菜单默认 10 秒返回固件；进入后松开所有侧键，再短按音量减，应停止倒计时并向下移动，电源短按确认。若无响应，记录所有 `13T keys:` 日志。
++
++后续 sysinfo 核对发现，参考 DXE 堆覆盖了真机的 `hwfence-shmem`。当前 13T DSC 已切换到独立 MemoryMapLib，将该区间设为显式保留内存分配 HOB，并保留两侧可用堆。设备目录的 `scripts/check-memory-map.py` 对照导出设备树检查分配区及保留区；这不代替实际启动时的内存交接验证。
++
++## 6 构建范围与主机
++
++只编译 UEFI 应用和固件时，不需要 XNU 构建所用的 Xcode `iphoneos` SDK。参考 UEFI 的构建文档推荐 Linux；UniXNU 的 package/firmware 路径使用 EDK II、Python、make 和 LLVM CLANGPDB 工具。本轮已在当前 Linux 工作环境中完成 package 和固件构建。
++
++构建驱动要求的 CLANGPDB 工具包括 `clang`、`lld-link`、`llvm-lib` 和 `llvm-rc`；BootShim 还使用 `llvm-objcopy`、`llvm-nm`。仅安装系统 `clang` 不一定齐备。真机 USB/fastboot 连接与主机是否能编译是两项独立检查。
++
++菜单基线当时的 `board.toml` 仅提供 `[board]` 和 `[firmware]`，没有配置 `[ipsw]`、`[kernel]`、`[payload]` 或 `[userdata]`。初始化子模块、准备 LLVM/Python/BaseTools 后，在通用仓库中使用本轮实际路径：
++
++```sh
++./unixnu status -D ../UniXNU-Sun_SM8750
++./unixnu build firmware -D ../UniXNU-Sun_SM8750 \
++  --uefi ../UEFI-Sun_SM8750 --edk2 ../UEFI-Sun_SM8750/Mu_Basecore \
++  --local-module refer:edk2=../UEFI-Sun_SM8750/Mu_Basecore -j 4
++```
++
++本轮 UniXNU 应用随固件一同编译。不要执行无步骤参数的 `build` 或 `build all`，它们会进入完整构建流程。环境变量与主机依赖见 `UniXNU-Sun_SM8750/README.md`。
++
++使用已经提取的历史 13T vendor_boot DTB 集合打包：
++
++```sh
++./unixnu bootimg -D ../UniXNU-Sun_SM8750 --uefi ../UEFI-Sun_SM8750 \
++  --dtb ../UniXNU-Sun_SM8750/.cache/firmware/vendor_boot/dtb --ramdisk none \
++  -o out/oneplus13t/boot/xnu-loader/boot.img
++```
++
++该 DTB 输入来自历史备份，未代替当前设备核对。`no-sdcc` 的菜单显示已获真机确认，新侧键镜像仍是待验证候选；其它启动路径和厂商驱动兼容性尚未覆盖。
++
++## 7 菜单配置与观察
++
++最小方案使用 `Config.c` 中的内置菜单，不提供配置卷。菜单包含 Return to firmware、Restart、Power off；它可能额外扫描到可移动 EFI 加载器，需要检查实际菜单内容。
++
++内置配置默认约 10 秒后执行默认项，通常返回固件。菜单出现后自动返回并不一定是崩溃。若已具备可读取的配置卷，可用以下仅含 action 的配置停留更久：
++
++```toml
++version = 1
++
++[boot]
++timeout = -1
++fallback_timeout = 300
++default = "exit"
++
++[kits]
++autoload = false
++
++[ui]
++title = "UniXNU"
++layout = "portrait"
++
++[[entry]]
++id = "exit"
++title = "Return to firmware"
++type = "action"
++action = "exit"
++```
++
++配置路径是 `\EFI\UniXNU\unixnu.toml`。有输入设备时，负 timeout 等待输入；没有输入设备时，菜单仍会使用这里的 300 秒 fallback。当前阶段不创建 `type = "xnu"` 菜单项，也不提供 Apple 内核或 Data seed。
++
++## 8 验收顺序与待办
++
++| 顺序 | 验收点 | 完成后再推进 |
++| --- | --- | --- |
++| 1 | 13T 身份、当前固件、临时启动和恢复方式已核对 | 固件平台选择 |
++| 2 | 目标 UEFI 依赖齐备，FD 构建成功且模块布局正确 | 镜像封装 |
++| 3 | v4 封装/解包一致，BootShim 与 FD 地址、大小已校验 | 真机临时启动 |
++| 4 | 真机持续显示 UEFI 日志或界面 | UniXNU 应用启动 |
++| 5 | `UNIXNU:` 启动日志及 `menu: shown`，或明确可见的 UniXNU 菜单 | 输入验证 |
++| 6 | 能切换和确认菜单项，返回行为可解释，可重复进入 | 本阶段完成 |
++
++没有输入时，只完成了“菜单显示”，应把“菜单交互”保留为待办。仅通过 QEMU 或固件编译也不构成真机完成。
++
++当前已达到第 5 步：真机显示 UniXNU 菜单。第 6 步侧键交互尚待验证。使用新的 `menu-keys/boot.img` 临时启动，详细产物、按键顺序与日志说明见设备目录 README.md。当前阶段无需展开 XNU 原生驱动开发。
++
++## 源码与后续章节
++
++- [参考 pagani 平台](https://github.com/UniXNU/uefi-sheng/tree/8b7cc5d155ba147f461dea7121e91104544ab99e/Platforms/OnePlus/paganiPkg)
++- [参考镜像参数](https://github.com/UniXNU/uefi-sheng/blob/8b7cc5d155ba147f461dea7121e91104544ab99e/Resources/Configs/pagani.toml)
++- [参考设备状态](https://github.com/UniXNU/uefi-sheng/blob/8b7cc5d155ba147f461dea7121e91104544ab99e/Status.md#oneplus-13s)
++- [UniXNU 固件集成](https://github.com/UniXNU/UniXNU/blob/fb2bb310564ce66779e472a021881cf7c5764919/package/UniXNUPkg/Driver/UniXNUDxe/UniXNUDxe.c)
++- [当前启动镜像实现](https://github.com/UniXNU/UniXNU/blob/fb2bb310564ce66779e472a021881cf7c5764919/scripts/unixnu/bootimg.py)
++- [跨 SoC 完整指南](/zh/porting/soc-porting)、[UEFI 固件](/zh/porting/uefi-firmware)、[启动配置](/zh/reference/boot-configuration)
+diff --git a/docs/zh/porting/soc-porting.md b/docs/zh/porting/soc-porting.md
+new file mode 100644
+index 0000000..f1383d3
+--- /dev/null
++++ b/docs/zh/porting/soc-porting.md
+@@ -0,0 +1,531 @@
++# 跨 SoC 移植详细指南
++
++UniXNU 的跨 SoC 移植需要同时接通 UEFI、XNU 的机器相关代码、原生硬件驱动和 Apple 用户态所需的平台接口。可复用的基础包括启动管理器、DarwinBoot、4 KiB 内核补丁、预链接工具及部分 IOKit 驱动；当前存储、图形和电源路径仍有明确的 sheng 依赖。新设备应先实现可观察的单核内核启动，再接入只读根卷和用户态，最后扩展多核、输入和 GPU。
++
++本页对应 UniXNU `fb2bb310564ce66779e472a021881cf7c5764919` 及其固定的子模块提交。参考设备源码是 UniXNU-sheng `7562a779ebdbdedc17c4c7274ba993acbbec8188`，参考 UEFI 是 uefi-sheng `8b7cc5d155ba147f461dea7121e91104544ab99e`。sheng 的运行结果沿用项目记录；本页不代表其它 SoC 已经通过启动验证。目录名包含 `SM8750` 也不构成该芯片已适配的证据。
++
++若目标仅是一加 13T 进入 UEFI 与 UniXNU 菜单，先使用[首阶段菜单启动指南](/zh/porting/oneplus-13t-menu)。以下内核、Apple 用户态和原生驱动章节属于后续阶段。
++
++## 1 启动链与移植边界
++
++```mermaid
++flowchart TD
++  A[设备 bootloader] --> B[BootShim 与 UEFI 固件]
++  B --> C[UniXNU 菜单与 FAT 负载]
++  C --> D[DarwinBoot]
++  D --> E[源码 XNU 与预链接 Apple 组件]
++  E --> F[平台专家 CPU 中断与存储]
++  F --> G[根卷 launchd 与 Data]
++  G --> H[显示 输入 GPU 与系统服务]
++```
++
++| 层次 | 入口与实现 | 新 SoC 的工作 |
++| --- | --- | --- |
++| 启动镜像 | `scripts/unixnu/bootimg.py`、UEFI 仓库的 `BootShim/BootShim.S` | 确定镜像格式、加载地址、固件窗口和 bootloader 接口 |
++| UEFI | `scripts/unixnu/firmware.py`、设备 DSC/FDF、平台库 | 建立内存图，提供菜单、文件访问和硬件交接 |
++| 启动管理器 | `package/UniXNUPkg/Library/UniXNULib/` | 通常复用；检查卷发现和加载器协议 |
++| 内核加载器 | `drivers/DarwinBoot/DarwinBootPkg/Driver/` | 满足 EL1、Mach-O、ADT、内存窗口和 framebuffer 约定 |
++| XNU 与预链接 | `scripts/build-xnu-4k-baseline.sh`、`kits/NativePrelink/` | 保持 4 KiB 与 Apple 二进制 ABI，适配机器相关路径 |
++| 平台与硬件 | `drivers/ArmDTPlatform/`、`drivers/ArmCpu/`、设备驱动与 kit | 描述真实硬件，实现中断、DMA、存储、显示和电源 |
++| 用户态 | IPSW、userdata 镜像、Data seed、Metal 插件 | 满足根卷、代码签名、平台身份和服务依赖 |
++
++UEFI 驱动运行在退出 boot services 之前。UEFI 能读 UFS、响应按键或绘制菜单，只能证明这一阶段具备对应能力。XNU 需要自己的硬件驱动，或经过验证的硬件状态接管路径。
++
++完整 Apple 用户态还依赖 IPSW 中的原始 kernelcache 组件。当前路径将源码 XNU 与选中的 Apple 组件预链接，不能仅凭公开 XNU 源码生成完整 iPadOS 系统。
++
++## 2 先判断目标平台是否满足条件
++
++| 条件 | 当前实现的要求 | 不满足时的工作 |
++| --- | --- | --- |
++| 启动权限 | 能执行自行构建的 ARM64 镜像 | 先解决设备允许的启动方式 |
++| 异常级别 | DarwinBoot 的 `Boot()` 要求 `CurrentEL == 4`，即 EL1 | 在固件交接中实现并验证降级；删除检查无法建立正确入口状态 |
++| 页表 | 硬件支持当前 4 KiB granule 路径 | 重新设计机器配置及其页大小补丁 |
++| 中断 | `ArmCpu` 当前解析并驱动 GICv3 | GICv2 或其它控制器需要对应后端 |
++| 定时器 | 当前路径使用虚拟架构计数器、虚拟定时器与 PPI 27 | 校验固件是否开放访问，必要时适配定时器及中断路径 |
++| 内存 | UEFI 中存在足够大的连续 `EfiConventionalMemory` 区域 | 修正真实内存图、减少占用或调整负载 |
++| 存储 | 新硬件上可实现 XNU 原生块读取 | 开发 UFS、eMMC、NVMe 或其它传输层 |
++| 调试 | 至少有一种可持续记录最后检查点的方式 | 先完成 UART、framebuffer 诊断或其它板级日志 |
++
++同一 SoC 的另一块板子通常还要重新适配面板、触控、GPIO、供电和分区。同一厂商的新 SoC 需要重新核对时钟、电源控制、SMMU、存储控制器和 GPU。跨厂商平台可以保留启动协议与 XNU 通用层，但 Qualcomm 的 GCC、RPMh、GENI 和 GMU 代码需要按目标硬件替换。
++
++首个里程碑设为“单核、已验证的定时器中断、可读取的内核检查点”。达到它之前，保持 GPU、CPU 调频、持久 Data 和休眠路径关闭。控制台输出本身也需要串口或 framebuffer 的实际适配，`serial=3` 只是参数，不能提供新 UART 驱动。
++
++## 3 收集目标硬件资料
++
++先保留设备能够正常运行的系统与恢复途径，再收集下列资料。Linux BSP、编译后的实际设备 DTB 和驱动源码用于确认寄存器及初始化序列；原系统启动后的观测用于确认固件实际留下的状态。
++
++| 项目 | 必须确认的内容 | 最终影响 |
++| --- | --- | --- |
++| bootloader | 支持的镜像 header、压缩、DTB 交接、加载限制、临时启动方式 | BootShim、`[bootimg.image]` |
++| DRAM | 实际物理区间、空洞、保留区、安全世界与固件占用 | UEFI 内存图、DarwinBoot 分配、ADT |
++| CPU | 每核 MPIDR、启动核、可用核心、PSCI conduit 与权限 | `/cpus`、`/psci`、secondary 启动 |
++| 定时器 | `CNTFRQ_EL0`、计数器访问、定时器 PPI | CPU timebase、内核时间与中断 |
++| GIC | 版本、GICD/GICR 地址与长度、redistributor stride、非安全中断权限 | `ArmCpu::mapGic()` 和初始化 |
++| 存储 | 控制器、PHY、时钟、reset、电源、LUN、逻辑扇区、队列模式 | 原生块驱动 |
++| IOMMU | SMMU 版本、基址、stream ID、context、地址宽度与权限 | DMA 映射及隔离 |
++| 显示 | 扫描输出地址、像素格式、真实 pitch、尺寸、面板保活条件 | GOP、`boot_args.Video`、显示驱动 |
++| 输入 | 控制器型号、总线、引脚、reset、IRQ、固件及坐标方向 | 总线驱动、触控协议和 HID |
++| 电源 | 时钟树、稳压器、vote、watchdog、idle 与 reset | 板级电源及恢复 |
++| GPU | 硬件型号、固件、供电、SMMU、命令格式和编译器支持 | 原生 GPU 与用户态插件 |
++| 分区 | 真实 GPT、LUN、userdata 首尾 LBA、逻辑块大小 | userdata 打包与持久化 |
++
++示例采集命令在设备支持、具备相应读取权限时使用：
++
++```sh
++fastboot getvar product
++fastboot getvar current-slot
++fastboot getvar max-download-size
++adb shell cat /proc/iomem
++adb shell cat /proc/interrupts
++adb shell ls -l /dev/block/by-name
++dtc -I dtb -O dts -o board-observed.dts board-observed.dtb
++```
++
++DTB 的提取方式由设备决定。Android 运行时 DT 可能已经带有 bootloader fixup，不能直接用 BSP 中某个同名 DTS 代替。`fastboot getvar` 也不保证提供分区几何；GPT 和实际块设备仍需分别核对。
++
++## 4 建立设备仓库与构建环境
++
++### 仓库分工
++
++```text
++workspace/
++  UniXNU/                    通用栈
++  UniXNU-target/
++    board.toml
++    configs/target_defconfig
++    scripts/                 板级生成器和构建脚本
++    drivers/                 设备驱动及通用驱动的必要覆盖
++    kits/
++    package/                 在构建树中成为 kits/target
++    patches/                 注意整模块覆盖规则
++    .cache/firmware/          外部输入
++  uefi-target/               目标设备的 Mu-Silicium 移植
++```
++
++已有主仓库执行：
++
++```sh
++git submodule update --init --recursive
++git submodule status --recursive
++cp -R examples/device ../UniXNU-target
++```
++
++修改示例的板名、SoC、kit、defconfig、UEFI 配置和路径，移除 `[board] example = true`，再填写真实输入。保留该标志时，构建驱动会主动拒绝 `build` 和 `bootimg`。
++
++主机构建链依赖 macOS 与 Xcode 的 `iphoneos` SDK。Python 需要 3.11 或更新，另外需要 LLVM/lld、make、cmake、ninja、unifdef、mtools 和 dtc。userdata 与部分 seed 工具使用 `hdiutil`。Linux/WSL 可以承担阅读和适用的主机检查，当前脚本没有提供完整的 Linux XNU 交叉构建替代流程。
++
++```sh
++./unixnu defconfig target_defconfig -D ../UniXNU-target
++./unixnu status
++./unixnu fetch
++./unixnu tree
++```
++
++`defconfig` 把配置复制到 `out/target/.config`。后续修改源 defconfig 后要重新运行该命令。`status` 用于检查模块来源；`fetch` 写设备仓库的 `unixnu.lock`。通用子模块由主仓库 gitlink 固定，UEFI 与设备仓库也应分别记录提交。首次移植不要同时执行 `fetch --update` 和升级 XNU/IPSW。
++
++### 覆盖与脚本路径
++
++模块按 `(kind, name)` 选择。设备的 `drivers/ArmCpu/` 覆盖基础 `ArmCpu`，设备的 `patches/xnu/` 同样会替换整个基础 XNU 补丁集。需要新增板级补丁时，应保留完整基础补丁集合，或明确扩展补丁应用逻辑；只放一个补丁到设备 `patches/xnu/` 会丢失通用 4 KiB 等补丁。
++
++`tree.py` 链接驱动、kit 和补丁，复制构建脚本。修改后重新组装，并检查 `out/target/tree/scripts/` 实际使用的内容。设备 `package/` 成为 `kits/<board.kit>`，不会自动作为 EFI payload 的全部内容被复制。
++
++`kernel.py::build_archives()` 在条目前添加 `tree/scripts/`，因此 `[kernel] archives` 使用脚本名：
++
++```toml
++[kernel]
++defconfig = "target_defconfig"
++archives = [
++  "build-corecrypto-14.py",
++  "build-corecrypto-14.py --namespace",
++  "build-arm-driver.py ArmDTPlatform",
++  "build-arm-driver.py ArmCpu",
++  "build-libpthread-kernel.py",
++]
++```
++
++这里不要写 `scripts/build-arm-driver.py`，否则会查找 `tree/scripts/scripts/build-arm-driver.py`。已有部分文档示例带此前缀，应以当前代码和 sheng 实际板级文件为准。`build-arm-driver.py` 在参考设备仓库中提供，需要引入并按新设备裁剪；上面的片段只说明基础 archive 顺序，不承诺独立构建完整用户态内核。`firmware.preflight`、`payload.adt.tool` 和 `kernel.prelink.tool` 则相对构建树根目录解析，仍应带 `scripts/` 或 `kits/`。
++
++## 5 先完成 UEFI 与启动镜像
++
++在 `uefi-target/Resources/Configs/target.toml` 确定 `[uefi_fd] base/size`、BootShim header 和 Android 镜像参数，在 DSC/FDF 中配置真实板级内存图与模块。固件窗口必须避开安全固件、扫描输出、ramdisk、BootShim 来源区和其它仍在使用的内存。
++
++`bootimg.py` 检查固件长度恰好等于配置大小，检查 `_Payload` 等于 shim 二进制长度，并检查 ARM64 header。当前打包逻辑固定生成 `gzip(BootShim + FD) + DTB`，随后用 Mu-Silicium 的 `mkbootimg.py` 打包。它并不根据 `kernel_compression` 自动选择任意压缩格式。本地 13T 实现已补齐 v3/v4 解包检查并支持连续 DTB 集合；基准提交只有旧 header 的校验路径。目标需要其它 header、独立 DTB 或 vendor_boot 时，仍须修改相应打包和校验代码。
++
++### 最小可用固件
++
++| 接口 | 需要验证的行为 |
++| --- | --- |
++| 文本输出或 GOP | 能持续观察菜单与错误；无 GOP 时可走文本路径 |
++| Simple Text Input | 能操控菜单；自动启动仅能替代部分操作 |
++| Simple File System | 能读取 payload FAT 中的配置和内核 |
++| Block I/O | payload 或存储方案依赖块设备时可访问相应设备 |
++| Loader protocol | DarwinBoot 安装 `gUniXNULoaderProtocolGuid` |
++| UEFI 内存服务 | 真实空闲区可分配，保留区不会被交给内核 |
++
++把以下 INF 纳入正确的 DSC/FDF 或对应加载流程：
++
++```text
++UniXNUPkg/Application/UniXNU/UniXNU.inf
++UniXNUPkg/Driver/UniXNUDxe/UniXNUDxe.inf
++DarwinBootPkg/Driver/DarwinBoot.inf
++```
++
++先用空 ramdisk 验证固件和菜单：
++
++```sh
++./unixnu build package
++./unixnu build firmware --uefi ../uefi-target
++./unixnu bootimg --uefi ../uefi-target --dtb /path/to/target.dtb --ramdisk none
++fastboot boot out/target/boot/boot.img
++```
++
++这些命令以已完成的目标 UEFI 移植为前提。bootloader 支持临时启动时可用 `fastboot boot`，其它平台要替换启动外壳。此阶段不需要刷写 userdata。
++
++### 退出 boot services 后的硬件状态
++
++DarwinBoot 退出 boot services 后屏蔽异常，清理内核窗口缓存、失效指令缓存、关闭 EL1 MMU 和 cache，再把 `boot_args` 物理地址放在 `x0`，跳转至内核物理入口。固件应使该段代码、数据和 framebuffer 在交接时仍可正确访问。
++
++菜单显示正常但退出后黑屏时，检查面板是否被 ExitBootServices 回调关闭、扫描输出内存是否保留，以及显示电源和 SMMU 映射是否仍有效。sheng 的 splash 保留节点和平台安全库处理属于该设备方案，不能原样推广。
++
++## 6 内核配置与驱动接入
++
++保留当前 `DEVELOPMENT_ARM64_BCM2837` 构建配置。这里借用 BCM2837 的 4 KiB 布局，再用补丁替换机器相关行为；更换 SoC 名称不要求先把 `MACHINE_CONFIGS` 改成目标芯片名。当前源码版本为 XNU `10063.141.1`，Darwin `23.6.0`，驱动对象按普通 ARM64 subtype 0、iOS 17 目标 ABI 构建。
++
++早期单核平台配置可以从以下开关起步：
++
++```text
++CONFIG_XNU_SOURCE_CORECRYPTO14=y
++CONFIG_XNU_SOURCE_PTHREAD=y
++CONFIG_XNU_ARM_DT_PLATFORM=y
++CONFIG_XNU_ARMCPU=y
++CONFIG_XNU_NATIVE_ARCH_TIMER=y
++# CONFIG_XNU_ARMVIRT_PLATFORM is not set
++# CONFIG_XNU_NATIVE_UFS is not set
++# CONFIG_XNU_NATIVE_ADRENO is not set
++# CONFIG_XNU_BOOT_PROGRESS is not set
++```
++
++crypto bootstrap 模式要与预链接组件选择一致；接入参考 Apple crypto/AES 路径时再按其要求使用 `CONFIG_XNU_CRYPTO_BOOTSTRAP="prelinked"`。`CONFIG_XNU_NATIVE_PAN` 需要目标 CPU 支持对应能力。不要直接复制 sheng 完整 defconfig，它同时启用 owner root、图形、验证策略包和设备电源路径。
++
++`XNU_BOOT_PROGRESS=1` 当前要求 UFS、owner-root audit、VirtIO 和源码 corecrypto，并调用设备提供的构建脚本。新板可先使用串口或已适配的入口探针；仅添加 `boot-progress=2` 不会自动构建通用进度层。
++
++新增内置驱动需要接通以下完整链路：
++
++1. 提供源文件和真实资源读取，校验长度、地址、IRQ 与硬件状态。
++2. 用实际 XNU `.cpo.json` 编译记录构建静态库，保持内核的宏、对象布局和 ABI。
++3. 把 archive 构建脚本加入 `[kernel] archives`。
++4. 在内核构建脚本中加入开关、`KERNEL_EXTRA_ARCHIVES` 与 `KERNEL_ARCHIVE_DEPENDENCIES`；按需要使用 `-force_load`。
++5. 通过补丁更新 `KernelConfigTables.cpp` 的 personality，并传入控制它的宏。
++6. 在 ADT 发布正确的 provider，在 `probe/start/registerService` 路径验证匹配和启动。
++
++只改参考 `Info.plist` 不会修改内置 personality。UniXNU 可以暂存外部 kext，但当前 DarwinBoot 在 `KextCount != 0` 时拒绝请求；新板早期驱动应沿已有静态链接路径集成。
++
++构建驱动在首次缺少编译记录时先尝试一轮 bootstrap 编译，再构建 archive，最后完整链接和预链接。首轮仅在成功产生所需记录后才允许容忍后续错误；最终链接失败仍然是失败。
++
++## 7 生成目标设备 ADT
++
++### 区分两种设备树
++
++FDT/DTB 使用标准扁平设备树编码，供 bootloader、UEFI 和 Linux 使用。XNU 的 `.adt` 使用 Apple 节点编码，不能用 `dtc` 直接转换得到。当前 DarwinBoot 从内核路径旁读取 `kernel.macho.adt`，并拒绝请求中额外传入的 FDT。XNU 菜单项应省略 `dtb`。
++
++参考 `scripts/qemu-entry/make-dt.py` 的 `node()` 和 CHRP NVRAM 编码，再对照设备仓库 `make-sheng-adt.py` 实现目标生成器。QEMU 示例中包含测试专用资源与兼容性节点，整棵树不能作为真实板子的硬件描述。
++
++| 节点 | 目标生成器应提供的内容 |
++| --- | --- |
++| 根节点 | `name=device-tree`，真实平台 `compatible`，按用户态需求设置 `model/target-type` |
++| `/chosen` | 新的 64 字节 `random-seed`、DRAM、OS environment、可用 CHRP NVRAM proxy |
++| `/chosen/memory-map` | 与实际输入一一对应的 16 字节全零占位符 |
++| `/cpus` | 启动核及之后验证过的核心，真实 MPIDR 与 timebase |
++| `/arm-io` | 按当前驱动约定编码的总线窗口和子设备 |
++| `/arm-io/intc` | GICv3 compatible、distributor/redistributor 窗口和必要 stride |
++| `/defaults`、`/options` | 平台专家要求的节点；未实现休眠时设置相应禁用策略 |
++| `/psci` | 启动多核时使用实际的 `smc` 或 `hvc` conduit |
++| `/product`、`/buttons` | Apple 平台组件与用户态实际读取的产品及按钮属性 |
++
++`ArmDTPlatform::configure()` 先检查 `/cpus`、`/arm-io`、`/defaults`、`/options` 和 NVRAM proxy，再调用真正的 `IODTPlatformExpert::configure()`。它为 `arm-io` 子节点创建 nub，并把 service provider 连接到平台专家。移植时保留这一 provider 关系，才能沿平台专家解析资源。
++
++### 精确遵守当前字段编码
++
++Apple 节点头为小端 `u32 property_count, child_count`；属性名固定 32 字节，随后是小端长度、属性字节和 4 字节填充。数值还需遵守具体读取者的约定。当前 `ArmCpu::mapGic()` 要求 `ranges` 正好是三个 `u64`，`reg` 正好是四个 `u64`，`compatible` 正好为带 NUL 的 `arm,gic-v3`。直接照搬 Linux DT 的大端 cell 编码会失败。
++
++对应地址转换为：
++
++```text
++ranges = [child_base, parent_physical_base, window_size]
++GIC reg = [dist_child_address, dist_size, redist_child_address, redist_size]
++physical = parent_physical_base + child_address - child_base
++```
++
++当前接口只有一个这样的 bus range。超出范围的设备需要调整资源模型或像现有 UFS 一样使用经确认的板级物理地址。sheng 的 UFS 节点仅供匹配，实际 MMIO 地址来自 `GccUfs.h`，给节点添加新 `reg` 并不会改变驱动地址。
++
++### 身份与占位符
++
++`unique-chip-id` 与 chosen `chip-id` 参与 `IOPlatformUUID`，缺失可导致等待 UUID 的用户进程停住。它们是这里的平台身份输入。`[ipsw] chip_id/board_id` 则用于匹配恢复镜像中的 Apple BuildIdentity；新 SoC 的硬件编号、chosen 身份种子与 IPSW 标识要分别管理。参考生成器对 `--chip-id` 和 `--unique-chip-id` 按十六进制解析。
++
++提供 Data 或 trust cache 时，生成对应的全零 `RAMDisk`、`PackedRAMDisk` 或 `TrustCache` 地址/长度槽。`RAMDisk` 与 `PackedRAMDisk` 不能同时存在，DarwinBoot 会检查输入与槽位是否匹配。Packed Data 的保留与后续解码路径也需要接通原生 RAM 块驱动。
++
++生成器必须接受 `payload.py` 传入的选项，包括 `--output`、`--dram-size` 及板级启用的 `--owned-memory-size`、`--cpu-regs`、`--psci-method`、身份、根 UUID 和输入占位符开关。添加一个 `board.toml` 键不会自动让打包器把它传给生成器。
++
++## 8 内存窗口与 4 KiB 页
++
++有三组独立数值需要维护：设备 DRAM 的真实物理布局、DarwinBoot 交给 XNU 的连续窗口、设备 DMA 所能访问的地址范围。
++
++`AllocateWindow()` 从真实 `EfiConventionalMemory` 中寻找连续区，可合并相邻空闲描述符，并使分配物理基址与内核虚拟基址的低 21 位对应。默认窗口为 256 MiB，`/chosen/darwinboot-memory-size` 可请求 256 MiB 到 8 GiB、以 2 MiB 为步进的窗口。它只改变请求，无法把固件保留区或离散 DRAM 变成可用连续内存。
++
++窗口内依次放置内核段、boot args、ADT、Data 和 trust cache，并留出尾部余量。`Args->MemorySize` 和 `MemorySizeActual` 都等于这个窗口。扩大 `/chosen/dram-size` 不会让加载器自动移交整机 RAM。当前 Mach-O 读取上限为 128 MiB，内核段跨度还受固定 256 MiB 相关检查约束，增大 owned window 也不会一并放开这些限制。
++
++先从 UEFI 空闲区和实际负载大小确定一个可实现的窗口。出现 `NO WINDOW` 时检查最大连续空闲区、地址对齐和固件保留，再考虑减少负载。不要把 MMIO、framebuffer 或安全世界内存重新标成普通 RAM 来满足分配。
++
++必须保留并理解以下补丁：
++
++| 补丁或机制 | 移植时要验证的行为 |
++| --- | --- |
++| `native-4k-bootstrap-capacity` | bootstrap 页表池足够，扩大的窗口不会提前耗尽表页 |
++| `native-4k-user-abi` | 内核、用户 map、commpage 与 shared region 一致使用对应页策略 |
++| `native-4k-signature-hash-cache` | 先验证原始 16 KiB 签名块，再派生 4 KiB 摘要 |
++| `zzx-pmap-sync-64bit-pa` | 高于 4 GiB 的物理地址不会被 32 位 shift 截断 |
++| 非 Apple 机器补丁 | 避免执行 Apple CPU tunable、monitor、UAT/SART 等专属路径 |
++
++DMA 另查设备地址宽度、SMMU 输入输出宽度、cache 属性及 clean/invalidate。CPU 能访问某段高地址 RAM，不代表 UFS 或 GPU 能直接 DMA 到那里。
++
++## 9 CPU GIC 定时器与多核
++
++先只在 ADT 中描述启动核，验证 `armcpu_registered`、`armcpu_gic_ready` 和定时器计数增长。当前 `ArmCpu` 使用 `CNTVCT_EL0` 与 `CNTV_*` 路径，dispatch 把 INTID 27 交给 `rtclock_intr`。timebase 必须来自目标计数器，不能沿用 sheng 的频率或用 CPU 主频替代。
++
++GIC bring-up 需要检查 GICv3 system register interface、Group 1 non-secure、优先级屏蔽、GICD affinity routing 和每核 redistributor。stride 可从硬件推导，或使用当前支持的 `0x20000`、`0x30000`、`0x40000` 显式值。跨 SoC 时要确认 frame 遍历和实际可访问范围。
++
++单核稳定后再接通多核：
++
++1. 从真实 MPIDR 生成每核 `reg`，确认 XNU 的物理编号到逻辑编号映射。
++2. 检查 `native-smp-secondary.patch` 的启动汇编。当前 BCM2837 路径只保留 MPIDR 低 16 位，并把 `MAX_CPUS` 提高到 8、保留一个 cluster 配置。
++3. 修改参考 ADT 生成器的校验。sheng 生成器只接受启动核 0 与 Affinity1 编号，不能直接用于另一种拓扑。
++4. 当前使能参数名仍是 `sheng-smp=1`，PSCI conduit 从 `/psci` 读取。核对 CPU_ON 返回、secondary 入口与每核 `armcpu_smp_step`。
++5. 验证每核定时器与双向 IPI，再验证调度和 TLB shootdown。
++
++`ArmCpu` 自身也有 8 槽数组、部分低位 affinity 比较及 SGI target 限制。超过 8 核、使用更高 affinity 或其它 cluster 布局时，要同步修改 ADT、XNU 编号、汇编和驱动；单改 `MAX_CPUS` 不足以支持它。
++
++`armcpu-spi-ipi=1` 是为 sheng 使用 SPI 1008 至 1015 的替代 IPI 路径。新板先验证标准 SGI，并检查这些 SPI 是否存在、是否空闲及路由是否正确，再决定是否需要替代方案。当前 secondary resume 路径会 panic，CPU_ON 成功不代表休眠唤醒可用。
++
++## 10 存储 DMA 与根卷
++
++### 当前 UFS 的板级依赖
++
++`NativeUfs` 已包含真实根读取路径，但源码仍针对 sheng：
++
++| 位置 | 当前依赖 | 移植动作 |
++| --- | --- | --- |
++| `NativeUfs::probe()` | `qcom,sm8550-ufshc`，以及根 provider personality | 同步修改匹配、provider 与启动时序 |
++| `GccUfs.h` | SM8550 控制器和 GCC 寄存器 | 按目标硬件重建寄存器与前置条件 |
++| `NativeUfs.cpp` | apps SMMU 物理窗口、UFS stream `0x60` | 重新确认 SMMU 版本和 stream 路由 |
++| `SmmuTakeover.h` | SMMUv2 SMR/S2CR/context bank 及 VA64 bypass | 为实际 IOMMU 实现受控接管或翻译 |
++| `RootLayout.h` | LUN 0、4 KiB 物理块、GPT 与 `SHNGROOT` | 与目标介质、镜像和扇区格式一致 |
++
++现有 host bring-up 接管固件留下的 live controller 和 request list，并处理设备电源状态；没有提供所有控制器的通用冷初始化。必须分别验证冷启动和 warm reset。不能把“UEFI 读取成功”作为时钟、PHY、队列、SMMU 在 XNU 接管后仍然正确的证明。
++
++建议依次验证控制器身份、前置电源和时钟、队列静止、DMA 缓冲、SMMU 配置、单块读取、连续读取、超时与错误，再发布 IOMedia。接管前停止旧队列；不能重用其它设备仍占有的 context bank。保留现有地址宽度、stream 冲突和寄存器写回校验。
++
++`ArmSmmu4K` 实现的是 ARM SMMUv2 相关路径。SMMUv3 等实现需要不同的 stream/context/命令队列支持，即使它们也支持 4 KiB 页表。bypass 同样受地址宽度和 VA64 状态限制。
++
++### 镜像布局与块大小
++
++userdata 镜像以 `SHNGROOT` manifest 开头，后面按 1 MiB 对齐存放 IPSW 的 OS 和 SystemOS 磁盘窗口。原始磁盘窗口按 512 字节块发布；现有物理 UFS 与 GPT 读取按 4096 字节块处理，XNU 内核页也为 4096 字节。移植时分别处理这三处约定。
++
++当前 GPT 解析还检查 header/entry CRC、128 字节 entry、有限的 entry 数量与位置、分区边界及 READ(10) 地址范围。`[userdata] lba_bytes` 可以改变打包容量计算，却不会自动改写内核存储解析器。目标使用另一种扇区、LUN 或队列格式时要一起修改传输层与解析器。
++
++`root_match_volume_uuid` 匹配实际发布的 IOMedia UUID，不能用 Android userdata GPT 的 partition GUID 替代。更换 OS 镜像后重新检查 APFS 媒体与卷匹配，并保持 verified-root 策略、Data UUID 和 owner mount 配置一致。
++
++根卷先只读。后续持久 Data 与日志写入还要重新规划 userdata 尾部，验证与镜像窗口、保留日志区完全不重叠。早期不要启用 `sheng-data-persist=2` 等板级写回参数。
++
++### PMGR 与打包检查
++
++`payload.py::check_native_root()` 对 `native-ufs-root=1` 强制要求恰好一个 `sheng-pmgr=2`，并用 `llvm-nm` 检查 `_sheng_pmgr_run`。这段逻辑目前是 sheng 专用的原生根启动条件。新平台要实现并验证需要的平台 provider，再让检查识别目标平台；删除检查或重命名参数不能满足原始 AMFI 的 PMGR 依赖。
++
++参考 `ShengPlatformPower` 主要建立 ApplePMGR/ApplePMGRNub 的 ABI 与发布关系，未实现的虚函数会明确停止。它不等于目标 SoC 的完整电源控制器，不能承担实际时钟、idle、reset 和 suspend。
++
++## 11 显示 输入 GPU 与电源扩展
++
++### 显示
++
++DarwinBoot 的 `BootVideo.h` 目前只接受 `PixelBlueGreenRedReserved8BitPerColor`，行字节数取 `PixelsPerScanLine * 4`，并验证尺寸、容量和地址。GOP 支持 BLT 或另一种像素格式时，要先提供兼容的线性 framebuffer，或扩展整个视频交接路径。
++
++先让内核控制台沿固件 scanout 显示，再接入 `NativeMobileDisplay` 的 legacy/GOP presenter、swap 校验和回收。分辨率、pitch、旋转、缩放与触控坐标各自校准。保留画面和 CPU 写 framebuffer 不代表具备原生 DPU mode setting、vblank 或休眠恢复。
++
++### 输入
++
++按“总线与引脚、控制器识别、固件加载、有效触点、HID 发布”推进。参考 sheng 把板级 GPIO/时钟放在 `TouchBoard.h`，由 `TouchProbe.cpp` 做硬件访问，协议与纯处理层分离，最后用 `NativeHidInput` 发布事件。
++
++`NativeGeniSpi` 是 Qualcomm GENI 总线路径。换用另一种 I2C/SPI 控制器或触控芯片时，需要替换总线或协议层，重新确定 reset、IRQ、DMA 和矩阵/坐标参数。UEFI 按键驱动与 XNU HID 驱动分别验收。
++
++### GPU
++
++当前运行链路针对 Adreno 740：`NativeMetal → metal2vulkan → Turnip/NIR/IR3 → Darwin KMD → NativeAdreno → GMU/CP/SMMU → scanout`。相关板级电源和 GMU 配置也在设备 package 中。
++
++同为 Adreno 的新 GPU 仍需核对固件 ABI、HFI、电源票、寄存器、PM4、SMMU、编译器目标及 userspace/kernel 接口。Mali 或其它 GPU 需要对应的内核驱动和用户态后端。先用 CPU/简单显示路径推进系统，随后按固件启动、提交与 fence、buffer 映射、像素校验、Metal 发布的顺序验收。
++
++### 电源
++
++将真实 clock/reset/regulator、watchdog、温控与系统 PMGR 接口分别实现。早期避免触发未实现的 idle/suspend。每条供电序列按前置条件分阶段执行，先观察再写入；对未上电外设的 MMIO 读取也可能令总线停住。
++
++## 12 Apple 二进制 ABI 与外部输入
++
++跨 SoC 时优先保持同一组 XNU、IPSW、kernelcache 和预链接组件，以便单独检验硬件变化。改变用户态系统版本属于另一组 ABI 适配工作。
++
++| 输入或机制 | 需要保持一致的内容 |
++| --- | --- |
++| `[ipsw]` | product/version/build/device class/Apple chip 与 board identity |
++| `kernelcache_sha256` | 解压后并选取 arm64 切片的原始缓存 |
++| prelink roots 与 slide | 真正需要的组件闭包、导入及地址布局 |
++| `early_security_init` | 指定原始安全组件的真实入口与元数据 |
++| 原始类绑定 | C++ 类尺寸、虚表、方法签名和绝对地址 |
++| trust cache、verified-root bundle | 与对应代码及磁盘内容匹配的输入和策略 |
++| Data seed | 可写卷内容、UUID、目标系统所需的初始化状态 |
++
++AES 等脚本会使用 `scripts/data/` 中记录的原始绑定地址。PMGR 构建还会读取已有候选内核及报告，核对固定的原始方法与虚表。这些地址属于固定 kernelcache，换 IPSW 时必须重新建立证据，不能只更新哈希以让检查通过。
++
++完整 sheng 配置中还存在没有列入 archive builders 的策略静态库输入。建立干净工作区时，先检查每个 `_ARCHIVE` 的来源、生成方式和策略；`kernel.py` 会拒绝缺失文件。能取得所有 Git 源码不代表已经具备这些生成输入。
++
++4 KiB 代码签名适配仍要验证原始 16 KiB 签名块。`--owner-trust-cache` 只改变打包阶段的 allow-list 路径，不能替代运行时验证。当前内核也包含 work interval 和 GPU user-client 沙箱等特定策略修改；保留 AMFI 组件不足以声明整个系统等同于 Apple 原生安全启动。
++
++## 13 逐阶段构建与启动
++
++目标 `board.toml`、ADT 生成器、archive 脚本和原生驱动完成后，在 macOS 构建主机按阶段执行。下列文件路径均需替换为目标设备真实输入。
++
++```sh
++./unixnu defconfig target_defconfig -D ../UniXNU-target
++./unixnu status
++./unixnu fetch
++./unixnu tree
++./unixnu ipsw info
++./unixnu ipsw fetch
++./unixnu build kernel
++./unixnu build package
++./unixnu build firmware --uefi ../uefi-target
++```
++
++`build kernel` 包括预链接。只修改预链接选择时可运行 `./unixnu build prelink`；它会替换该输出和报告，保留要比较的候选后再执行。
++
++若已经有匹配的预链接内核，可用 `--kernel` 跳过内核构建，验证打包路径：
++
++```sh
++./unixnu build payload --uefi ../uefi-target \
++  --kernel /path/to/qualified-kernel.macho \
++  --unique-chip-id "$TARGET_PLATFORM_SEED" \
++  --trust-cache /path/to/qualified-trustcache.bundle \
++  --data-ramdisk /path/to/qualified-data.dbr
++
++./unixnu bootimg --uefi ../uefi-target --dtb /path/to/target.dtb
++fastboot boot out/target/boot/boot.img
++```
++
++`TARGET_PLATFORM_SEED` 应预先设置为有效十六进制身份值。只有对应阶段需要 trust cache/Data 时才传入它们，ADT 槽位必须随之变化。`payload.adt.tool` 与 `payload.dram_size` 是打包器需要的配置。首轮把 `payload.panic_screen` 关闭，直到目标入口探针已适配；参考探针来自设备仓库，部分地址与计数器常量固定于已知内核。
++
++负载生成器重建 `unixnu.toml`，默认关闭 kit autoload；不要假定设备 package 或手改的 staging 配置会自动保留。额外 `--kernel-arg NAME=VALUE` 会替换板级同名参数，当前生成命令行限长 1000 字节。首轮不要复制 sheng 的完整参数列表。
++
++构建 userdata：
++
++```sh
++./unixnu build userdata --dry-run
++./unixnu build userdata
++```
++
++当前 `--dry-run` 主要读取 IPSW 成员信息与声明的分区容量，不解压磁盘镜像，也不执行最终展开大小是否适配分区的判断。正式构建用 `hdiutil imageinfo` 取得展开大小后才检查实际容量。
++
++`userdata-root.img` 会覆盖 Android userdata 内容，刷写前需要备份并确认恢复方式、目标分区和容量。以下是部署步骤，仅在目标存储和根卷路径通过验证后执行：
++
++```sh
++fastboot flash userdata out/target/userdata/userdata-root.img
++fastboot reboot bootloader
++fastboot boot out/target/boot/boot.img
++```
++
++临时启动不刷 boot 分区，但已经启动的内核仍可能写入存储。验证纯启动链时保持原生写回路径关闭。
++
++## 14 验收与故障定位
++
++| 阶段 | 通过标准 | 失败后的下一项检查 |
++| --- | --- | --- |
++| BootShim/UEFI | 可重复进入固件，输出持续可见 | header、来源/目标内存重叠、固件大小、cache 与入口 |
++| UniXNU | `UNIXNU:` 日志、配置成功、预期菜单项 | FAT/ramdisk、配置路径、kit 匹配与加载顺序 |
++| DarwinBoot | loader v2 安装、输入校验完成、交接地址合理 | EL1、协议、Mach-O、ADT、占位符与窗口 |
++| 内核入口 | 到达可定位的入口或机器初始化检查点 | `x0`、物理映射、页表容量、异常与视频/UART |
++| 单核平台 | 平台专家成功、真实 timer IRQ 持续递增 | ADT 字节格式、GIC、PPI、counter 频率和权限 |
++| 块读取 | 固定数据重复读取一致，错误可解释 | 电源、时钟、队列、DMA/SMMU、cache、超时 |
++| 根卷 | 正确 IOMedia、UUID 与根绑定，执行 launchd | manifest、窗口、APFS、策略包与签名 |
++| 用户态 | Data 挂载，所需进程持续运行 | pthread/crypto、平台 UUID、PMGR、watchdog |
++| 多核 | 每核进入调度，timer 与双向 IPI 有记录 | MPIDR、PSCI、GICR、SGI、TLB shootdown |
++| 图形与输入 | 实际帧输出、输入坐标和事件正确 | pitch/format、同步、总线、HID 与 compositor |
++| 长时间运行 | 重复冷/热启动、压力和错误恢复通过 | 资源回收、时钟、电源与持久化一致性 |
++
++DarwinBoot 的绿色条只说明入口交接代码已经执行。出现 `inputs validated; exiting boot services` 也不等于 XNU 已经运行。`armdt_platform_*` 计数只记录平台 nub，不能证明每个子驱动启动成功；同理，Metal 设备被枚举不等于已完成 GPU 正确性与稳定性验证。
++
++常见故障按触发边界定位：
++
++| 现象 | 优先检查 |
++| --- | --- |
++| 菜单正常，DarwinBoot 返回 Unsupported | EL、非空 FDT、暂存 kext 或不支持的 GOP 格式 |
++| Compromised Data | ADT 长度/编码、重复字段、Data/trust 槽位与输入不符 |
++| NO WINDOW | 真实连续 conventional memory、对齐、所需窗口 |
++| 交接后停住且无 timer | GIC 和 PPI、固件 trap、频率；单独核对日志通道 |
++| No PMGR | 原始安全组件依赖、provider 发布时序与 ABI |
++| 低地址读取正常，高地址 DMA 出错 | 设备/SMMU 位宽、VA64、地址截断与 cache |
++| 没有根设备 | GPT/LUN/扇区、manifest、IOMedia UUID 与策略 |
++| configd 等进程等待 | 平台 UUID 输入及其发布；再查看真实等待栈 |
++| 热启动偶尔成功，冷启动失败 | 固件遗留状态、PHY/时钟初始化、SMMU 和队列接管 |
++
++## 15 检查工具与适用范围
++
++文档阅读和打包校验、QEMU 测试、真机启动各自验证不同内容。`boot.json`、`payload.json` 和 userdata 报告中的 `hardware_tested: false` 不会因为文件构建成功而改变。
++
++| 检查 | 前提与范围 |
++| --- | --- |
++| `git submodule status --recursive`、`unixnu status` | 确认源码及模块来源，不证明镜像可启动 |
++| `bootimg.py` 内置 verify | 检查当前 header、gzip、FD、DTB 和 ramdisk 往返一致 |
++| `check-xnu-granules.py` | 准备对应 XNU 源码/工具链后检查页表 granule |
++| `check-native-4k-policy.py` | 需要已打补丁的源码，执行提取出的页大小策略 |
++| `check-code-signing-granules.py` | 需要源码与 Xcode，检查签名页大小 gate，范围不含完整签名验证器 |
++| `check-darwinboot-window-parser.py` | 需要参考设备 ADT helper 与 clang，检查实际解析器，不分配 UEFI 内存 |
++| `test-armcpu.py` | 需要可运行的内核/QEMU fixture，检查 CPU、timer、缺失 GIC 与 commpage |
++| 存储/触控/SMMU 主机测试 | 检查纯逻辑、边界与拒绝条件，不驱动真实硬件 |
++
++在已组装并具备工具链的构建树运行相应脚本，例如：
++
++```sh
++cd out/target/tree
++python3 scripts/check-xnu-granules.py
++python3 scripts/check-native-4k-policy.py
++python3 scripts/check-code-signing-granules.py
++```
++
++部分历史 fixture 还引用旧构建目录，运行前检查脚本输入与当前产物位置。不要把缺失的旧报告当作新平台失败，也不要把已有 QEMU 的 PASS 当作真机通过。QEMU 的 PSCI、GIC、VirtIO 和内存模型无法覆盖目标板的电源、UFS PHY、SMMU stream 权限与面板保活。
++
++## 16 面向新平台的实施顺序
++
++对 SM8750 或其它未确认支持的平台，按以下顺序建立设备移植：
++
++1. 完成资料表与恢复路径，确定真实 UEFI、DTB、内存和 CPU 接口。
++2. 创建独立设备仓库，固定现有 Apple 软件基线，核对全部外部输入。
++3. 启动目标 UEFI 与空负载菜单，校准 GOP/日志并验证 EL1 交接条件。
++4. 完成单核 ADT 与机器相关代码，使 timer 和平台专家可重复运行。
++5. 实现目标存储与 DMA，先进行只读数据校验，再满足 Apple provider/PMGR 与根卷依赖。
++6. 挂载根卷和 Data，运行 launchd，再推进显示服务和输入。
++7. 单独接通 SMP、CPU 电源和 GPU，最后启用持久写回与长时间运行验证。
++
++每个阶段保留能再次构建的配置、输入版本和日志。设备文档以已通过的阶段描述支持状态；仍未适配的休眠、USB、无线、音频或传感器继续作为独立工作，不随“进入桌面”一并标记完成。
++
++## 源码索引
++
++| 主题 | 固定版本源码 |
++| --- | --- |
++| 构建调度、模块解析与打包 | [UniXNU 构建驱动](https://github.com/UniXNU/UniXNU/tree/fb2bb310564ce66779e472a021881cf7c5764919/scripts/unixnu) |
++| 内核开关与链接 | [build-xnu-4k-baseline.sh](https://github.com/UniXNU/UniXNU/blob/fb2bb310564ce66779e472a021881cf7c5764919/scripts/build-xnu-4k-baseline.sh)、[XNU 补丁](https://github.com/UniXNU/UniXNU/tree/fb2bb310564ce66779e472a021881cf7c5764919/patches/xnu) |
++| UEFI 菜单交接 | [UniXNULib](https://github.com/UniXNU/UniXNU/tree/fb2bb310564ce66779e472a021881cf7c5764919/package/UniXNUPkg/Library/UniXNULib) |
++| 内核加载、窗口与视频 | [DarwinBoot](https://github.com/UniXNU/DarwinBoot/tree/85332b317ee80898fc78939ea64e6ca52d3837a3/DarwinBootPkg/Driver) |
++| ADT 平台专家 | [ArmDTPlatform.cpp](https://github.com/UniXNU/ArmDTPlatform/blob/0d544705c2e89725caabc0542bb96bc8febd8c70/ArmDTPlatform.cpp) |
++| CPU、GIC 与定时器 | [ArmCpu.cpp](https://github.com/UniXNU/ArmCpu/blob/1951cc8444b340d7d8879e9418220cf29eb711d7/ArmCpu.cpp) |
++| 存储、队列与 GPT | [NativeUfs](https://github.com/UniXNU/NativeUfs/tree/af785c1777161a62931425c2faaa536ce0bebd5b) |
++| SMMUv2 | [ArmSmmu4K](https://github.com/UniXNU/ArmSmmu4K/tree/4d0d6598b1a36aeec3de01091893fa6660e49388) |
++| 预链接 | [NativePrelink](https://github.com/UniXNU/NativePrelink/tree/3380d3006068cdaab69454b37668e6b532ed2584) |
++| 设备板级配置、ADT、PMGR 与探针 | [UniXNU-sheng](https://github.com/UniXNU/UniXNU-sheng/tree/7562a779ebdbdedc17c4c7274ba993acbbec8188) |
++| BootShim、内存图与固件组件 | [uefi-sheng](https://github.com/UniXNU/uefi-sheng/tree/8b7cc5d155ba147f461dea7121e91104544ab99e) |
++
++相关章节：[设备仓库](/zh/porting/device-repository)、[设备树](/zh/porting/device-tree)、[4 KiB 页表](/zh/xnu/four-k-page-tables)、[XNU 驱动](/zh/drivers/xnu-drivers)、[故障排查](/zh/reference/troubleshooting)。
+diff --git a/docs/zh/reference/configuration.md b/docs/zh/reference/configuration.md
+index 7c2c25e..23b6177 100644
+--- a/docs/zh/reference/configuration.md
++++ b/docs/zh/reference/configuration.md
+@@ -48,6 +48,7 @@
+ | --- | --- | --- |
+ | `defconfig` | 字符串 | `configs/` 下的文件名 |
+ | `archives` | 数组 | 构建树中的静态库脚本，在链接内核前按顺序执行 |
++| `source_only` | 布尔 | 输出源码 XNU 并跳过 kernelcache 预链接；默认 false，不能与 `[kernel.prelink]` 同用 |
+ 
+ ### [kernel.prelink]
+ 
+@@ -80,6 +81,10 @@
+ | --- | --- | --- |
+ | 任意 | 字符串 | EDK II 构建的 `-D NAME=VALUE` |
+ 
++### [bootimg]
++
++`embed_payload = true` 把 `--ramdisk` 输入放在固件之后，一起压缩到内核镜像中，并将 Android ramdisk 字段留空。需要非空负载、ARM64 镜像头，以及支持负载交接的 BootShim/SEC。用于 `fastboot boot` 时仍从 `init_boot` 取得通用 ramdisk 的设备；默认行为仍使用 Android ramdisk 字段。
++
+ ### [bootimg.image]
+ 
+ | 键 | 类型 | 含义 |
+diff --git a/package/UniXNUPkg/Driver/UniXNUDxe/UniXNUDxe.c b/package/UniXNUPkg/Driver/UniXNUDxe/UniXNUDxe.c
+index 213602a..4a1b15d 100644
+--- a/package/UniXNUPkg/Driver/UniXNUDxe/UniXNUDxe.c
++++ b/package/UniXNUPkg/Driver/UniXNUDxe/UniXNUDxe.c
+@@ -226,7 +226,7 @@ UniXNUDxeEntry (
+   }
+ 
+   Status = gRT->SetVariable (EFI_BOOT_ORDER_VARIABLE_NAME, &gEfiGlobalVariableGuid, OPTION_ATTRIBUTES, Out * sizeof (UINT16), NewOrder);
+-  DEBUG ((DEBUG_INFO, "UniXNUDxe: Boot%04x first in BootOrder: %r\n", Number, Status));
++  DEBUG ((DEBUG_WARN, "UniXNUDxe: Boot%04x first in BootOrder: %r\n", Number, Status));
+ 
+   FreePool (NewOrder);
+   if (Order != NULL) {
+diff --git a/package/UniXNUPkg/Library/UniXNULib/Config.c b/package/UniXNUPkg/Library/UniXNULib/Config.c
+index 425adec..b36f99a 100644
+--- a/package/UniXNUPkg/Library/UniXNULib/Config.c
++++ b/package/UniXNUPkg/Library/UniXNULib/Config.c
+@@ -1576,11 +1576,23 @@ UniXNUConfigLoad (
+     }
+ 
+     if (AddFallbackLoaders (Config, ImageHandle) == 0) {
++      CHAR8  BootStatus[sizeof (Config->Notice)];
++      UINTN  BootStatusSize;
++
+       //
+       // Only the actions are left. Say so instead of showing a menu that
+       // looks complete.
+       //
+       AsciiStrCpyS (Config->Notice, sizeof (Config->Notice), "no boot entry found");
++      BootStatusSize = sizeof (BootStatus);
++      Status = gRT->GetVariable (L"UniXNUBootStatus", &gUniXNUPkgTokenSpaceGuid,
++                      NULL, &BootStatusSize, BootStatus);
++      if (!EFI_ERROR (Status) && (BootStatusSize > 1) && (BootStatusSize <= sizeof (BootStatus)) &&
++          (BootStatus[BootStatusSize - 1] == '\0')) {
++        AsciiStrCpyS (Config->Notice, sizeof (Config->Notice), BootStatus);
++        Config->Timeout = -1; // Keep the platform failure visible when input is available.
++        Config->FallbackTimeout = 300;
++      }
+       UniXNULog ("config: no boot entry found");
+     }
+ 
+diff --git a/package/UniXNUPkg/Library/UniXNULib/UniXNULib.inf b/package/UniXNUPkg/Library/UniXNULib/UniXNULib.inf
+index bfdb3b3..ff8da41 100644
+--- a/package/UniXNUPkg/Library/UniXNULib/UniXNULib.inf
++++ b/package/UniXNUPkg/Library/UniXNULib/UniXNULib.inf
+@@ -50,6 +50,7 @@
+   gFdtTableGuid                   ## SOMETIMES_CONSUMES ## SOMETIMES_PRODUCES
+   gLinuxEfiInitrdMediaGuid        ## SOMETIMES_PRODUCES
+   gUniXNUBlockSliceGuid        ## SOMETIMES_PRODUCES
++  gUniXNUPkgTokenSpaceGuid     ## SOMETIMES_CONSUMES ## Variable: UniXNUBootStatus
+ 
+ [Protocols]
+   gEfiAcpiTableProtocolGuid         ## SOMETIMES_CONSUMES
+diff --git a/patches/xnu/native-arch-timer-frequency.patch b/patches/xnu/native-arch-timer-frequency.patch
+new file mode 100644
+index 0000000..53459bf
+--- /dev/null
++++ b/patches/xnu/native-arch-timer-frequency.patch
+@@ -0,0 +1,26 @@
++--- a/pexpert/arm/pe_identify_machine.c
+++++ b/pexpert/arm/pe_identify_machine.c
++@@ -146,11 +146,23 @@
++ 		}
++ 	}
++ 
+++#if defined(XNU_NATIVE_ARCH_TIMER) && XNU_NATIVE_ARCH_TIMER
+++	/* Architectural counter conversion must use the frequency programmed by firmware. */
+++	uint64_t counter_frequency;
+++	__asm__ volatile ("mrs %0, cntfrq_el0" : "=r"(counter_frequency));
+++	if (counter_frequency == 0 || counter_frequency > UINT32_MAX) {
+++		panic("Invalid architectural counter frequency: %llu", counter_frequency);
+++	}
+++	gPEClockFrequencyInfo.timebase_frequency_hz = (uint32_t)counter_frequency;
+++	gPEClockFrequencyInfo.dec_clock_rate_hz = (uint32_t)counter_frequency;
+++#endif
+++
++ 	/* Set the num / den pairs form the hz values. */
++ 	gPEClockFrequencyInfo.bus_clock_rate_num = gPEClockFrequencyInfo.bus_clock_rate_hz;
++ 	gPEClockFrequencyInfo.bus_clock_rate_den = 1;
++ 
++ 	gPEClockFrequencyInfo.bus_to_cpu_rate_num =
+++	    (gPEClockFrequencyInfo.bus_clock_rate_hz == 0) ? 0 :
++ 	    (2 * gPEClockFrequencyInfo.cpu_clock_rate_hz) / gPEClockFrequencyInfo.bus_clock_rate_hz;
++ 	gPEClockFrequencyInfo.bus_to_cpu_rate_den = 2;
++ 
 diff --git a/patches/xnu/offline-component-load-probes.patch b/patches/xnu/offline-component-load-probes.patch
 index 94bf523..69d5e48 100644
 --- a/patches/xnu/offline-component-load-probes.patch
@@ -34,355 +1853,37 @@ index 94bf523..69d5e48 100644
   	/* Initialize the file systems. */
   	bsd_init_kprintf("calling vfsinit\n");
   	vfsinit();
-diff --git a/scripts/build-xnu-4k-baseline.sh b/scripts/build-xnu-4k-baseline.sh
-index c0404ad..e56c360 100755
---- a/scripts/build-xnu-4k-baseline.sh
-+++ b/scripts/build-xnu-4k-baseline.sh
-@@ -35,7 +35,7 @@ fi
- # Remove them first so earlier independent patches retain their idempotent checks.
- # The same holds for the boot-time GPU addon mount (zzy), which edits the owner Data mount function inside the systemos patch.
- # Reverse newest first; the loop below re-applies them in name order.
--for LATE_PATCH in "$ROOT/patches/xnu/zzz-boot-progress.patch" "$ROOT/patches/xnu/zzy-native-gpu-addon-mount.patch"; do
-+for LATE_PATCH in "$ROOT/patches/xnu/zzzzz-root-panic-progress.patch" "$ROOT/patches/xnu/zzzz-early-boot-progress.patch" "$ROOT/patches/xnu/zzz-boot-progress.patch" "$ROOT/patches/xnu/zzy-native-gpu-addon-mount.patch"; do
-   if git -C .cache/xnu-work apply --reverse --check "$LATE_PATCH" >/dev/null 2>&1; then
-     git -C .cache/xnu-work apply --reverse "$LATE_PATCH"
-   fi
-@@ -56,30 +56,40 @@ if [ "$BOOTSTRAP" != 0 ] && [ "$BOOTSTRAP" != 1 ]; then
-   exit 1
- fi
- BOOT_PROGRESS=${XNU_BOOT_PROGRESS:-0}
-+EARLY_BOOT_PROGRESS=${XNU_EARLY_BOOT_PROGRESS:-0}
-+if [ "$EARLY_BOOT_PROGRESS" != 0 ] && [ "$EARLY_BOOT_PROGRESS" != 1 ]; then
-+  echo 'XNU_EARLY_BOOT_PROGRESS must be 0 or 1' >&2
-+  exit 1
-+fi
-+if [ "$EARLY_BOOT_PROGRESS" = 1 ] && { [ "$BOOT_PROGRESS" != 1 ] || [ "${XNU_ARMCPU:-0}" != 1 ] || [ "${XNU_ARM_DT_PLATFORM:-0}" != 1 ]; }; then
-+  echo 'Early boot progress requires BOOT_PROGRESS, ArmCpu and ArmDTPlatform' >&2
-+  exit 1
-+fi
- if [ "$BOOT_PROGRESS" != 0 ] && [ "$BOOT_PROGRESS" != 1 ]; then
-   echo 'XNU_BOOT_PROGRESS must be 0 or 1' >&2
-   exit 1
- fi
- if [ "$BOOT_PROGRESS" = 1 ]; then
--  if [ "${XNU_NATIVE_UFS:-0}" != 1 ] || [ "${XNU_OWNER_ROOT_AUDIT:-0}" != 1 ] || \
--     [ "${XNU_NATIVE_VIRTIO_BLOCK:-0}" != 1 ] || [ "${XNU_SOURCE_CORECRYPTO14:-0}" != 1 ]; then
-+  if [ "$EARLY_BOOT_PROGRESS" != 1 ] && { [ "${XNU_NATIVE_UFS:-0}" != 1 ] || [ "${XNU_OWNER_ROOT_AUDIT:-0}" != 1 ] || \
-+     [ "${XNU_NATIVE_VIRTIO_BLOCK:-0}" != 1 ] || [ "${XNU_SOURCE_CORECRYPTO14:-0}" != 1 ]; }; then
-     echo 'Boot progress requires the audited UFS/owner-root, Virtio and source-corecrypto build' >&2
-     exit 1
-   fi
-   python3 scripts/build-boot-progress.py
- fi
--python3 - "$BOOT_PROGRESS" <<'PY'
-+python3 - "$BOOT_PROGRESS" "$EARLY_BOOT_PROGRESS" <<'PY'
- from pathlib import Path
- import hashlib, sys
- mode = sys.argv[1]
- out = Path('build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837')
- stamp = out / '.boot-progress-mode'
--identity = mode + ':' + (hashlib.sha256(Path('build/boot-progress/libBootProgress.a').read_bytes()).hexdigest() if mode == '1' else 'disabled')
-+identity = mode + ':' + sys.argv[2] + ':' + (hashlib.sha256(Path('build/boot-progress/libBootProgress.a').read_bytes()).hexdigest() if mode == '1' else 'disabled')
- if not stamp.exists() or stamp.read_text() != identity:
--    for directory, names in [('osfmk', ['arm_init','startup','video_console','serial_console','sleh']),
-+    for directory, names in [('osfmk', ['start','arm_init','startup','video_console','serial_console','sleh','debug','printf']),
-                              ('bsd', ['bsd_init','kern_exec','kern_exit']), ('pexpert', ['pe_kprintf'])]:
-         for name in names:
-             (out / directory / 'DEVELOPMENT' / (name + '.o')).unlink(missing_ok=True)
-+    (out / 'iokit/DEVELOPMENT/IOKitBSDInit.cpo').unlink(missing_ok=True)
-     (out / 'mach.development.bcm2837.unstripped.noctf').unlink(missing_ok=True)
-     out.mkdir(parents=True, exist_ok=True)
-     stamp.write_text(identity)
-@@ -509,10 +519,12 @@ if [ "$NATIVE_ARCH_TIMER" = 1 ] && [ "${XNU_ARMCPU:-0}" != 1 ]; then
-   echo 'Architectural timer entry requires the actual ArmCpu interrupt provider' >&2
-   exit 1
- fi
--EXTRA_MAKE_ARGS+=("start.o_SFLAGS_ADD=-DXNU_NATIVE_ARCH_TIMER=$NATIVE_ARCH_TIMER")
-+EXTRA_MAKE_ARGS+=("start.o_SFLAGS_ADD=-DXNU_NATIVE_ARCH_TIMER=$NATIVE_ARCH_TIMER -DXNU_EARLY_BOOT_PROGRESS=$EARLY_BOOT_PROGRESS")
-+EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_NATIVE_ARCH_TIMER=$NATIVE_ARCH_TIMER"
- NATIVE_TIMER_STAMP=$ROOT/build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/.native-arch-timer-mode
- if [ "$(cat "$NATIVE_TIMER_STAMP" 2>/dev/null || echo 0)" != "$NATIVE_ARCH_TIMER" ]; then
-   rm -f "$ROOT/build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT/start.o"
-+  rm -f "$ROOT/build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/pexpert/DEVELOPMENT/pe_identify_machine.o"
-   printf '%s\n' "$NATIVE_ARCH_TIMER" > "$NATIVE_TIMER_STAMP"
- fi
- NATIVE_PAN=${XNU_NATIVE_PAN:-0}
-@@ -761,7 +773,7 @@ if not stamp.exists() or stamp.read_text() != identity:
-     directory.mkdir(parents=True, exist_ok=True)
-     stamp.write_text(identity)
- PY
--EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_BOOT_PROGRESS=$BOOT_PROGRESS"
-+EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_BOOT_PROGRESS=$BOOT_PROGRESS -DXNU_EARLY_BOOT_PROGRESS=$EARLY_BOOT_PROGRESS"
- make -C .cache/xnu-work "${XNU_BUILD_TARGET:-build}" SDKROOT="${XNU_SDKROOT:-iphoneos}" ARCH_CONFIGS=ARM64 \
-   MACHINE_CONFIGS=BCM2837 KERNEL_CONFIGS=DEVELOPMENT \
-   ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG=arm64 LARGE_MEMORY_DEFINE=-UARM_LARGE_MEMORY \
-diff --git a/scripts/unixnu/kernel.py b/scripts/unixnu/kernel.py
-index 3c38159..95bd61a 100644
---- a/scripts/unixnu/kernel.py
-+++ b/scripts/unixnu/kernel.py
-@@ -1,6 +1,8 @@
- """XNU kernel: build from the patched Apple source, then prelink against the original kernelcache."""
- import os
- import shlex
-+import shutil
-+import struct
- from pathlib import Path
- 
- from . import ipsw
-@@ -84,7 +86,7 @@ def build(ctx, modules):
-         # skip the archive checks and link without the archives, so it stops at the link and only the records are
-         # required of it.
-         log('kernel: bootstrap pass for the compile records')
--        subprocess_env = {**env, 'XNU_BOOT_PROGRESS': '0', 'XNU_BOOTSTRAP': '1'}
-+        subprocess_env = {**env, 'XNU_BOOT_PROGRESS': '0', 'XNU_EARLY_BOOT_PROGRESS': '0', 'XNU_BOOTSTRAP': '1'}
-         try:
-             run(['bash', script], cwd=ctx.tree, env=subprocess_env, log_file=ctx.logs / 'kernel-bootstrap.log')
-         except Error:
-@@ -94,6 +96,30 @@ def build(ctx, modules):
-     run(['bash', script], cwd=ctx.tree, env=env, log_file=ctx.logs / 'kernel.log')
- 
- 
-+def export_source(ctx):
-+    """Publish the source kernel for boards bringing up XNU without a kernelcache."""
-+    if ctx.board.get('kernel', {}).get('prelink'):
-+        raise Error('source_only and [kernel.prelink] cannot be used together')
-+    source = ctx.tree / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf'
-+    if not source.is_file():
-+        raise Error(f'source kernel not found: {source}')
-+    with source.open('rb') as stream:
-+        header = stream.read(32)
-+    if len(header) != 32 or struct.unpack_from('<4I', header) != (0xfeedfacf, 0x100000c, 0, 2):
-+        raise Error('source kernel must be an ordinary ARM64 Mach-O executable')
-+    output = ctx.work / 'kernel/kernel.macho'
-+    output.parent.mkdir(parents=True, exist_ok=True)
-+    temporary = output.with_suffix('.macho.tmp')
-+    try:
-+        shutil.copyfile(source, temporary)
-+        temporary.replace(output)
-+    finally:
-+        temporary.unlink(missing_ok=True)
-+    output.with_suffix('.json').unlink(missing_ok=True)  # A previous prelink report no longer describes this image.
-+    log(f'kernel: {output} (source only; no prelinked Apple drivers or root filesystem)')
-+    return output
-+
-+
- def prelink(ctx):
-     """Produce out/<device>/kernel/kernel.macho from the XNU build and the original kernelcache."""
-     log('kernel: prelink')
-diff --git a/scripts/unixnu/cli.py b/scripts/unixnu/cli.py
-index 3f79809..cc6b41a 100644
---- a/scripts/unixnu/cli.py
-+++ b/scripts/unixnu/cli.py
-@@ -126,7 +126,10 @@ def cmd_build(ctx):
-     modules = prepare(ctx, steps + (['kernel'] if 'prelink' in steps else []))
-     if 'kernel' in steps:
-         kernel.build(ctx, modules)
--        kernel.prelink(ctx)
-+        if ctx.board.get('kernel', {}).get('source_only', False):
-+            kernel.export_source(ctx)
-+        else:
-+            kernel.prelink(ctx)
-     elif 'prelink' in steps:
-         kernel.prelink(ctx)
-     if 'package' in steps:
-diff --git a/scripts/build-arm-platform.py b/scripts/build-arm-platform.py
+diff --git a/patches/xnu/zzzz-boot-progress-panic-output.patch b/patches/xnu/zzzz-boot-progress-panic-output.patch
 new file mode 100644
-index 0000000..6c79ba0
+index 0000000..f5830eb
 --- /dev/null
-+++ b/scripts/build-arm-platform.py
-@@ -0,0 +1,50 @@
-+#!/usr/bin/env python3
-+"""Build the source ArmDTPlatform and ArmCpu with XNU's recorded IOKit flags."""
-+import json
-+import struct
-+import subprocess
-+from pathlib import Path
-+
-+
-+def compile_command(record, source, output):
-+    args = iter(record['arguments'])
-+    command = []
-+    found_source = False
-+    for value in args:
-+        if value == record['file']:
-+            command.append(str(source))
-+            found_source = True
-+        elif value == '-o':
-+            next(args)
-+            command.extend(['-o', str(output)])
-+        elif value in ('-MF', '-MJ', '-MT', '-MQ'):
-+            next(args)
-+        elif value not in ('-MD', '-MMD', '-MP'):
-+            command.append(value)
-+    if not found_source or '-o' not in command:
-+        raise ValueError('IOKit compile record lacks its source or output argument')
-+    return command
-+
-+
-+def main():
-+    root = Path(__file__).resolve().parents[1]
-+    recipe = root / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/iokit/DEVELOPMENT/IOPlatformExpert.cpo.json'
-+    record = json.loads(recipe.read_text().strip().rstrip(','))
-+    for driver, folder in [('ArmDTPlatform', 'armdt-platform'), ('ArmCpu', 'armcpu')]:
-+        output = root / 'build' / folder
-+        output.mkdir(parents=True, exist_ok=True)
-+        obj = output / f'{driver}.o'
-+        command = compile_command(record, root / 'drivers' / driver / f'{driver}.cpp', obj)
-+        subprocess.run(command, cwd=record['directory'], check=True)
-+        with obj.open('rb') as stream:
-+            header = stream.read(16)
-+        if len(header) != 16 or struct.unpack('<4I', header) != (0xfeedfacf, 0x100000c, 0, 1):
-+            raise SystemExit(f'{driver}: expected ordinary ARM64 Mach-O object')
-+        archive = output / f'lib{driver}.a'
-+        archive.unlink(missing_ok=True)
-+        subprocess.run(['xcrun', 'ar', 'rcs', archive, obj], check=True)
-+        print(archive)
-+
-+
-+if __name__ == '__main__':
-+    main()
-diff --git a/scripts/test-kernel-source.py b/scripts/test-kernel-source.py
-new file mode 100644
-index 0000000..45521e3
---- /dev/null
-+++ b/scripts/test-kernel-source.py
-@@ -0,0 +1,104 @@
-+#!/usr/bin/env python3
-+"""Source-kernel publication and compile-record regression checks (no Xcode)."""
-+import importlib.util
-+import os
-+import runpy
-+import struct
-+import subprocess
-+import tempfile
-+import unittest
-+from pathlib import Path
-+from types import SimpleNamespace
-+from unittest.mock import patch
-+
-+from unixnu import cli, kernel
-+from unixnu.util import Error
-+
-+spec = importlib.util.spec_from_file_location('arm_platform', Path(__file__).with_name('build-arm-platform.py'))
-+arm_platform = importlib.util.module_from_spec(spec)
-+spec.loader.exec_module(arm_platform)
-+
-+
-+class SourceKernelTest(unittest.TestCase):
-+    def test_header_fetch_auth_stays_on_github_api(self):
-+        read_url = runpy.run_path(str(Path(__file__).with_name('prepare-xnu-source.py')))['read_url']
-+        for token in ('test-token', ''):
-+            with patch.dict(os.environ, {'GITHUB_TOKEN': token}), patch('urllib.request.urlopen') as opened:
-+                opened.return_value.read.return_value = b'headers'
-+                for url in ('https://api.github.com/repos/apple-oss-distributions/xnu/contents',
-+                            'https://raw.githubusercontent.com/apple-oss-distributions/xnu/tag/file.h',
-+                            'https://api.github.com.example.org/file', 'http://api.github.com/file'):
-+                    self.assertEqual(read_url(url), b'headers')
-+                    expected = f'Bearer {token}' if token and url.startswith('https://api.github.com/') else None
-+                    self.assertEqual(opened.call_args.args[0].get_header('Authorization'), expected)
-+
-+    def setUp(self):
-+        self.temp = tempfile.TemporaryDirectory()
-+        self.addCleanup(self.temp.cleanup)
-+        root = Path(self.temp.name)
-+        self.ctx = SimpleNamespace(tree=root / 'tree', work=root, board={'kernel': {'source_only': True}})
-+        self.source = root / 'tree/build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf'
-+        self.source.parent.mkdir(parents=True)
-+        self.image = struct.pack('<8I', 0xfeedfacf, 0x100000c, 0, 2, 0, 0, 0, 0)
-+        self.source.write_bytes(self.image)
-+
-+    def test_source_publication_removes_stale_prelink_record(self):
-+        out = self.ctx.work / 'kernel'
-+        out.mkdir()
-+        (out / 'kernel.json').write_text('old prelink')
-+        result = kernel.export_source(self.ctx)
-+        self.assertEqual(result.read_bytes(), self.image)
-+        self.assertFalse((out / 'kernel.json').exists())
-+        self.assertFalse((out / 'kernel.macho.tmp').exists())
-+
-+    def test_invalid_image_preserves_previous_kernel(self):
-+        old = kernel.export_source(self.ctx)
-+        for image in (b'', b'\xcf\xfa\xed\xfe', struct.pack('<8I', 0xfeedfacf, 0x100000c, 2, 2, 0, 0, 0, 0)):
-+            self.source.write_bytes(image)
-+            with self.assertRaises(Error):
-+                kernel.export_source(self.ctx)
-+            self.assertEqual(old.read_bytes(), self.image)
-+
-+    def test_conflicting_config(self):
-+        self.ctx.board['kernel']['prelink'] = {'tool': 'something.py'}
-+        with self.assertRaises(Error):
-+            kernel.export_source(self.ctx)
-+
-+    def test_source_build_never_calls_prelink(self):
-+        self.ctx.args = SimpleNamespace(steps=['kernel'])
-+        self.ctx.refuse_example = lambda: None
-+        self.ctx.need_config = lambda: {}
-+        for source_only in (True, False):
-+            self.ctx.board['kernel']['source_only'] = source_only
-+            with patch.object(cli, 'prepare', return_value={}), patch.object(kernel, 'build'), \
-+                    patch.object(kernel, 'prelink') as prelink, patch.object(kernel, 'export_source') as export:
-+                cli.cmd_build(self.ctx)
-+                self.assertEqual(export.call_count, int(source_only))
-+                self.assertEqual(prelink.call_count, int(not source_only))
-+
-+    def test_driver_flags_keep_abi_and_do_not_overwrite_xnu_records(self):
-+        record = {'file': 'IOPlatformExpert.cpp', 'arguments': [
-+            'clang++', '-target', 'arm64-apple-ios17.0', '-mkernel', '-Werror', '-MMD', '-MP',
-+            '-MF', 'original.d', '-MJ', 'original.json', '-MT', 'original.o',
-+            '-c', 'IOPlatformExpert.cpp', '-o', 'original.o']}
-+        command = arm_platform.compile_command(record, Path('ArmCpu.cpp'), Path('ArmCpu.o'))
-+        self.assertEqual(command, ['clang++', '-target', 'arm64-apple-ios17.0', '-mkernel', '-Werror',
-+                                   '-c', 'ArmCpu.cpp', '-o', 'ArmCpu.o'])
-+        with self.assertRaises(ValueError):
-+            arm_platform.compile_command({'file': 'missing', 'arguments': record['arguments']}, Path('a'), Path('b'))
-+
-+    def test_disabled_legacy_display_has_no_link_reference(self):
-+        path = Path(__file__).resolve().parents[1] / 'patches/xnu/offline-component-load-probes.patch'
-+        bsd_patch = path.read_text().split('--- a/iokit/')[0]
-+        source = '\n'.join(line[1:] for line in bsd_patch.splitlines()
-+                           if line.startswith('+') and not line.startswith('+++'))
-+        for mode in (None, 0, 1):
-+            with self.subTest(mode=mode):
-+                flags = [] if mode is None else [f'-DXNU_NATIVE_LEGACY_DISPLAY={mode}']
-+                output = subprocess.check_output(
-+                    ['cc', '-E', '-P', '-x', 'c', '-DDEVELOPMENT=1', *flags, '-'], input=source, text=True)
-+                self.assertEqual(output.count('native_legacy_display_probe'), 2 if mode == 1 else 0)
-+
-+
-+if __name__ == '__main__':
-+    unittest.main()
-diff --git a/patches/xnu/native-arch-timer-frequency.patch b/patches/xnu/native-arch-timer-frequency.patch
-new file mode 100644
-index 0000000..53459bf
---- /dev/null
-+++ b/patches/xnu/native-arch-timer-frequency.patch
-@@ -0,0 +1,26 @@
-+--- a/pexpert/arm/pe_identify_machine.c
-++++ b/pexpert/arm/pe_identify_machine.c
-+@@ -146,11 +146,23 @@
-+ 		}
++++ b/patches/xnu/zzzz-boot-progress-panic-output.patch
+@@ -0,0 +1,25 @@
++--- a/osfmk/kern/printf.c
+++++ b/osfmk/kern/printf.c
++@@ -1,3 +1,4 @@
+++#include <kern/boot_progress.h>
++ /*
++  * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
++  *
++@@ -920,7 +921,7 @@
++ 
++ 	debug_putc(c);
++ 
++-	if (!console_is_serial() && !disable_serial_output) {
+++	if (!console_is_serial() && !disable_serial_output && !boot_progress_active()) {
++ 		PE_kputc(c);
 + 	}
++ }
++@@ -932,7 +933,7 @@
 + 
-++#if defined(XNU_NATIVE_ARCH_TIMER) && XNU_NATIVE_ARCH_TIMER
-++	/* Architectural counter conversion must use the frequency programmed by firmware. */
-++	uint64_t counter_frequency;
-++	__asm__ volatile ("mrs %0, cntfrq_el0" : "=r"(counter_frequency));
-++	if (counter_frequency == 0 || counter_frequency > UINT32_MAX) {
-++		panic("Invalid architectural counter frequency: %llu", counter_frequency);
-++	}
-++	gPEClockFrequencyInfo.timebase_frequency_hz = (uint32_t)counter_frequency;
-++	gPEClockFrequencyInfo.dec_clock_rate_hz = (uint32_t)counter_frequency;
-++#endif
-++
-+ 	/* Set the num / den pairs form the hz values. */
-+ 	gPEClockFrequencyInfo.bus_clock_rate_num = gPEClockFrequencyInfo.bus_clock_rate_hz;
-+ 	gPEClockFrequencyInfo.bus_clock_rate_den = 1;
++ 	debug_putc(c);
 + 
-+ 	gPEClockFrequencyInfo.bus_to_cpu_rate_num =
-++	    (gPEClockFrequencyInfo.bus_clock_rate_hz == 0) ? 0 :
-+ 	    (2 * gPEClockFrequencyInfo.cpu_clock_rate_hz) / gPEClockFrequencyInfo.bus_clock_rate_hz;
-+ 	gPEClockFrequencyInfo.bus_to_cpu_rate_den = 2;
-+ 
++-	if (!console_is_serial() && !disable_serial_output) {
+++	if (!console_is_serial() && !disable_serial_output && !boot_progress_active()) {
++ 		PE_kputc(c);
++ 	}
++ }
 diff --git a/patches/xnu/zzzz-early-boot-progress.patch b/patches/xnu/zzzz-early-boot-progress.patch
 new file mode 100644
 index 0000000..9747910
@@ -607,6 +2108,878 @@ index 0000000..9747910
 ++#define boot_progress_kernel_exception(...) ((void)0)
 ++#endif
 ++#endif
+diff --git a/patches/xnu/zzzzz-root-panic-progress.patch b/patches/xnu/zzzzz-root-panic-progress.patch
+new file mode 100644
+index 0000000..0cce1f6
+--- /dev/null
++++ b/patches/xnu/zzzzz-root-panic-progress.patch
+@@ -0,0 +1,182 @@
++--- a/osfmk/kern/early_boot_progress.h
+++++ b/osfmk/kern/early_boot_progress.h
++@@ -2,6 +2,10 @@
++ #ifndef XNU_EARLY_BOOT_PROGRESS_H
++ #define XNU_EARLY_BOOT_PROGRESS_H
++ #include <stdint.h>
+++#include <stdarg.h>
+++#ifdef __cplusplus
+++extern "C" {
+++#endif
++ #if defined(XNU_EARLY_BOOT_PROGRESS) && XNU_EARLY_BOOT_PROGRESS
++ struct boot_args;
++ void early_boot_progress_init(struct boot_args *);
++@@ -12,10 +16,17 @@
++ void early_boot_progress_vm_ready(void);
++ void early_boot_progress_fatal(struct boot_args *, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
++ void boot_progress_kernel_exception(uint64_t, uint64_t, uint64_t);
+++void boot_progress_root(const char *, const char *, uint64_t);
+++void boot_progress_panic(const char *, va_list *, unsigned long, unsigned, uint64_t);
++ #else
++ #define early_boot_progress_arm_init() ((void)0)
++ #define early_boot_progress_suspend() ((void)0)
++ #define early_boot_progress_vm_ready() ((void)0)
++ #define boot_progress_kernel_exception(...) ((void)0)
+++#define boot_progress_root(...) ((void)0)
+++#define boot_progress_panic(...) ((void)0)
+++#endif
+++#ifdef __cplusplus
+++}
++ #endif
++ #endif
++--- a/osfmk/kern/debug.c
+++++ b/osfmk/kern/debug.c
++@@ -1,3 +1,4 @@
+++#include <kern/early_boot_progress.h>
++ /*
++  * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
++  *
++@@ -1134,6 +1135,8 @@
++ {
++ #pragma clang diagnostic pop
++ 
+++	boot_progress_panic(panic_format_str, panic_args, panic_caller, reason, panic_options_mask);
+++
++ #if defined(__x86_64__) && (DEVELOPMENT || DEBUG)
++ 	read_lbr();
++ #endif
++--- a/bsd/kern/bsd_init.c
+++++ b/bsd/kern/bsd_init.c
++@@ -1,3 +1,4 @@
+++#include <kern/early_boot_progress.h>
++ #include <kern/boot_progress.h>
++ /*
++  * Copyright (c) 2000-2021 Apple Inc. All rights reserved.
++@@ -1326,7 +1327,9 @@
++ 	u_int32_t       flags;
++ 	kern_return_t   err;
++ 
+++	boot_progress_root("setconf enter", NULL, 0);
++ 	err = IOFindBSDRoot(rootdevice, sizeof(rootdevice), &rootdev, &flags);
+++	boot_progress_root("setconf returned", err ? NULL : rootdevice, (uint32_t)err);
++ 	if (err) {
++ 		printf("setconf: IOFindBSDRoot returned an error (%d);"
++ 		    "setting rootdevice to 'sd0a'.\n", err);     /* XXX DEBUG TEMP */
++--- a/iokit/bsddev/IOKitBSDInit.cpp
+++++ b/iokit/bsddev/IOKitBSDInit.cpp
++@@ -1,3 +1,4 @@
+++#include <kern/early_boot_progress.h>
++ /*
++  * Copyright (c) 1998-2021 Apple Inc. All rights reserved.
++  *
++@@ -754,14 +755,19 @@
++ 
++ 	int xchar, dchar;
++ 
+++	boot_progress_root("IOFindBSDRoot enter", NULL, mountAttempts);
+++
++ 	// stall here for anyone matching on the IOBSD resource to finish (filesystems)
++ 	matching = IOService::serviceMatching(gIOResourcesKey);
++ 	assert(matching);
++ 	matching->setObject(gIOResourceMatchedKey, gIOBSDKey);
++ 
+++	boot_progress_root("IOBSD resource wait", NULL, 30);
++ 	if ((service = IOService::waitForMatchingService(matching, 30ULL * kSecondScale))) {
+++		boot_progress_root("IOBSD resource ready", NULL, 0);
++ 		OSSafeReleaseNULL(service);
++ 	} else {
+++		boot_progress_root("IOBSD resource timeout", NULL, 30);
++ 		IOLog("!BSD\n");
++ 	}
++ 	matching->release();
++@@ -783,9 +789,12 @@
++ 		rdBootVar[0] = 0;
++ 	}
++ 
+++	boot_progress_root("root selection", rdBootVar[0] ? rdBootVar : "no rd/rootdev boot argument", 0);
++ 	if ((regEntry = IORegistryEntry::fromPath( "/chosen", gIODTPlane ))) {
++ 		do {
+++			boot_progress_root("chosen ramfile probe", NULL, 0);
++ 			di_root_ramfile(regEntry);
+++			boot_progress_root("chosen ramfile returned", NULL, 0);
++ 			OSObject* unserializedContainer = NULL;
++ 			data = OSDynamicCast(OSData, regEntry->getProperty( "root-matching" ));
++ 			if (data) {
++@@ -823,10 +832,12 @@
++ //	It will become /dev/mdx, where x is 0-f.
++ //
++ 
+++	boot_progress_root("RAMDisk property probe", NULL, didRam);
++ 	if (!didRam) {                                                                                           /* Have we already build this ram disk? */
++ 		didRam = 1;                                                                                             /* Remember we did this */
++ 		if ((regEntry = IORegistryEntry::fromPath( "/chosen/memory-map", gIODTPlane ))) {        /* Find the map node */
++ 			data = (OSData *)regEntry->getProperty("RAMDisk");      /* Find the ram disk, if there */
+++			boot_progress_root("RAMDisk property", data ? "present" : "absent", 0);
++ 			if (data) {                                                                                      /* We found one */
++ 				uintptr_t *ramdParms;
++ 				ramdParms = (uintptr_t *)data->getBytesNoCopy();        /* Point to the ram disk base and size */
++@@ -885,6 +896,7 @@
++ 		}
++ 	}
++ 
+++	boot_progress_root("root matching selection", rdBootVar, matching != NULL);
++ 	if ((!matching) && rdBootVar[0]) {
++ 		// by BSD name
++ 		look = rdBootVar;
++@@ -920,6 +932,7 @@
++ 
++ 	if (!matching) {
++ 		OSString * astring;
+++		boot_progress_root("root fallback", "IOMedia Content=Apple_HFS", 0);
++ 		// Match any HFS media
++ 
++ 		matching = IOService::serviceMatching( "IOMedia" );
++@@ -932,14 +945,17 @@
++ 	}
++ 
++ 	if (gIOKitDebug & kIOWaitQuietBeforeRoot) {
+++		boot_progress_root("root waitQuiet enter", NULL, 0);
++ 		IOLog( "Waiting for matching to complete\n" );
++ 		IOService::getPlatform()->waitQuiet();
+++		boot_progress_root("root waitQuiet returned", NULL, 0);
++ 	}
++ 
++ 	if (matching) {
++ 		OSSerialize * s = OSSerialize::withCapacity( 5 );
++ 
++ 		if (matching->serialize( s )) {
+++			boot_progress_root("root match criteria", s->text(), ROOTDEVICETIMEOUT);
++ 			IOLog( "Waiting on %s\n", s->text());
++ 		}
++ 		s->release();
++@@ -955,10 +971,14 @@
++ 		t.tv_sec = ROOTDEVICETIMEOUT;
++ 		t.tv_nsec = 0;
++ 		matching->retain();
+++		boot_progress_root("root device wait begin", NULL, t.tv_sec);
++ 		service = IOService::waitForService( matching, &t );
+++		boot_progress_root("root device wait returned", service ? "matched" : "timeout", 0);
++ 		if ((!service) || (mountAttempts == 10)) {
++ #if !XNU_TARGET_OS_OSX || !defined(__arm64__)
+++			boot_progress_root("root timeout: noroot icon", NULL, ROOTDEVICETIMEOUT);
++ 			PE_display_icon( 0, "noroot");
+++			boot_progress_root("root timeout: icon returned", NULL, 0);
++ 			IOLog( "Still waiting for root device\n" );
++ #endif
++ 
++@@ -981,6 +1001,7 @@
++ 			// The disk isn't found - have the user pick from System Recovery.
++ 			(void)IOSetRecoveryBoot(BSD_BOOTFAIL_MEDIA_MISSING, NULL, true);
++ #elif XNU_TARGET_OS_IOS
+++			boot_progress_root("root timeout: panic", "Failed to mount root device", ROOTDEVICETIMEOUT);
++ 			panic("Failed to mount root device");
++ #endif
++ 		}
++@@ -1044,6 +1065,7 @@
++ 
++ iofrootx:
++ 
+++	boot_progress_root("root device selected", rootName, *root);
++ 	IOService::setRootMedia(service);
++ 
++ 	if ((gIOKitDebug & (kIOLogDTree | kIOLogServiceTree | kIOLogMemory)) && !debugInfoPrintedOnce) {
+diff --git a/scripts/build-arm-platform.py b/scripts/build-arm-platform.py
+new file mode 100644
+index 0000000..6c79ba0
+--- /dev/null
++++ b/scripts/build-arm-platform.py
+@@ -0,0 +1,50 @@
++#!/usr/bin/env python3
++"""Build the source ArmDTPlatform and ArmCpu with XNU's recorded IOKit flags."""
++import json
++import struct
++import subprocess
++from pathlib import Path
++
++
++def compile_command(record, source, output):
++    args = iter(record['arguments'])
++    command = []
++    found_source = False
++    for value in args:
++        if value == record['file']:
++            command.append(str(source))
++            found_source = True
++        elif value == '-o':
++            next(args)
++            command.extend(['-o', str(output)])
++        elif value in ('-MF', '-MJ', '-MT', '-MQ'):
++            next(args)
++        elif value not in ('-MD', '-MMD', '-MP'):
++            command.append(value)
++    if not found_source or '-o' not in command:
++        raise ValueError('IOKit compile record lacks its source or output argument')
++    return command
++
++
++def main():
++    root = Path(__file__).resolve().parents[1]
++    recipe = root / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/iokit/DEVELOPMENT/IOPlatformExpert.cpo.json'
++    record = json.loads(recipe.read_text().strip().rstrip(','))
++    for driver, folder in [('ArmDTPlatform', 'armdt-platform'), ('ArmCpu', 'armcpu')]:
++        output = root / 'build' / folder
++        output.mkdir(parents=True, exist_ok=True)
++        obj = output / f'{driver}.o'
++        command = compile_command(record, root / 'drivers' / driver / f'{driver}.cpp', obj)
++        subprocess.run(command, cwd=record['directory'], check=True)
++        with obj.open('rb') as stream:
++            header = stream.read(16)
++        if len(header) != 16 or struct.unpack('<4I', header) != (0xfeedfacf, 0x100000c, 0, 1):
++            raise SystemExit(f'{driver}: expected ordinary ARM64 Mach-O object')
++        archive = output / f'lib{driver}.a'
++        archive.unlink(missing_ok=True)
++        subprocess.run(['xcrun', 'ar', 'rcs', archive, obj], check=True)
++        print(archive)
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/scripts/build-xnu-4k-baseline.sh b/scripts/build-xnu-4k-baseline.sh
+index c0404ad..e56c360 100755
+--- a/scripts/build-xnu-4k-baseline.sh
++++ b/scripts/build-xnu-4k-baseline.sh
+@@ -35,7 +35,7 @@ fi
+ # Remove them first so earlier independent patches retain their idempotent checks.
+ # The same holds for the boot-time GPU addon mount (zzy), which edits the owner Data mount function inside the systemos patch.
+ # Reverse newest first; the loop below re-applies them in name order.
+-for LATE_PATCH in "$ROOT/patches/xnu/zzz-boot-progress.patch" "$ROOT/patches/xnu/zzy-native-gpu-addon-mount.patch"; do
++for LATE_PATCH in "$ROOT/patches/xnu/zzzzz-root-panic-progress.patch" "$ROOT/patches/xnu/zzzz-early-boot-progress.patch" "$ROOT/patches/xnu/zzz-boot-progress.patch" "$ROOT/patches/xnu/zzy-native-gpu-addon-mount.patch"; do
+   if git -C .cache/xnu-work apply --reverse --check "$LATE_PATCH" >/dev/null 2>&1; then
+     git -C .cache/xnu-work apply --reverse "$LATE_PATCH"
+   fi
+@@ -56,30 +56,40 @@ if [ "$BOOTSTRAP" != 0 ] && [ "$BOOTSTRAP" != 1 ]; then
+   exit 1
+ fi
+ BOOT_PROGRESS=${XNU_BOOT_PROGRESS:-0}
++EARLY_BOOT_PROGRESS=${XNU_EARLY_BOOT_PROGRESS:-0}
++if [ "$EARLY_BOOT_PROGRESS" != 0 ] && [ "$EARLY_BOOT_PROGRESS" != 1 ]; then
++  echo 'XNU_EARLY_BOOT_PROGRESS must be 0 or 1' >&2
++  exit 1
++fi
++if [ "$EARLY_BOOT_PROGRESS" = 1 ] && { [ "$BOOT_PROGRESS" != 1 ] || [ "${XNU_ARMCPU:-0}" != 1 ] || [ "${XNU_ARM_DT_PLATFORM:-0}" != 1 ]; }; then
++  echo 'Early boot progress requires BOOT_PROGRESS, ArmCpu and ArmDTPlatform' >&2
++  exit 1
++fi
+ if [ "$BOOT_PROGRESS" != 0 ] && [ "$BOOT_PROGRESS" != 1 ]; then
+   echo 'XNU_BOOT_PROGRESS must be 0 or 1' >&2
+   exit 1
+ fi
+ if [ "$BOOT_PROGRESS" = 1 ]; then
+-  if [ "${XNU_NATIVE_UFS:-0}" != 1 ] || [ "${XNU_OWNER_ROOT_AUDIT:-0}" != 1 ] || \
+-     [ "${XNU_NATIVE_VIRTIO_BLOCK:-0}" != 1 ] || [ "${XNU_SOURCE_CORECRYPTO14:-0}" != 1 ]; then
++  if [ "$EARLY_BOOT_PROGRESS" != 1 ] && { [ "${XNU_NATIVE_UFS:-0}" != 1 ] || [ "${XNU_OWNER_ROOT_AUDIT:-0}" != 1 ] || \
++     [ "${XNU_NATIVE_VIRTIO_BLOCK:-0}" != 1 ] || [ "${XNU_SOURCE_CORECRYPTO14:-0}" != 1 ]; }; then
+     echo 'Boot progress requires the audited UFS/owner-root, Virtio and source-corecrypto build' >&2
+     exit 1
+   fi
+   python3 scripts/build-boot-progress.py
+ fi
+-python3 - "$BOOT_PROGRESS" <<'PY'
++python3 - "$BOOT_PROGRESS" "$EARLY_BOOT_PROGRESS" <<'PY'
+ from pathlib import Path
+ import hashlib, sys
+ mode = sys.argv[1]
+ out = Path('build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837')
+ stamp = out / '.boot-progress-mode'
+-identity = mode + ':' + (hashlib.sha256(Path('build/boot-progress/libBootProgress.a').read_bytes()).hexdigest() if mode == '1' else 'disabled')
++identity = mode + ':' + sys.argv[2] + ':' + (hashlib.sha256(Path('build/boot-progress/libBootProgress.a').read_bytes()).hexdigest() if mode == '1' else 'disabled')
+ if not stamp.exists() or stamp.read_text() != identity:
+-    for directory, names in [('osfmk', ['arm_init','startup','video_console','serial_console','sleh']),
++    for directory, names in [('osfmk', ['start','arm_init','startup','video_console','serial_console','sleh','debug','printf']),
+                              ('bsd', ['bsd_init','kern_exec','kern_exit']), ('pexpert', ['pe_kprintf'])]:
+         for name in names:
+             (out / directory / 'DEVELOPMENT' / (name + '.o')).unlink(missing_ok=True)
++    (out / 'iokit/DEVELOPMENT/IOKitBSDInit.cpo').unlink(missing_ok=True)
+     (out / 'mach.development.bcm2837.unstripped.noctf').unlink(missing_ok=True)
+     out.mkdir(parents=True, exist_ok=True)
+     stamp.write_text(identity)
+@@ -509,10 +519,12 @@ if [ "$NATIVE_ARCH_TIMER" = 1 ] && [ "${XNU_ARMCPU:-0}" != 1 ]; then
+   echo 'Architectural timer entry requires the actual ArmCpu interrupt provider' >&2
+   exit 1
+ fi
+-EXTRA_MAKE_ARGS+=("start.o_SFLAGS_ADD=-DXNU_NATIVE_ARCH_TIMER=$NATIVE_ARCH_TIMER")
++EXTRA_MAKE_ARGS+=("start.o_SFLAGS_ADD=-DXNU_NATIVE_ARCH_TIMER=$NATIVE_ARCH_TIMER -DXNU_EARLY_BOOT_PROGRESS=$EARLY_BOOT_PROGRESS")
++EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_NATIVE_ARCH_TIMER=$NATIVE_ARCH_TIMER"
+ NATIVE_TIMER_STAMP=$ROOT/build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/.native-arch-timer-mode
+ if [ "$(cat "$NATIVE_TIMER_STAMP" 2>/dev/null || echo 0)" != "$NATIVE_ARCH_TIMER" ]; then
+   rm -f "$ROOT/build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT/start.o"
++  rm -f "$ROOT/build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/pexpert/DEVELOPMENT/pe_identify_machine.o"
+   printf '%s\n' "$NATIVE_ARCH_TIMER" > "$NATIVE_TIMER_STAMP"
+ fi
+ NATIVE_PAN=${XNU_NATIVE_PAN:-0}
+@@ -761,7 +773,7 @@ if not stamp.exists() or stamp.read_text() != identity:
+     directory.mkdir(parents=True, exist_ok=True)
+     stamp.write_text(identity)
+ PY
+-EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_BOOT_PROGRESS=$BOOT_PROGRESS"
++EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_BOOT_PROGRESS=$BOOT_PROGRESS -DXNU_EARLY_BOOT_PROGRESS=$EARLY_BOOT_PROGRESS"
+ make -C .cache/xnu-work "${XNU_BUILD_TARGET:-build}" SDKROOT="${XNU_SDKROOT:-iphoneos}" ARCH_CONFIGS=ARM64 \
+   MACHINE_CONFIGS=BCM2837 KERNEL_CONFIGS=DEVELOPMENT \
+   ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG=arm64 LARGE_MEMORY_DEFINE=-UARM_LARGE_MEMORY \
+diff --git a/scripts/prepare-xnu-source.py b/scripts/prepare-xnu-source.py
+index 3c19f4d..5e0b9b9 100755
+--- a/scripts/prepare-xnu-source.py
++++ b/scripts/prepare-xnu-source.py
+@@ -6,6 +6,7 @@ import json
+ import os
+ from pathlib import Path
+ import urllib.request
++from urllib.parse import urlsplit
+ 
+ # Tags of the Apple sources that still carry the headers newer xnu omits; feeds.toml sets them for the unixnu driver.
+ TAG = os.environ.get('UNIXNU_DRIVERKIT_TAG', 'xnu-10063.121.3')
+@@ -15,6 +16,14 @@ CACHE = Path(f'.cache/sources/xnu-driverkit-{TAG.removeprefix("xnu-")}.json')
+ URL = f'https://api.github.com/repos/apple-oss-distributions/xnu/contents/iokit/DriverKit?ref={TAG}'
+ 
+ 
++def read_url(url):
++    token = os.environ.get('GITHUB_TOKEN')
++    headers = {}
++    if token and urlsplit(url).scheme == 'https' and urlsplit(url).netloc == 'api.github.com':
++        headers['Authorization'] = f'Bearer {token}'
++    return urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30).read()
++
++
+ def restore(entry, destination=DESTINATION, tag=TAG):
+     if entry['type'] != 'file' or not entry['name'].endswith('.h'):
+         return None
+@@ -22,7 +31,7 @@ def restore(entry, destination=DESTINATION, tag=TAG):
+     target = destination / name
+     if target.exists():
+         return None
+-    data = urllib.request.urlopen(entry['download_url'], timeout=30).read()
++    data = read_url(entry['download_url'])
+     digest = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+     if digest != entry['sha']:
+         raise ValueError(f'Git blob hash mismatch: {entry["name"]}')
+@@ -37,12 +46,12 @@ if __name__ == '__main__':
+         raise SystemExit('Create the local XNU work source before preparing headers')
+     if not CACHE.exists():
+         CACHE.parent.mkdir(parents=True, exist_ok=True)
+-        CACHE.write_bytes(urllib.request.urlopen(URL, timeout=30).read())
++        CACHE.write_bytes(read_url(URL))
+     entries = json.loads(CACHE.read_text())
+     crypto_cache = CACHE.with_name(f'xnu-driverkit-crypto-{TAG.removeprefix("xnu-")}.json')
+     if not crypto_cache.exists():
+         crypto_url = URL.replace('/DriverKit?', '/DriverKit/crypto?')
+-        crypto_cache.write_bytes(urllib.request.urlopen(crypto_url, timeout=30).read())
++        crypto_cache.write_bytes(read_url(crypto_url))
+     for entry in json.loads(crypto_cache.read_text()):
+         entry['relative'] = 'crypto/' + entry['name']
+         entries.append(entry)
+@@ -53,7 +62,7 @@ if __name__ == '__main__':
+         if not trust_cache.exists():
+             url = ('https://api.github.com/repos/apple-oss-distributions/xnu/'
+                    f'contents/EXTERNAL_HEADERS/TrustCache?ref={trust_tag}')
+-            trust_cache.write_bytes(urllib.request.urlopen(url, timeout=30).read())
++            trust_cache.write_bytes(read_url(url))
+         trust_destination = Path('.cache/xnu-work/EXTERNAL_HEADERS/TrustCache')
+         def restore_trust(entry):
+             return restore(entry, trust_destination, trust_tag)
+diff --git a/scripts/test-bootimg.py b/scripts/test-bootimg.py
+new file mode 100644
+index 0000000..a0d952b
+--- /dev/null
++++ b/scripts/test-bootimg.py
+@@ -0,0 +1,134 @@
++#!/usr/bin/env python3
++"""Check legacy and modern boot containers, corrupted handoffs and stock DTB bundles."""
++import gzip
++import os
++import struct
++import tempfile
++import unittest
++from pathlib import Path
++
++from unixnu.bootimg import DEFAULTS, compile_shim, split_dtb, verify
++from unixnu.util import Error, tool
++
++
++class BootImageTests(unittest.TestCase):
++    def setUp(self):
++        self.directory = tempfile.TemporaryDirectory()
++        self.addCleanup(self.directory.cleanup)
++        self.root = Path(self.directory.name)
++        self.ramdisk = self.root / 'ramdisk'
++        self.ramdisk.write_bytes(b'configuration volume')
++        self.firmware = b'firmware and shim' * 400
++        self.tree = struct.pack('>10I', 0xd00dfeed, 40, 40, 40, 40, 17, 16, 0, 0, 0)
++
++    def fixture(self, version, ramdisk=None):
++        ramdisk = self.ramdisk.read_bytes() if ramdisk is None else ramdisk
++        kernel = gzip.compress(self.firmware, mtime=0) + self.tree
++        header = bytearray(4096)
++        header[:8] = b'ANDROID!'
++        if version >= 3:
++            struct.pack_into('<4I', header, 8, len(kernel), len(ramdisk), 0, 1584 if version == 4 else 1580)
++            struct.pack_into('<I', header, 40, version)
++            if version == 4:
++                struct.pack_into('<I', header, 1580, 4096)
++        else:
++            struct.pack_into('<10I', header, 8, len(kernel), DEFAULTS['kernel_offset'], len(ramdisk),
++                             0, 0, 0, DEFAULTS['tags_offset'], 4096, version, 0)
++        pad = lambda value: value + bytes(-len(value) % 4096)
++        path = self.root / 'boot.img'
++        path.write_bytes(bytes(header) + pad(kernel) + pad(ramdisk) + (bytes(4096) if version == 4 else b''))
++        return path, dict(DEFAULTS, header_version=version)
++
++    def test_supported_headers(self):
++        for version in range(5):
++            with self.subTest(version=version):
++                path, image = self.fixture(version)
++                report = verify(path, self.firmware, self.tree, self.ramdisk, image)
++                self.assertEqual(report['header_version'], version)
++                self.assertEqual('kernel_address' in report, version < 3)
++
++    def test_empty_ramdisk(self):
++        self.ramdisk.write_bytes(b'')
++        for version in (0, 3, 4):
++            path, image = self.fixture(version)
++            self.assertEqual(verify(path, self.firmware, self.tree, self.ramdisk, image)['ramdisk_bytes'], 0)
++
++    def test_embedded_payload_container(self):
++        self.firmware += b'embedded FAT payload' * 4096
++        self.ramdisk.write_bytes(b'')
++        path, image = self.fixture(4)
++        self.assertEqual(verify(path, self.firmware, self.tree, self.ramdisk, image)['ramdisk_bytes'], 0)
++        with self.assertRaises(Error):
++            verify(path, self.firmware[:-1], self.tree, self.ramdisk, image)
++
++    def test_real_shim_payload_header(self):
++        uefi = Path(os.environ.get('UNIXNU_UEFI', Path(__file__).resolve().parents[2] / 'UEFI-Sun_SM8750'))
++        if not (uefi / 'BootShim/BootShim.S').is_file():
++            self.skipTest('local Mu-Silicium checkout not present')
++        try:
++            for name in ('clang', 'llvm-objcopy', 'llvm-nm'):
++                tool(name)
++        except Error as error:
++            self.skipTest(str(error))
++        for payload_size in (0, 64 * 1024 * 1024):
++            shim = compile_shim(uefi, 0xA7100000, 0x300000, True, self.root, payload_size)
++            self.assertEqual(struct.unpack_from('<QQ', shim, 8),
++                             (0xA7100000, len(shim) + 0x300000 + payload_size))
++            if payload_size:
++                self.assertIn(struct.pack('<Q', 0x554E49584E55504C), shim)
++
++    def test_bad_modern_headers(self):
++        for offset, value in ((20, 1580), (24, 1), (40, 5), (1580, 8192), (8, 0xffffffff)):
++            with self.subTest(offset=offset):
++                path, image = self.fixture(4)
++                data = bytearray(path.read_bytes())
++                struct.pack_into('<I', data, offset, value)
++                path.write_bytes(data)
++                with self.assertRaises(Error):
++                    verify(path, self.firmware, self.tree, self.ramdisk, image)
++
++    def test_truncation_and_extra_bytes(self):
++        path, image = self.fixture(4)
++        data = path.read_bytes()
++        for broken in (b'', data[:43], data[:4096], data[:-1], data + b'extra'):
++            path.write_bytes(broken)
++            with self.assertRaises(Error):
++                verify(path, self.firmware, self.tree, self.ramdisk, image)
++
++    def test_wrong_addresses_and_page(self):
++        path, image = self.fixture(0)
++        for key in ('base', 'pagesize'):
++            with self.assertRaises(Error):
++                verify(path, self.firmware, self.tree, self.ramdisk, {**image, key: 8192})
++        path, image = self.fixture(4)
++        with self.assertRaises(Error):
++            verify(path, self.firmware, self.tree, self.ramdisk, {**image, 'pagesize': 8192})
++
++    def test_corrupted_gzip_and_handoff(self):
++        path, image = self.fixture(4)
++        for firmware, tree in ((b'wrong', self.tree), (self.firmware, b'wrong')):
++            with self.assertRaises(Error):
++                verify(path, firmware, tree, self.ramdisk, image)
++        self.ramdisk.write_bytes(b'changed')
++        with self.assertRaises(Error):
++            verify(path, self.firmware, self.tree, self.ramdisk, image)
++        data = bytearray(path.read_bytes())
++        data[4096] ^= 0xff
++        path.write_bytes(data)
++        with self.assertRaises(Error):
++            verify(path, self.firmware, self.tree, self.ramdisk, image)
++
++    def test_stock_dtb_bundle(self):
++        self.assertEqual(split_dtb(self.tree * 3), [self.tree] * 3)
++        for data in (b'', self.tree[:39], self.tree + b'padding', self.tree + self.tree[:39]):
++            with self.assertRaises(Error):
++                split_dtb(data)
++        for size in (0, 39, 41, 0xffffffff):
++            data = bytearray(self.tree)
++            struct.pack_into('>I', data, 4, size)
++            with self.assertRaises(Error):
++                split_dtb(data)
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/scripts/test-kernel-source.py b/scripts/test-kernel-source.py
+new file mode 100644
+index 0000000..45521e3
+--- /dev/null
++++ b/scripts/test-kernel-source.py
+@@ -0,0 +1,104 @@
++#!/usr/bin/env python3
++"""Source-kernel publication and compile-record regression checks (no Xcode)."""
++import importlib.util
++import os
++import runpy
++import struct
++import subprocess
++import tempfile
++import unittest
++from pathlib import Path
++from types import SimpleNamespace
++from unittest.mock import patch
++
++from unixnu import cli, kernel
++from unixnu.util import Error
++
++spec = importlib.util.spec_from_file_location('arm_platform', Path(__file__).with_name('build-arm-platform.py'))
++arm_platform = importlib.util.module_from_spec(spec)
++spec.loader.exec_module(arm_platform)
++
++
++class SourceKernelTest(unittest.TestCase):
++    def test_header_fetch_auth_stays_on_github_api(self):
++        read_url = runpy.run_path(str(Path(__file__).with_name('prepare-xnu-source.py')))['read_url']
++        for token in ('test-token', ''):
++            with patch.dict(os.environ, {'GITHUB_TOKEN': token}), patch('urllib.request.urlopen') as opened:
++                opened.return_value.read.return_value = b'headers'
++                for url in ('https://api.github.com/repos/apple-oss-distributions/xnu/contents',
++                            'https://raw.githubusercontent.com/apple-oss-distributions/xnu/tag/file.h',
++                            'https://api.github.com.example.org/file', 'http://api.github.com/file'):
++                    self.assertEqual(read_url(url), b'headers')
++                    expected = f'Bearer {token}' if token and url.startswith('https://api.github.com/') else None
++                    self.assertEqual(opened.call_args.args[0].get_header('Authorization'), expected)
++
++    def setUp(self):
++        self.temp = tempfile.TemporaryDirectory()
++        self.addCleanup(self.temp.cleanup)
++        root = Path(self.temp.name)
++        self.ctx = SimpleNamespace(tree=root / 'tree', work=root, board={'kernel': {'source_only': True}})
++        self.source = root / 'tree/build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf'
++        self.source.parent.mkdir(parents=True)
++        self.image = struct.pack('<8I', 0xfeedfacf, 0x100000c, 0, 2, 0, 0, 0, 0)
++        self.source.write_bytes(self.image)
++
++    def test_source_publication_removes_stale_prelink_record(self):
++        out = self.ctx.work / 'kernel'
++        out.mkdir()
++        (out / 'kernel.json').write_text('old prelink')
++        result = kernel.export_source(self.ctx)
++        self.assertEqual(result.read_bytes(), self.image)
++        self.assertFalse((out / 'kernel.json').exists())
++        self.assertFalse((out / 'kernel.macho.tmp').exists())
++
++    def test_invalid_image_preserves_previous_kernel(self):
++        old = kernel.export_source(self.ctx)
++        for image in (b'', b'\xcf\xfa\xed\xfe', struct.pack('<8I', 0xfeedfacf, 0x100000c, 2, 2, 0, 0, 0, 0)):
++            self.source.write_bytes(image)
++            with self.assertRaises(Error):
++                kernel.export_source(self.ctx)
++            self.assertEqual(old.read_bytes(), self.image)
++
++    def test_conflicting_config(self):
++        self.ctx.board['kernel']['prelink'] = {'tool': 'something.py'}
++        with self.assertRaises(Error):
++            kernel.export_source(self.ctx)
++
++    def test_source_build_never_calls_prelink(self):
++        self.ctx.args = SimpleNamespace(steps=['kernel'])
++        self.ctx.refuse_example = lambda: None
++        self.ctx.need_config = lambda: {}
++        for source_only in (True, False):
++            self.ctx.board['kernel']['source_only'] = source_only
++            with patch.object(cli, 'prepare', return_value={}), patch.object(kernel, 'build'), \
++                    patch.object(kernel, 'prelink') as prelink, patch.object(kernel, 'export_source') as export:
++                cli.cmd_build(self.ctx)
++                self.assertEqual(export.call_count, int(source_only))
++                self.assertEqual(prelink.call_count, int(not source_only))
++
++    def test_driver_flags_keep_abi_and_do_not_overwrite_xnu_records(self):
++        record = {'file': 'IOPlatformExpert.cpp', 'arguments': [
++            'clang++', '-target', 'arm64-apple-ios17.0', '-mkernel', '-Werror', '-MMD', '-MP',
++            '-MF', 'original.d', '-MJ', 'original.json', '-MT', 'original.o',
++            '-c', 'IOPlatformExpert.cpp', '-o', 'original.o']}
++        command = arm_platform.compile_command(record, Path('ArmCpu.cpp'), Path('ArmCpu.o'))
++        self.assertEqual(command, ['clang++', '-target', 'arm64-apple-ios17.0', '-mkernel', '-Werror',
++                                   '-c', 'ArmCpu.cpp', '-o', 'ArmCpu.o'])
++        with self.assertRaises(ValueError):
++            arm_platform.compile_command({'file': 'missing', 'arguments': record['arguments']}, Path('a'), Path('b'))
++
++    def test_disabled_legacy_display_has_no_link_reference(self):
++        path = Path(__file__).resolve().parents[1] / 'patches/xnu/offline-component-load-probes.patch'
++        bsd_patch = path.read_text().split('--- a/iokit/')[0]
++        source = '\n'.join(line[1:] for line in bsd_patch.splitlines()
++                           if line.startswith('+') and not line.startswith('+++'))
++        for mode in (None, 0, 1):
++            with self.subTest(mode=mode):
++                flags = [] if mode is None else [f'-DXNU_NATIVE_LEGACY_DISPLAY={mode}']
++                output = subprocess.check_output(
++                    ['cc', '-E', '-P', '-x', 'c', '-DDEVELOPMENT=1', *flags, '-'], input=source, text=True)
++                self.assertEqual(output.count('native_legacy_display_probe'), 2 if mode == 1 else 0)
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/scripts/unixnu/bootimg.py b/scripts/unixnu/bootimg.py
+index d2aa766..1cabb95 100644
+--- a/scripts/unixnu/bootimg.py
++++ b/scripts/unixnu/bootimg.py
+@@ -1,4 +1,4 @@
+-"""Android boot image: gzip(BootShim + UEFI FD) with the device tree appended, plus an optional ramdisk.
++"""Android boot image: gzip(BootShim + UEFI FD + optional payload), DTBs and an optional ramdisk.
+ 
+ Inputs are a Mu-Silicium checkout (BootShim sources, Resources/Configs/<device>.toml, mkbootimg.py),
+ the built firmware volume and a compiled device tree. The image is meant for "fastboot boot" only.
+@@ -20,13 +20,31 @@ DEFAULTS = {'header_version': 0, 'base': 0, 'kernel_offset': 0x8000, 'tags_offse
+ MKBOOTIMG_FLAGS = ('base', 'kernel_offset', 'tags_offset', 'pagesize', 'header_version', 'ramdisk_offset', 'second_offset', 'cmdline')
+ 
+ 
+-def compile_shim(uefi, base, size, requires_header, scratch):
++def split_dtb(data):
++    """Preserve concatenated stock DTBs so the bootloader can select its hardware variant."""
++    trees = []
++    offset = 0
++    while offset < len(data):
++        if len(data) - offset < 40 or data[offset:offset + 4] != b'\xd0\x0d\xfe\xed':
++            raise Error('invalid compiled device tree')
++        size = struct.unpack_from('>I', data, offset + 4)[0]
++        if size < 40 or size > len(data) - offset:
++            raise Error('invalid compiled device tree size')
++        trees.append(data[offset:offset + size])
++        offset += size
++    if not trees:
++        raise Error('empty compiled device tree')
++    return trees
++
++
++def compile_shim(uefi, base, size, requires_header, scratch, payload_size=0):
+     clang, objcopy, nm = tool('clang'), tool('llvm-objcopy', 'brew install llvm'), tool('llvm-nm', 'brew install llvm')
+     source = uefi / 'BootShim/BootShim.S'
+     if not source.is_file():
+         raise Error(f'{source} missing: --uefi must be a Mu-Silicium checkout')
+     obj = scratch / 'shim.o'
+     run([clang, '--target=aarch64-none-elf', '-c', f'-DFD_BASE={base}', f'-DFD_SIZE={size}',
++         f'-DEMBEDDED_PAYLOAD_SIZE={payload_size}',
+          f'-DREQUIRES_KERNEL_HEADER={int(requires_header)}', source, '-o', obj], capture=True)
+     run([objcopy, '-O', 'binary', obj, scratch / 'shim.bin'], capture=True)
+     shim = (scratch / 'shim.bin').read_bytes()
+@@ -34,8 +52,8 @@ def compile_shim(uefi, base, size, requires_header, scratch):
+     offset = next((int(line.split()[0], 16) for line in symbols.splitlines() if line.endswith(' _Payload')), None)
+     if offset != len(shim):
+         raise Error('a literal pool or padding separates the _Payload label from the appended firmware volume')
+-    if requires_header and (shim[56:60] != b'ARM\x64' or struct.unpack_from('<QQ', shim, 8) != (base, len(shim) + size)):
+-        raise Error('the ARM64 image header does not describe the shim plus the firmware volume')
++    if requires_header and (shim[56:60] != b'ARM\x64' or struct.unpack_from('<QQ', shim, 8) != (base, len(shim) + size + payload_size)):
++        raise Error('the ARM64 image header does not describe the shim, firmware and embedded payload')
+     return shim
+ 
+ 
+@@ -82,22 +100,25 @@ def build(ctx, uefi, fd, dtb, ramdisk=None, output=None):
+         raise Error('the Mu-Silicium device config has no [uefi_fd] base and size')
+     if len(firmware) != size:
+         raise Error(f'firmware volume is {len(firmware):#x} bytes, the device config says {size:#x}')
++    embedded = ctx.board.get('bootimg', {}).get('embed_payload', False)
++    if ramdisk and not Path(ramdisk).is_file():
++        raise Error(f'ramdisk not found: {ramdisk}')
++    payload = Path(ramdisk).read_bytes() if ramdisk and embedded else b''
++    if embedded and (not payload or not requires_header):
++        raise Error('embed_payload needs a nonempty --ramdisk and an ARM64 image header')
+     out = Path(output) if output else ctx.work / 'boot/boot.img'
+     out.parent.mkdir(parents=True, exist_ok=True)
+     with tempfile.TemporaryDirectory(prefix='unixnu-bootimg-') as scratch_name:
+         scratch = Path(scratch_name)
+-        shim = compile_shim(uefi, base, size, requires_header, scratch)
+-        tree = patch_dtb(Path(dtb).read_bytes(), ctx.board.get('bootimg', {}).get('dtb_node', []), scratch)
+-        if tree[:4] != b'\xd0\x0d\xfe\xed' or struct.unpack_from('>I', tree, 4)[0] != len(tree):
+-            raise Error('invalid compiled device tree')
+-        combined = shim + firmware
++        shim = compile_shim(uefi, base, size, requires_header, scratch, len(payload))
++        tree = b''.join(patch_dtb(blob, ctx.board.get('bootimg', {}).get('dtb_node', []), scratch)
++                        for blob in split_dtb(Path(dtb).read_bytes()))
++        combined = shim + firmware + payload
+         kernel = gzip.compress(combined, mtime=0) + tree
+         kernel_path = scratch / 'Image.gz-dtb'
+         kernel_path.write_bytes(kernel)
+-        if ramdisk:
++        if ramdisk and not embedded:
+             ramdisk_path = Path(ramdisk)
+-            if not ramdisk_path.is_file():
+-                raise Error(f'ramdisk not found: {ramdisk_path}')
+         else:
+             ramdisk_path = scratch / 'ramdisk'
+             ramdisk_path.write_bytes(b'')
+@@ -108,7 +129,8 @@ def build(ctx, uefi, fd, dtb, ramdisk=None, output=None):
+         run(command, capture=True)
+         report = verify(out, combined, tree, ramdisk_path, image)
+     report.update(image_sha256=sha256_file(out), image_bytes=out.stat().st_size, fd_sha256=sha256_file(fd),
+-                  dtb_sha256=sha256_file(dtb), shim_bytes=len(shim), hardware_tested=False)
++                  dtb_sha256=sha256_file(dtb), shim_bytes=len(shim), hardware_tested=False,
++                  embedded_payload_bytes=len(payload))
+     (out.parent / 'boot.json').write_text(json.dumps(report, indent=2) + '\n')
+     log(f'bootimg: {out} ({out.stat().st_size} bytes)')
+     return out
+@@ -117,17 +139,43 @@ def build(ctx, uefi, fd, dtb, ramdisk=None, output=None):
+ def verify(path, combined, tree, ramdisk_path, image):
+     """Unpack the image and compare every part with its input."""
+     data = Path(path).read_bytes()
+-    kernel_size, kernel_address, ramdisk_size, _, second_size, _, tags, page, version, _ = struct.unpack_from('<10I', data, 8)
+-    if data[:8] != b'ANDROID!' or second_size or version != image['header_version'] or page != image['pagesize']:
++    if len(data) < 44 or data[:8] != b'ANDROID!':
++        raise Error('invalid or truncated boot image header')
++    version = struct.unpack_from('<I', data, 40)[0]
++    if version != image['header_version'] or version not in range(5):
+         raise Error('boot image header does not match the requested parameters')
+-    if kernel_address != image['base'] + image['kernel_offset'] or tags != image['base'] + image['tags_offset']:
+-        raise Error('boot image load addresses do not match the requested offsets')
++    addresses = {}
++    signature_size = 0
++    if version >= 3:
++        kernel_size, ramdisk_size, _, header_size = struct.unpack_from('<4I', data, 8)
++        page = 4096
++        if (header_size != (1584 if version == 4 else 1580) or len(data) < page or
++                data[24:40] != bytes(16) or image['pagesize'] != page):
++            raise Error('invalid v3/v4 boot image header')
++        if version == 4:
++            signature_size = struct.unpack_from('<I', data, 1580)[0]
++    else:
++        kernel_size, kernel_address, ramdisk_size, _, second_size, _, tags, page = struct.unpack_from('<8I', data, 8)
++        if second_size or page != image['pagesize'] or page < (1632, 1648, 1660)[version]:
++            raise Error('boot image header does not match the requested parameters')
++        if kernel_address != image['base'] + image['kernel_offset'] or tags != image['base'] + image['tags_offset']:
++            raise Error('boot image load addresses do not match the requested offsets')
++        addresses = {'kernel_address': hex(kernel_address), 'tags_address': hex(tags)}
++    start = page * (1 + -(-kernel_size // page))
++    end = start + ramdisk_size
++    if page + kernel_size > len(data) or end > len(data):
++        raise Error('boot image payload is truncated')
++    if version >= 3 and page * -(-end // page) + page * -(-signature_size // page) != len(data):
++        raise Error('boot image signature or trailing layout does not match its header')
+     kernel = data[page:page + kernel_size]
+     unpacker = zlib.decompressobj(16 + zlib.MAX_WBITS)
+-    if unpacker.decompress(kernel) != combined or not unpacker.eof or unpacker.unused_data != tree:
++    try:
++        unpacked = unpacker.decompress(kernel)
++    except zlib.error as error:
++        raise Error(f'invalid boot image gzip: {error}') from None
++    if unpacked != combined or not unpacker.eof or unpacker.unused_data != tree:
+         raise Error('gzip, firmware and appended device tree do not round-trip')
+-    start = page * (1 + -(-kernel_size // page))
+     if data[start:start + ramdisk_size] != Path(ramdisk_path).read_bytes():
+         raise Error('ramdisk bytes differ')
+     return {'kernel_sha256': hashlib.sha256(kernel).hexdigest(), 'ramdisk_bytes': ramdisk_size,
+-            'header_version': version, 'kernel_address': hex(kernel_address), 'tags_address': hex(tags)}
++            'header_version': version, **addresses}
+diff --git a/scripts/unixnu/cli.py b/scripts/unixnu/cli.py
+index 417dc01..a8b2a8f 100644
+--- a/scripts/unixnu/cli.py
++++ b/scripts/unixnu/cli.py
+@@ -53,7 +53,7 @@ def parser():
+     i = sub.add_parser('bootimg', parents=[c], help='pack the boot image from the firmware volume and a device tree')
+     i.add_argument('--fd', metavar='FILE', help='firmware volume (default: the build output under --uefi)')
+     i.add_argument('--dtb', metavar='FILE', help='compiled device tree; or UNIXNU_DTB')
+-    i.add_argument('--ramdisk', metavar='FILE', help='ramdisk image, or none (default: the payload step output when present, else empty)')
++    i.add_argument('--ramdisk', metavar='FILE', help='payload image; placed inside the kernel when bootimg.embed_payload is true, otherwise in the ramdisk (default: payload output, else empty)')
+     i.add_argument('-o', '--output', metavar='FILE', help='output (default: out/<device>/boot/boot.img)')
+     w = sub.add_parser('ipsw', parents=[c], help='show or extract the components of the target IPSW')
+     w.add_argument('action', choices=('info', 'fetch'))
+@@ -126,7 +126,10 @@ def cmd_build(ctx):
+     modules = prepare(ctx, steps + (['kernel'] if 'prelink' in steps else []))
+     if 'kernel' in steps:
+         kernel.build(ctx, modules)
+-        kernel.prelink(ctx)
++        if ctx.board.get('kernel', {}).get('source_only', False):
++            kernel.export_source(ctx)
++        else:
++            kernel.prelink(ctx)
+     elif 'prelink' in steps:
+         kernel.prelink(ctx)
+     if 'package' in steps:
+@@ -148,7 +151,7 @@ def cmd_bootimg(ctx):
+         ramdisk = expand(ctx.args.ramdisk)
+     elif not ctx.args.ramdisk and payload.paths(ctx)[1].is_file():
+         ramdisk = payload.paths(ctx)[1]
+-        log(f'ramdisk: {ramdisk} (use --ramdisk none for an empty one)')
++        log(f'payload input: {ramdisk}')
+     bootimg.build(ctx, uefi, fd, dtb, ramdisk, expand(ctx.args.output) if ctx.args.output else None)
+ 
+ 
+diff --git a/scripts/unixnu/kernel.py b/scripts/unixnu/kernel.py
+index 65e52bc..e4626d5 100644
+--- a/scripts/unixnu/kernel.py
++++ b/scripts/unixnu/kernel.py
+@@ -1,6 +1,8 @@
+ """XNU kernel: build from the patched Apple source, then prelink against the original kernelcache."""
+ import os
+ import shlex
++import shutil
++import struct
+ from pathlib import Path
+ 
+ from . import ipsw
+@@ -87,7 +89,7 @@ def build(ctx, modules):
+         # skip the archive checks and link without the archives, so it stops at the link and only the records are
+         # required of it.
+         log('kernel: bootstrap pass for the compile records')
+-        subprocess_env = {**env, 'XNU_BOOT_PROGRESS': '0', 'XNU_BOOTSTRAP': '1'}
++        subprocess_env = {**env, 'XNU_BOOT_PROGRESS': '0', 'XNU_EARLY_BOOT_PROGRESS': '0', 'XNU_BOOTSTRAP': '1'}
+         try:
+             run(['bash', script], cwd=ctx.tree, env=subprocess_env, log_file=ctx.logs / 'kernel-bootstrap.log')
+         except Error:
+@@ -102,6 +104,30 @@ def build(ctx, modules):
+     run(['bash', script], cwd=ctx.tree, env=env, log_file=ctx.logs / 'kernel.log')
+ 
+ 
++def export_source(ctx):
++    """Publish the source kernel for boards bringing up XNU without a kernelcache."""
++    if ctx.board.get('kernel', {}).get('prelink'):
++        raise Error('source_only and [kernel.prelink] cannot be used together')
++    source = ctx.tree / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf'
++    if not source.is_file():
++        raise Error(f'source kernel not found: {source}')
++    with source.open('rb') as stream:
++        header = stream.read(32)
++    if len(header) != 32 or struct.unpack_from('<4I', header) != (0xfeedfacf, 0x100000c, 0, 2):
++        raise Error('source kernel must be an ordinary ARM64 Mach-O executable')
++    output = ctx.work / 'kernel/kernel.macho'
++    output.parent.mkdir(parents=True, exist_ok=True)
++    temporary = output.with_suffix('.macho.tmp')
++    try:
++        shutil.copyfile(source, temporary)
++        temporary.replace(output)
++    finally:
++        temporary.unlink(missing_ok=True)
++    output.with_suffix('.json').unlink(missing_ok=True)  # A previous prelink report no longer describes this image.
++    log(f'kernel: {output} (source only; no prelinked Apple drivers or root filesystem)')
++    return output
++
++
+ def prelink(ctx):
+     """Produce out/<device>/kernel/kernel.macho from the XNU build and the original kernelcache."""
+     log('kernel: prelink')
 diff --git a/drivers/ArmCpu/ArmCpu.cpp b/drivers/ArmCpu/ArmCpu.cpp
 index a1f7bc6..72cdd28 100644
 --- a/drivers/ArmCpu/ArmCpu.cpp
@@ -884,282 +3257,3 @@ index 0000000..4438159
 +
 +if __name__ == '__main__':
 +    unittest.main()
-diff --git a/scripts/prepare-xnu-source.py b/scripts/prepare-xnu-source.py
-index 3c19f4d..5e0b9b9 100755
---- a/scripts/prepare-xnu-source.py
-+++ b/scripts/prepare-xnu-source.py
-@@ -6,6 +6,7 @@ import json
- import os
- from pathlib import Path
- import urllib.request
-+from urllib.parse import urlsplit
- 
- # Tags of the Apple sources that still carry the headers newer xnu omits; feeds.toml sets them for the unixnu driver.
- TAG = os.environ.get('UNIXNU_DRIVERKIT_TAG', 'xnu-10063.121.3')
-@@ -15,6 +16,14 @@ CACHE = Path(f'.cache/sources/xnu-driverkit-{TAG.removeprefix("xnu-")}.json')
- URL = f'https://api.github.com/repos/apple-oss-distributions/xnu/contents/iokit/DriverKit?ref={TAG}'
- 
- 
-+def read_url(url):
-+    token = os.environ.get('GITHUB_TOKEN')
-+    headers = {}
-+    if token and urlsplit(url).scheme == 'https' and urlsplit(url).netloc == 'api.github.com':
-+        headers['Authorization'] = f'Bearer {token}'
-+    return urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30).read()
-+
-+
- def restore(entry, destination=DESTINATION, tag=TAG):
-     if entry['type'] != 'file' or not entry['name'].endswith('.h'):
-         return None
-@@ -22,7 +31,7 @@ def restore(entry, destination=DESTINATION, tag=TAG):
-     target = destination / name
-     if target.exists():
-         return None
--    data = urllib.request.urlopen(entry['download_url'], timeout=30).read()
-+    data = read_url(entry['download_url'])
-     digest = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
-     if digest != entry['sha']:
-         raise ValueError(f'Git blob hash mismatch: {entry["name"]}')
-@@ -37,12 +46,12 @@ if __name__ == '__main__':
-         raise SystemExit('Create the local XNU work source before preparing headers')
-     if not CACHE.exists():
-         CACHE.parent.mkdir(parents=True, exist_ok=True)
--        CACHE.write_bytes(urllib.request.urlopen(URL, timeout=30).read())
-+        CACHE.write_bytes(read_url(URL))
-     entries = json.loads(CACHE.read_text())
-     crypto_cache = CACHE.with_name(f'xnu-driverkit-crypto-{TAG.removeprefix("xnu-")}.json')
-     if not crypto_cache.exists():
-         crypto_url = URL.replace('/DriverKit?', '/DriverKit/crypto?')
--        crypto_cache.write_bytes(urllib.request.urlopen(crypto_url, timeout=30).read())
-+        crypto_cache.write_bytes(read_url(crypto_url))
-     for entry in json.loads(crypto_cache.read_text()):
-         entry['relative'] = 'crypto/' + entry['name']
-         entries.append(entry)
-@@ -53,7 +62,7 @@ if __name__ == '__main__':
-         if not trust_cache.exists():
-             url = ('https://api.github.com/repos/apple-oss-distributions/xnu/'
-                    f'contents/EXTERNAL_HEADERS/TrustCache?ref={trust_tag}')
--            trust_cache.write_bytes(urllib.request.urlopen(url, timeout=30).read())
-+            trust_cache.write_bytes(read_url(url))
-         trust_destination = Path('.cache/xnu-work/EXTERNAL_HEADERS/TrustCache')
-         def restore_trust(entry):
-             return restore(entry, trust_destination, trust_tag)
-diff --git a/patches/xnu/zzzz-boot-progress-panic-output.patch b/patches/xnu/zzzz-boot-progress-panic-output.patch
-new file mode 100644
-index 0000000..f5830eb
---- /dev/null
-+++ b/patches/xnu/zzzz-boot-progress-panic-output.patch
-@@ -0,0 +1,25 @@
-+--- a/osfmk/kern/printf.c
-++++ b/osfmk/kern/printf.c
-+@@ -1,3 +1,4 @@
-++#include <kern/boot_progress.h>
-+ /*
-+  * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
-+  *
-+@@ -920,7 +921,7 @@
-+ 
-+ 	debug_putc(c);
-+ 
-+-	if (!console_is_serial() && !disable_serial_output) {
-++	if (!console_is_serial() && !disable_serial_output && !boot_progress_active()) {
-+ 		PE_kputc(c);
-+ 	}
-+ }
-+@@ -932,7 +933,7 @@
-+ 
-+ 	debug_putc(c);
-+ 
-+-	if (!console_is_serial() && !disable_serial_output) {
-++	if (!console_is_serial() && !disable_serial_output && !boot_progress_active()) {
-+ 		PE_kputc(c);
-+ 	}
-+ }
-diff --git a/patches/xnu/zzzzz-root-panic-progress.patch b/patches/xnu/zzzzz-root-panic-progress.patch
-new file mode 100644
-index 0000000..0cce1f6
---- /dev/null
-+++ b/patches/xnu/zzzzz-root-panic-progress.patch
-@@ -0,0 +1,182 @@
-+--- a/osfmk/kern/early_boot_progress.h
-++++ b/osfmk/kern/early_boot_progress.h
-+@@ -2,6 +2,10 @@
-+ #ifndef XNU_EARLY_BOOT_PROGRESS_H
-+ #define XNU_EARLY_BOOT_PROGRESS_H
-+ #include <stdint.h>
-++#include <stdarg.h>
-++#ifdef __cplusplus
-++extern "C" {
-++#endif
-+ #if defined(XNU_EARLY_BOOT_PROGRESS) && XNU_EARLY_BOOT_PROGRESS
-+ struct boot_args;
-+ void early_boot_progress_init(struct boot_args *);
-+@@ -12,10 +16,17 @@
-+ void early_boot_progress_vm_ready(void);
-+ void early_boot_progress_fatal(struct boot_args *, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
-+ void boot_progress_kernel_exception(uint64_t, uint64_t, uint64_t);
-++void boot_progress_root(const char *, const char *, uint64_t);
-++void boot_progress_panic(const char *, va_list *, unsigned long, unsigned, uint64_t);
-+ #else
-+ #define early_boot_progress_arm_init() ((void)0)
-+ #define early_boot_progress_suspend() ((void)0)
-+ #define early_boot_progress_vm_ready() ((void)0)
-+ #define boot_progress_kernel_exception(...) ((void)0)
-++#define boot_progress_root(...) ((void)0)
-++#define boot_progress_panic(...) ((void)0)
-++#endif
-++#ifdef __cplusplus
-++}
-+ #endif
-+ #endif
-+--- a/osfmk/kern/debug.c
-++++ b/osfmk/kern/debug.c
-+@@ -1,3 +1,4 @@
-++#include <kern/early_boot_progress.h>
-+ /*
-+  * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
-+  *
-+@@ -1134,6 +1135,8 @@
-+ {
-+ #pragma clang diagnostic pop
-+ 
-++	boot_progress_panic(panic_format_str, panic_args, panic_caller, reason, panic_options_mask);
-++
-+ #if defined(__x86_64__) && (DEVELOPMENT || DEBUG)
-+ 	read_lbr();
-+ #endif
-+--- a/bsd/kern/bsd_init.c
-++++ b/bsd/kern/bsd_init.c
-+@@ -1,3 +1,4 @@
-++#include <kern/early_boot_progress.h>
-+ #include <kern/boot_progress.h>
-+ /*
-+  * Copyright (c) 2000-2021 Apple Inc. All rights reserved.
-+@@ -1326,7 +1327,9 @@
-+ 	u_int32_t       flags;
-+ 	kern_return_t   err;
-+ 
-++	boot_progress_root("setconf enter", NULL, 0);
-+ 	err = IOFindBSDRoot(rootdevice, sizeof(rootdevice), &rootdev, &flags);
-++	boot_progress_root("setconf returned", err ? NULL : rootdevice, (uint32_t)err);
-+ 	if (err) {
-+ 		printf("setconf: IOFindBSDRoot returned an error (%d);"
-+ 		    "setting rootdevice to 'sd0a'.\n", err);     /* XXX DEBUG TEMP */
-+--- a/iokit/bsddev/IOKitBSDInit.cpp
-++++ b/iokit/bsddev/IOKitBSDInit.cpp
-+@@ -1,3 +1,4 @@
-++#include <kern/early_boot_progress.h>
-+ /*
-+  * Copyright (c) 1998-2021 Apple Inc. All rights reserved.
-+  *
-+@@ -754,14 +755,19 @@
-+ 
-+ 	int xchar, dchar;
-+ 
-++	boot_progress_root("IOFindBSDRoot enter", NULL, mountAttempts);
-++
-+ 	// stall here for anyone matching on the IOBSD resource to finish (filesystems)
-+ 	matching = IOService::serviceMatching(gIOResourcesKey);
-+ 	assert(matching);
-+ 	matching->setObject(gIOResourceMatchedKey, gIOBSDKey);
-+ 
-++	boot_progress_root("IOBSD resource wait", NULL, 30);
-+ 	if ((service = IOService::waitForMatchingService(matching, 30ULL * kSecondScale))) {
-++		boot_progress_root("IOBSD resource ready", NULL, 0);
-+ 		OSSafeReleaseNULL(service);
-+ 	} else {
-++		boot_progress_root("IOBSD resource timeout", NULL, 30);
-+ 		IOLog("!BSD\n");
-+ 	}
-+ 	matching->release();
-+@@ -783,9 +789,12 @@
-+ 		rdBootVar[0] = 0;
-+ 	}
-+ 
-++	boot_progress_root("root selection", rdBootVar[0] ? rdBootVar : "no rd/rootdev boot argument", 0);
-+ 	if ((regEntry = IORegistryEntry::fromPath( "/chosen", gIODTPlane ))) {
-+ 		do {
-++			boot_progress_root("chosen ramfile probe", NULL, 0);
-+ 			di_root_ramfile(regEntry);
-++			boot_progress_root("chosen ramfile returned", NULL, 0);
-+ 			OSObject* unserializedContainer = NULL;
-+ 			data = OSDynamicCast(OSData, regEntry->getProperty( "root-matching" ));
-+ 			if (data) {
-+@@ -823,10 +832,12 @@
-+ //	It will become /dev/mdx, where x is 0-f.
-+ //
-+ 
-++	boot_progress_root("RAMDisk property probe", NULL, didRam);
-+ 	if (!didRam) {                                                                                           /* Have we already build this ram disk? */
-+ 		didRam = 1;                                                                                             /* Remember we did this */
-+ 		if ((regEntry = IORegistryEntry::fromPath( "/chosen/memory-map", gIODTPlane ))) {        /* Find the map node */
-+ 			data = (OSData *)regEntry->getProperty("RAMDisk");      /* Find the ram disk, if there */
-++			boot_progress_root("RAMDisk property", data ? "present" : "absent", 0);
-+ 			if (data) {                                                                                      /* We found one */
-+ 				uintptr_t *ramdParms;
-+ 				ramdParms = (uintptr_t *)data->getBytesNoCopy();        /* Point to the ram disk base and size */
-+@@ -885,6 +896,7 @@
-+ 		}
-+ 	}
-+ 
-++	boot_progress_root("root matching selection", rdBootVar, matching != NULL);
-+ 	if ((!matching) && rdBootVar[0]) {
-+ 		// by BSD name
-+ 		look = rdBootVar;
-+@@ -920,6 +932,7 @@
-+ 
-+ 	if (!matching) {
-+ 		OSString * astring;
-++		boot_progress_root("root fallback", "IOMedia Content=Apple_HFS", 0);
-+ 		// Match any HFS media
-+ 
-+ 		matching = IOService::serviceMatching( "IOMedia" );
-+@@ -932,14 +945,17 @@
-+ 	}
-+ 
-+ 	if (gIOKitDebug & kIOWaitQuietBeforeRoot) {
-++		boot_progress_root("root waitQuiet enter", NULL, 0);
-+ 		IOLog( "Waiting for matching to complete\n" );
-+ 		IOService::getPlatform()->waitQuiet();
-++		boot_progress_root("root waitQuiet returned", NULL, 0);
-+ 	}
-+ 
-+ 	if (matching) {
-+ 		OSSerialize * s = OSSerialize::withCapacity( 5 );
-+ 
-+ 		if (matching->serialize( s )) {
-++			boot_progress_root("root match criteria", s->text(), ROOTDEVICETIMEOUT);
-+ 			IOLog( "Waiting on %s\n", s->text());
-+ 		}
-+ 		s->release();
-+@@ -955,10 +971,14 @@
-+ 		t.tv_sec = ROOTDEVICETIMEOUT;
-+ 		t.tv_nsec = 0;
-+ 		matching->retain();
-++		boot_progress_root("root device wait begin", NULL, t.tv_sec);
-+ 		service = IOService::waitForService( matching, &t );
-++		boot_progress_root("root device wait returned", service ? "matched" : "timeout", 0);
-+ 		if ((!service) || (mountAttempts == 10)) {
-+ #if !XNU_TARGET_OS_OSX || !defined(__arm64__)
-++			boot_progress_root("root timeout: noroot icon", NULL, ROOTDEVICETIMEOUT);
-+ 			PE_display_icon( 0, "noroot");
-++			boot_progress_root("root timeout: icon returned", NULL, 0);
-+ 			IOLog( "Still waiting for root device\n" );
-+ #endif
-+ 
-+@@ -981,6 +1001,7 @@
-+ 			// The disk isn't found - have the user pick from System Recovery.
-+ 			(void)IOSetRecoveryBoot(BSD_BOOTFAIL_MEDIA_MISSING, NULL, true);
-+ #elif XNU_TARGET_OS_IOS
-++			boot_progress_root("root timeout: panic", "Failed to mount root device", ROOTDEVICETIMEOUT);
-+ 			panic("Failed to mount root device");
-+ #endif
-+ 		}
-+@@ -1044,6 +1065,7 @@
-+ 
-+ iofrootx:
-+ 
-++	boot_progress_root("root device selected", rootName, *root);
-+ 	IOService::setRootMedia(service);
-+ 
-+ 	if ((gIOKitDebug & (kIOLogDTree | kIOLogServiceTree | kIOLogMemory)) && !debugInfoPrintedOnce) {

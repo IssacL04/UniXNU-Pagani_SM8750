@@ -35,6 +35,7 @@ cpu_regs = "0"
 embed_payload = true
 
 [firmware]
+patches = ["Resources/MuPatches/OnePlus13T.patch"]
 config = "oneplus13t"
 dsc = "Platforms/OnePlus/oneplus13tPkg/oneplus13t.dsc"
 fd = "Build/oneplus13tPkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"

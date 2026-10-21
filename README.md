@@ -1,10 +1,10 @@
-# 一加 13T UniXNU 移植
+# UniXNU-Sun_SM8750
 
 本目录是 `PKX110 / OP60F5L1` 一加 13T 的独立设备配置。用户已确认 UniXNU 的 UEFI Shell 成功启动。当前保留菜单基线 `menu-keys/boot.img` 和已实测显示菜单的 `no-sdcc/boot.img`，供后续开发与回退对照；物理侧键交互仍需单独确认。
 
 ## XNU 内核适配与 macOS Actions
 
-当前提供源码内核的早期启动配置和 UEFI 负载通路。第 6 次镜像已实机显示 `S1` 至 `S6`；第 7 次越过控制台异常；第 8 次越过 `zalloc` 并进入 BSD 初始化，最后可见 `calling setconf`。观察线程刷新至 `poll=0x3b`，定时器计数约为 `0xf3`，`DT/CPU/GIC=1/1/1`，随后画面停止。单核中断与线程已运行过，持续稳定性和具体停止位置仍待验证；当前没有根文件系统。
+当前提供源码内核的早期启动配置和 UEFI 负载通路。第 6 次镜像已实机显示 `S1` 至 `S6`；第 7 次越过控制台异常；第 8 次越过 `zalloc`；第 9 次实机确认进入 BSD 根设备查找，等待 60 秒后主动 panic。完整 panic 页保留了 `poll=0x3c`、`timer=0x1a3` 和超时路径。单核中断与线程已运行，当前没有可用根设备或用户态，长期稳定性仍待验证。
 
 | 部分 | 本轮状态 | 执行位置 |
 | --- | --- | --- |
@@ -14,62 +14,48 @@
 | FAT payload 与 Android boot.img | 第 9 次 Actions 已生成 payload；本地已生成 `xnu-source-run-9-root-panic/boot.img` 并通过解包比对 | macOS Actions 与当前 Linux |
 | kernelcache 预链接、userdata、iOS 用户态 | 未配置，后续接入 | 预链接输入提取与 userdata 工具使用 macOS |
 
-2026-10-21 的[第 1 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39613407803)在最终链接时缺少 `_native_legacy_display_probe`：上游 `offline-component-load-probes.patch` 的一处调用漏了 `XNU_NATIVE_LEGACY_DISPLAY` 条件，关闭显示驱动的 13T 配置仍引用该符号。提交 `e352179` 补上条件并增加预处理回归测试，覆盖未定义、关闭和开启三种情况。[第 2 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39614832285)已成功完成内核与 payload 构建，artifact 为 `oneplus13t-xnu-2`。
+2026-10-21 的[第 1 次构建](https://github.com/IssacL04/UniXNU-Sun_SM8750/actions/runs/39613407803)在最终链接时缺少 `_native_legacy_display_probe`：上游 `offline-component-load-probes.patch` 的一处调用漏了 `XNU_NATIVE_LEGACY_DISPLAY` 条件，关闭显示驱动的 13T 配置仍引用该符号。提交 `e352179` 补上条件并增加预处理回归测试，覆盖未定义、关闭和开启三种情况。[第 2 次构建](https://github.com/IssacL04/UniXNU-Sun_SM8750/actions/runs/39614832285)已成功完成内核与 payload 构建，artifact 为 `oneplus13t-xnu-2`。
 
-2026-10-22 的早期诊断构建修复了三处问题：[第 3 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39634416285)发现当前 XNU 的 `T0SZ_BOOT=26`，屏幕映射现按内核选择的 38/39 位地址范围检查；[第 4 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39635731429)遇到 GitHub API 匿名限流，公开头文件元数据请求现使用 Actions 自带的只读令牌；[第 5 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39636435946)已编译诊断库，但指令检查把整数指令机器码误认作浮点寄存器，现只检查反汇编指令。相关边界、令牌发送范围与真实 SIMD 指令拦截均已验证。
+2026-10-22 的早期诊断构建修复了三处问题：[第 3 次构建](https://github.com/IssacL04/UniXNU-Sun_SM8750/actions/runs/39634416285)发现当前 XNU 的 `T0SZ_BOOT=26`，屏幕映射现按内核选择的 38/39 位地址范围检查；[第 4 次构建](https://github.com/IssacL04/UniXNU-Sun_SM8750/actions/runs/39635731429)遇到 GitHub API 匿名限流，公开头文件元数据请求现使用 Actions 自带的只读令牌；[第 5 次构建](https://github.com/IssacL04/UniXNU-Sun_SM8750/actions/runs/39636435946)已编译诊断库，但指令检查把整数指令机器码误认作浮点寄存器，现只检查反汇编指令。相关边界、令牌发送范围与真实 SIMD 指令拦截均已验证。
 
-[第 6 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39637689404)以提交 `1643c4c` 成功完成，artifact 为 `oneplus13t-xnu-6`，本地位于 `../UniXNU/out/oneplus13t/actions/run-6/`。新内核为 21,451,832 字节，FAT payload 为 64 MiB；最终 `boot.img` 为 15,196,160 字节。已核对云端与本地哈希、FAT 内的内核和 ADT、内嵌负载及未改写的 DTB，并从最终 Mach-O 确认真实入口跳至 `early_boot_progress_entry`，初始页表为 4 KiB、`T0SZ_BOOT=26`。后续真机照片已确认该镜像执行至 `S6`，随后在控制台初始化时异常，见下文“S6 后的控制台异常”。定时器中断与调度仍待验证。
+[第 6 次构建](https://github.com/IssacL04/UniXNU-Sun_SM8750/actions/runs/39637689404)以提交 `1643c4c` 成功完成，artifact 为 `oneplus13t-xnu-6`，本地位于 `out/oneplus13t/actions/run-6/`。新内核为 21,451,832 字节，FAT payload 为 64 MiB；最终 `boot.img` 为 15,196,160 字节。已核对云端与本地哈希、FAT 内的内核和 ADT、内嵌负载及未改写的 DTB，并从最终 Mach-O 确认真实入口跳至 `early_boot_progress_entry`，初始页表为 4 KiB、`T0SZ_BOOT=26`。后续真机照片已确认该镜像执行至 `S6`，随后在控制台初始化时异常，见下文“S6 后的控制台异常”。定时器中断与调度仍待验证。
 
-本地已下载到 `../UniXNU/out/oneplus13t/actions/run-2/`：源码内核为 21,430,552 字节，payload 为 64 MiB，两者均与云端报告中的哈希一致，FAT 卷内的内核也与独立内核逐字节相同。旧候选 `xnu-source-run-2/boot.img` 经用户实测进入 UniXNU 后显示 `no boot entry found`，说明配置卷尚未被发现，不能视为 XNU 已启动。修复逐字节扫描后的 `xnu-source-run-2-payload-fix/boot.img` 经用户实测仍显示相同提示，随后 BDS 报找不到文件系统协议。后续带状态提示的完整镜像显示 `payload FAT scan B6B54000-B7FFF50C: Not Found`：FDT 与输入范围检查通过，但实际 initrd 只有 21,673,228 字节（20.67 MiB），装不下本轮 64 MiB FAT 卷。内核镜像内嵌负载传递现已实测显示启动项，选择后出现 DarwinBoot 绿色交接条。绿色条位于跳转 XNU 之前，证明加载器交接代码执行；旧提示 “kernel entry code ran” 已改正。
+本地已下载到 `out/oneplus13t/actions/run-2/`：源码内核为 21,430,552 字节，payload 为 64 MiB，两者均与云端报告中的哈希一致，FAT 卷内的内核也与独立内核逐字节相同。旧候选 `xnu-source-run-2/boot.img` 经用户实测进入 UniXNU 后显示 `no boot entry found`，说明配置卷尚未被发现，不能视为 XNU 已启动。修复逐字节扫描后的 `xnu-source-run-2-payload-fix/boot.img` 经用户实测仍显示相同提示，随后 BDS 报找不到文件系统协议。后续带状态提示的完整镜像显示 `payload FAT scan B6B54000-B7FFF50C: Not Found`：FDT 与输入范围检查通过，但实际 initrd 只有 21,673,228 字节（20.67 MiB），装不下本轮 64 MiB FAT 卷。内核镜像内嵌负载传递现已实测显示启动项，选择后出现 DarwinBoot 绿色交接条。绿色条位于跳转 XNU 之前，证明加载器交接代码执行；旧提示 “kernel entry code ran” 已改正。
 
 ### GitHub Actions 负责哪些部分
 
 通用仓库的 [macos.yml](../UniXNU/.github/workflows/macos.yml) 使用 `macos-15`。XNU 和静态库调用 Xcode/iPhoneOS SDK、`xcrun`；从 IPSW 解压 kernelcache 使用 `compression_tool`；userdata、Data 种子扩容与跳过 Setup 使用 `hdiutil`/`diskutil`。普通 FAT 打包不依赖 macOS，只有启用 Data 种子修改时才需要相应工具。当前 Linux 已将 mtools 解压到 `.cache/host-deps/sysroot/usr/bin`，未安装系统软件。UEFI、DarwinBoot、BootShim 和 boot.img 可以在 Linux 继续构建。
 
-### 仓库怎么安排
+### 仓库分工与同步上游
 
-设备仓库已发布为 [IssacL04/UniXNU-oneplus13t](https://github.com/IssacL04/UniXNU-oneplus13t)，本目录就是仓库根目录。使用本仓库的 [OnePlus 13T XNU 工作流](.github/workflows/xnu.yml)，无需另建 UniXNU fork 或 UEFI 仓库。
+当前工作区使用三个同级目录：
 
-该工作流在 `macos-15` 上拉取上游 UniXNU 的固定提交 `b6ae99c17194e6a18fd819d3148e69fe405e91fc`，应用 [源码内核补丁](patches/unixnu-source-kernel.patch)，选中 `oneplus13t_defconfig`，然后执行 `build kernel payload`。补丁包含 `source_only`、ArmDTPlatform/ArmCpu 的静态库构建、早期诊断钩子、架构时钟频率读取和相应回归测试。Apple 源码版本沿用该提交的 `feeds.toml` 固定值。更新上游时，应同时检查补丁能否应用。
+| 目录 | 内容与远端 |
+| --- | --- |
+| `../UniXNU` | 官方 [UniXNU/UniXNU](https://github.com/UniXNU/UniXNU) 的干净检出，用于同步上游 |
+| 本仓库 `UniXNU-Sun_SM8750` | [设备仓库](https://github.com/IssacL04/UniXNU-Sun_SM8750)：13T 配置、诊断驱动、完整适配补丁与构建入口 |
+| `../UEFI-Sun_SM8750` | [UEFI 仓库](https://github.com/IssacL04/UEFI-Sun_SM8750)：BootShim、SEC、菜单交接及 13T 板级代码 |
 
-云端只需本目录的源码和配置。`.gitignore` 已排除 `.cache/`、原始 `sysinfo/` 和镜像；工作流也不读取它们。与真实 `live.dtb` 对照的测试留在本地执行，云端运行不依赖设备资料的两项 ADT 测试。当前无需设置仓库 Secrets，不下载 IPSW，也不构建 userdata。UEFI 和含原机 DTB 的最终 boot.img 继续使用当前 Linux 工作区生成。
+2026-10-22 已将官方检出同步至 `d9460ebbbf43dd7f21b0ef3f62e9437c35b2315c`，并把本地改动完整保存到 [适配补丁](patches/unixnu-source-kernel.patch)。`upstream.rev` 固定设备构建所用的上游提交。补丁覆盖源码内核、ArmDTPlatform/ArmCpu、DarwinBoot、菜单状态、boot.img 打包和此前的移植文档；官方目录及子模块保持干净。
 
-选择公开仓库是因为 GitHub 对公开仓库的标准托管 runner 提供免费运行；私有仓库受账户免费额度与超额计费约束。工作流仅手动触发，artifact 保留 7 天。费用规则以 [GitHub Actions 计费说明](https://docs.github.com/en/billing/concepts/product-billing/github-actions) 为准。
+从本仓库执行 `./unixnu`。入口会优先从同级官方检出准备独立副本；没有该目录时从 GitHub 获取。补丁仅应用到本仓库 `.cache/upstream-<提交>-<补丁摘要>/`。相同版本直接复用，修改提交或补丁会生成新副本，不覆盖已有工作副本中的编辑。需要长期保留的适配应更新到仓库补丁中。
 
-### 第一次发布到 GitHub
+所有 UniXNU 输出位于本仓库 `out/`，包括内核、FAT payload、完整 boot.img、日志和构建树。当前 UEFI 的 `Build` 是指向 `out/oneplus13t/uefi-build` 的链接；入口也会为尚无 `Build` 的同级 UEFI 检出创建该链接。原机 `sysinfo/`、DTB/DTBO、缓存和镜像继续只留本地，不上传 Git。
 
-当前工作区已安装并登录 `gh`，远端仓库也已创建。日常使用直接跳到下一节“触发构建与下载结果”。以下命令保留给从零部署的情况：登录在你自己的浏览器中完成，随后创建公开仓库并上传所列源码；已有仓库无需重复执行。
-
-在 WSL 终端执行一次：
-
-```sh
-sudo apt update
-sudo apt install gh
-gh auth login --hostname github.com --git-protocol https --web --scopes workflow
-gh auth setup-git
-
-cd /home/enc3l/Project/UniXNU_SM8750/UniXNU-oneplus13t
-git init -b main
-git add .github .gitattributes .gitignore README.md board.toml configs scripts patches
-git diff --cached --stat
-git commit -m "Add OnePlus 13T source-kernel cloud build"
-gh repo create UniXNU-oneplus13t --public --source=. --remote=origin --push
-```
-
-`gh auth login` 会显示验证码和登录地址；若 WSL 没有自动打开浏览器，在 Windows 浏览器打开提示地址并输入验证码即可。已检查当前 Git 的作者名和邮箱均有配置。若换电脑后提交提示作者身份缺失，按 Git 提示设置自己的 `user.name` 和 `user.email` 后再提交。[登录参数](https://cli.github.com/manual/gh_auth_login)和[建仓库参数](https://cli.github.com/manual/gh_repo_create)可查 GitHub CLI 手册；安装遇到问题时使用其 [Linux 安装说明](https://github.com/cli/cli/blob/trunk/docs/install_linux.md)。
-
-以上是首次建仓流程。如果你已经在网页创建了同名空仓库，将最后一条命令改为：
+同步官方目录只需：
 
 ```sh
-git remote add origin https://github.com/你的账号/UniXNU-oneplus13t.git
-git push -u origin main
+git -C ../UniXNU pull --ff-only
+git -C ../UniXNU submodule update --init --recursive
 ```
 
-网页创建空仓库时不要预填 README、License 或 `.gitignore`，以便直接推送当前提交。[GitHub 建仓说明](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-new-repository)
+设备构建继续使用固定的 `upstream.rev`。采用新的上游版本时，先更新该文件并检查补丁与测试，确认兼容后再提交，避免直接改变当前可用的构建基线。上游本次新增 `CONFIG_XNU_BUILD_ARCHIVES` 门控，13T 配置已显式开启。
+
+云端使用本仓库的 [XNU 工作流](.github/workflows/xnu.yml)，通过同一入口准备源码和输出。仍仅手动触发，不需要私有 Secrets，不下载 IPSW，也不构建 userdata。UEFI 和含原机 DTB 的最终 boot.img 留在 Linux 本地构建。仓库更名保留原有提交与 Actions 历史。
 
 ### 触发构建与下载结果
 
-打开新仓库，进入 **Actions → OnePlus 13T XNU → Run workflow**，选择 `main`，再点 **Run workflow**。没有需要填写的输入项。若没有运行按钮，先确认 `.github/workflows/xnu.yml` 已在仓库默认分支，且仓库已启用 Actions；GitHub 的手动触发要求工作流存在于默认分支。[手动运行说明](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)
+打开新仓库，进入 **Actions → Sun SM8750 XNU (OnePlus 13T) → Run workflow**，选择 `main`，再点 **Run workflow**。没有需要填写的输入项。若没有运行按钮，先确认 `.github/workflows/xnu.yml` 已在仓库默认分支，且仓库已启用 Actions；GitHub 的手动触发要求工作流存在于默认分支。[手动运行说明](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)
 
 也可以在本设备仓库目录执行：
 
@@ -101,13 +87,13 @@ unixnu.lock
 以下命令使用当前工作区已经构建的 13T UEFI 和本机 DTB。将压缩包路径改为实际下载位置；后续运行使用不同的 `run-N` 目录，保留每次候选及其日志。
 
 ```sh
-cd /home/enc3l/Project/UniXNU_SM8750/UniXNU
+cd /home/enc3l/Project/UniXNU_SM8750/UniXNU-Sun_SM8750
 export PATH=/home/enc3l/Project/OP_Kernel_Dev/src/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/bin:$PATH
 unzip /path/to/oneplus13t-xnu-9.zip -d out/oneplus13t/actions/run-9
 test -s out/oneplus13t/actions/run-9/kernel/kernel.macho
 test -s out/oneplus13t/actions/run-9/payload/payload.img
-./unixnu bootimg -D ../UniXNU-oneplus13t --uefi ../uefi-oneplus13t \
-  --dtb ../UniXNU-oneplus13t/.cache/firmware/vendor_boot/dtb \
+./unixnu bootimg --uefi ../UEFI-Sun_SM8750 \
+  --dtb .cache/firmware/vendor_boot/dtb \
   --ramdisk out/oneplus13t/actions/run-9/payload/payload.img \
   -o out/oneplus13t/boot/xnu-source-run-9-root-panic/boot.img
 ```
@@ -117,16 +103,16 @@ test -s out/oneplus13t/actions/run-9/payload/payload.img
 仅得到 `kernel.macho` 时，也可以在本地安装 mtools 后生成负载：
 
 ```sh
-./unixnu build payload -D ../UniXNU-oneplus13t --kernel /path/to/kernel.macho
+./unixnu build payload --kernel /path/to/kernel.macho
 ```
 
-后续修改本设备配置或补丁，提交并 `git push`，再手动运行同一工作流。通用仓库中的 `macOS build` 仍保留；本设备的首次构建使用这里的 `OnePlus 13T XNU` 即可。
+后续修改本设备配置或补丁，提交并 `git push`，再手动运行同一工作流。通用仓库中的 `macOS build` 仍保留；本设备使用这里的 `Sun SM8750 XNU (OnePlus 13T)` 即可。
 
 ### 13T 的板级输入
 
 首轮仅发布 MPIDR 为 0 的启动 CPU。GICD 为 `0x16000000/0x10000`，GICR 为 `0x16080000/0x200000`，redistributor stride 为 `0x40000`，timebase 为 19.2 MHz；均已对照本机导出的设备树。ADT 包含 ArmDTPlatform 所需的 chosen、cpus、arm-io、defaults、options 和易失 CHRP NVRAM，不填入虚构的 Apple 设备身份或 sheng 的 UFS/GPU 地址。
 
-DarwinBoot 向 UEFI 申请 256 MiB 连续窗口，并通过 `boot_args` 传入实际基址和大小。ADT 不把 13T 分散的物理内存拼成一段连续可用 RAM。framebuffer 地址与 pitch 由运行时 GOP 提供。侧核、PSCI、电源管理、存储和 GPU 需要后续独立适配。真机已确认硬件 CNTFRQ 与内核 timebase 均为 19.2 MHz，并能沿用 GOP framebuffer 显示至 S6；GIC 路由、持续显示与调度仍待验证。
+DarwinBoot 向 UEFI 申请 256 MiB 连续窗口，并通过 `boot_args` 传入实际基址和大小。ADT 不把 13T 分散的物理内存拼成一段连续可用 RAM。framebuffer 地址与 pitch 由运行时 GOP 提供。侧核、PSCI、电源管理、存储和 GPU 需要后续独立适配。真机已确认硬件 CNTFRQ 与内核 timebase 均为 19.2 MHz，并能沿用 GOP framebuffer 显示至 S6；单核定时器中断和观察线程已实测运行，长期稳定性与多核调度仍待验证。
 
 当前 `[bootimg] embed_payload = true` 将完整 FAT 卷追加在 UEFI FD 后，与 BootShim 一起压缩到 Android boot 的 kernel 字段。ARM64 镜像头声明包含负载的完整解压长度。BootShim 只把 FD 搬到固件基址，负载留在原 kernel 输入缓冲区；它用 `x1/x2` 传递负载地址和长度，用 `x3` 标记交接格式。SEC 保存参数并生成独立 HOB。BootPayloadDxe 优先使用此 HOB，范围通过检查后发布只读 Block I/O。它仍只接受 SEC 已保留的 `Kernel` 内存，不放宽到 DXE 堆或任意物理内存。
 
@@ -140,7 +126,7 @@ Android v4 可能在 FAT 前拼接 vendor ramdisk、在尾部追加 bootconfig�
 
 ### 当前可测试镜像
 
-使用 `../UniXNU/out/oneplus13t/boot/xnu-source-run-9-root-panic/boot.img`。该镜像包含 UEFI、DarwinBoot、云端第 9 次构建的真实 XNU 内核、根设备检查点、完整 panic 页、`kt_fixed_zones=240` 分配器预算及 13T ADT，使用内嵌负载交接，并保留此前控制台修复和菜单错误显示。UEFI 沿用已构建版本，固件标识仍为 `oneplus13t-xnu-early-progress-20261021`。复制到 Windows 并命名为 `boot-13t-xnu-root-panic.img` 后：
+使用 `out/oneplus13t/boot/xnu-source-run-9-root-panic/boot.img`。该镜像包含 UEFI、DarwinBoot、云端第 9 次构建的真实 XNU 内核、根设备检查点、完整 panic 页、`kt_fixed_zones=240` 分配器预算及 13T ADT，使用内嵌负载交接，并保留此前控制台修复和菜单错误显示。UEFI 沿用已构建版本，固件标识仍为 `oneplus13t-xnu-early-progress-20261021`。复制到 Windows 并命名为 `boot-13t-xnu-root-panic.img` 后：
 
 ```bat
 adb reboot bootloader
@@ -193,11 +179,11 @@ fastboot boot boot-13t-xnu-root-panic.img
 
 页面顶部的红、绿、蓝三段只标识 panic 页面已经接管显示，不代表 UFS 或其他适配阶段。首条错误写入 2 KiB 固定缓冲区，过长正文或屏幕空间不足会标记 `SCREEN TEXT CLIPPED`。普通日志与观察器停止覆盖该页面，嵌套 panic/异常保留第一条错误并在底部另行标记。当前单核诊断配置进入 panic 后停住，不调用软件自动复位流程。早期 MMU 异常继续使用物理 framebuffer 的异常页。
 
-该屏幕随 `XNU_EARLY_BOOT_PROGRESS` 编译进源码内核，未使用参考设备的二进制地址补丁。因此 `payload.json` 中表示二进制补丁的 `panic_screen` 字段仍为 `false`。主机检查覆盖实际绘图代码的地址边界、长文本、冻结与嵌套异常，并提取当前 XNU 的真实 panic 包装函数验证参数传递；云端再用 macOS 原生 ABI 执行同一检查。新屏幕和根设备停点仍需实机照片确认。
+该屏幕随 `XNU_EARLY_BOOT_PROGRESS` 编译进源码内核，未使用参考设备的二进制地址补丁。因此 `payload.json` 中表示二进制补丁的 `panic_screen` 字段仍为 `false`。主机检查覆盖实际绘图代码的地址边界、长文本、冻结与嵌套异常，并提取当前 XNU 的真实 panic 包装函数验证参数传递；云端再用 macOS 原生 ABI 执行同一检查。实机已确认新屏幕有效，最终停点为根设备等待超时后的主动 panic。
 
-[第 9 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39657848352)以提交 `bf87a02` 成功完成，绘图测试与 macOS 原生 panic 参数检查均通过。artifact 为 `oneplus13t-xnu-9`，本地位于 `../UniXNU/out/oneplus13t/actions/run-9/`。最终 Mach-O 已确认三种 panic 包装函数进入公共入口，该入口的首个函数调用为 `boot_progress_panic`；`IOFindBSDRoot` 内含 17 处根设备检查点调用。类型分配器最大槽位需求仍为 30。
+[第 9 次构建](https://github.com/IssacL04/UniXNU-Sun_SM8750/actions/runs/39657848352)以提交 `bf87a02` 成功完成，绘图测试与 macOS 原生 panic 参数检查均通过。artifact 为 `oneplus13t-xnu-9`，本地位于 `out/oneplus13t/actions/run-9/`。最终 Mach-O 已确认三种 panic 包装函数进入公共入口，该入口的首个函数调用为 `boot_progress_panic`；`IOFindBSDRoot` 内含 17 处根设备检查点调用。类型分配器最大槽位需求仍为 30。
 
-本轮内核为 21,469,496 字节，完整 `xnu-source-run-9-root-panic/boot.img` 为 15,200,256 字节。已核对云端报告哈希、FAT 内核与 ADT、实际启动参数、Android v4 头、ARM64 长度、UEFI、64 MiB 内嵌负载及原机 DTB。新镜像尚未实机启动；测试时保留最后的固定 `ROOT` 行或完整 panic 页，以确定上一轮画面停止的具体位置。
+本轮内核为 21,469,496 字节，完整 `xnu-source-run-9-root-panic/boot.img` 为 15,200,256 字节。已核对云端报告哈希、FAT 内核与 ADT、实际启动参数、Android v4 头、ARM64 长度、UEFI、64 MiB 内嵌负载及原机 DTB。后续实机照片已确认：根设备等待 60 秒后超时，缺失根卷图标调用正常返回，随后在 `IOKitBSDInit.cpp:1005` 主动 panic；完整页面及停机保留现场均有效。快照为 `poll=0x3c`、`timer=0x1a3`，当前没有可用根设备。
 
 ### zalloc 类型分配器断言
 
@@ -205,7 +191,7 @@ fastboot boot boot-13t-xnu-root-panic.img
 
 本设备现使用已有启动参数 `kt_fixed_zones=240`。同一分配函数计算出的最大槽位需求为 30，ASan/UBSan 主机检查通过；类型分池、共享池及原有边界断言均保留。此预算针对当前源码内核的类型分布，增加驱动或更换编译器后应重新核对最终内核的分配结果。照片中的 zone 虚拟地址范围不代表实际分配了相同容量的物理 RAM；本设备仍只向 XNU 提供 256 MiB 窗口。
 
-[第 8 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39652160998)以提交 `4726941` 成功完成，artifact 为 `oneplus13t-xnu-8`，本地位于 `../UniXNU/out/oneplus13t/actions/run-8/`。下载后重新从最终内核提取类型分布并执行原始预算函数，最大槽位需求仍为 30；FAT 内核与独立产物逐字节相同，配置实际包含 `kt_fixed_zones=240`。完整 `xnu-source-run-8-kalloc-fix/boot.img` 为 15,196,160 字节，Android v4 头、ARM64 长度、UEFI、64 MiB 内嵌负载与原机 DTB 的解包比对均通过。后续真机照片已确认越过 `zalloc` 并执行至 `setconf` 入口。
+[第 8 次构建](https://github.com/IssacL04/UniXNU-Sun_SM8750/actions/runs/39652160998)以提交 `4726941` 成功完成，artifact 为 `oneplus13t-xnu-8`，本地位于 `out/oneplus13t/actions/run-8/`。下载后重新从最终内核提取类型分布并执行原始预算函数，最大槽位需求仍为 30；FAT 内核与独立产物逐字节相同，配置实际包含 `kt_fixed_zones=240`。完整 `xnu-source-run-8-kalloc-fix/boot.img` 为 15,196,160 字节，Android v4 头、ARM64 长度、UEFI、64 MiB 内嵌负载与原机 DTB 的解包比对均通过。后续真机照片已确认越过 `zalloc` 并执行至 `setconf` 入口。
 
 ### S6 后的控制台异常
 
@@ -213,37 +199,39 @@ fastboot boot boot-13t-xnu-root-panic.img
 
 配置现开启 `XNU_DT_PANIC_REGION`，复用仓库已有的设备树日志区检查。当前 ADT 没有 `pram` 节点，因此跳过保留日志区读取，继续初始化控制台，不再访问旧板物理地址。照片中 panic 字符重复来自普通控制台和 `PE_kputc` 同时转向屏幕；补丁在屏幕诊断启用时跳过第二次屏幕输出，保留 `debug_putc`。主机测试使用实际生产函数，覆盖无日志区、有效日志区、正常控制台初始化和两种 panic 输出路径。
 
-[第 7 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39649951453)以提交 `37cdaab` 成功完成，artifact 为 `oneplus13t-xnu-7`，本地下载目录为 `../UniXNU/out/oneplus13t/actions/run-7/`。最终 Mach-O 已确认 `PE_create_console` 查找设备树并在缺少区域时跳过读取，不再使用 `0x3c0fc000`；两条 panic 输出路径均检查屏幕诊断状态。新完整镜像为 15,196,160 字节，已核对 FAT 中的真实内核、`-enable_kprintf_spam` 参数、完整内嵌负载及未改写的 DTB。随后真机照片已确认控制台修复生效，启动继续到 `zalloc`，在那里触发上文所述类型分配器断言。
+[第 7 次构建](https://github.com/IssacL04/UniXNU-Sun_SM8750/actions/runs/39649951453)以提交 `37cdaab` 成功完成，artifact 为 `oneplus13t-xnu-7`，本地下载目录为 `out/oneplus13t/actions/run-7/`。最终 Mach-O 已确认 `PE_create_console` 查找设备树并在缺少区域时跳过读取，不再使用 `0x3c0fc000`；两条 panic 输出路径均检查屏幕诊断状态。新完整镜像为 15,196,160 字节，已核对 FAT 中的真实内核、`-enable_kprintf_spam` 参数、完整内嵌负载及未改写的 DTB。随后真机照片已确认控制台修复生效，启动继续到 `zalloc`，在那里触发上文所述类型分配器断言。
 
 ### 本地验证
 
 ```sh
-python3 UniXNU/scripts/test-kernel-source.py
-python3 UniXNU/drivers/DarwinBoot/Test/test-adt.py
-python3 UniXNU-oneplus13t/scripts/test-adt.py
-python3 UniXNU-oneplus13t/scripts/check-memory-map.py
-python3 UniXNU/scripts/test-bootimg.py
+TREE=$(UniXNU-Sun_SM8750/unixnu --prepare)
+python3 UniXNU-Sun_SM8750/scripts/test-upstream.py
+python3 "$TREE/scripts/test-kernel-source.py"
+python3 "$TREE/drivers/DarwinBoot/Test/test-adt.py"
+python3 UniXNU-Sun_SM8750/scripts/test-adt.py
+python3 UniXNU-Sun_SM8750/scripts/check-memory-map.py
+UNIXNU_UEFI="$PWD/UEFI-Sun_SM8750" python3 "$TREE/scripts/test-bootimg.py"
 ```
 
 BootPayloadDxe 的测试直接编译生产代码，并使用实际 mtools 生成的 FAT32 镜像。覆盖内嵌 HOB 长度和地址、输入保留区、vendor 前缀/bootconfig 尾部、截断、重复卷、无效 BPB、块读取边界、只读写入拒绝和易失状态写入：
 
 ```sh
 cc -std=c11 -fshort-wchar -ffunction-sections -fdata-sections \
-  -I uefi-oneplus13t/Mu_Basecore/MdePkg/Include \
-  -I uefi-oneplus13t/Mu_Basecore/MdePkg/Include/X64 \
-  -I uefi-oneplus13t/Mu_Basecore/ArmPkg/Include \
-  -I uefi-oneplus13t/Silicon/Silicium/SiliciumPkg/Include \
-  uefi-oneplus13t/Platforms/OnePlus/oneplus13tPkg/Drivers/BootPayloadDxe/Test/payload_host.c \
-  uefi-oneplus13t/Platforms/OnePlus/oneplus13tPkg/Library/MemoryMapLib/MemoryMapLib.c \
+  -I UEFI-Sun_SM8750/Mu_Basecore/MdePkg/Include \
+  -I UEFI-Sun_SM8750/Mu_Basecore/MdePkg/Include/X64 \
+  -I UEFI-Sun_SM8750/Mu_Basecore/ArmPkg/Include \
+  -I UEFI-Sun_SM8750/Silicon/Silicium/SiliciumPkg/Include \
+  UEFI-Sun_SM8750/Platforms/OnePlus/oneplus13tPkg/Drivers/BootPayloadDxe/Test/payload_host.c \
+  UEFI-Sun_SM8750/Platforms/OnePlus/oneplus13tPkg/Library/MemoryMapLib/MemoryMapLib.c \
   -Wl,--gc-sections -o /tmp/oneplus13t-payload-test
-/tmp/oneplus13t-payload-test UniXNU/out/oneplus13t/actions/run-8/payload/payload.img
+/tmp/oneplus13t-payload-test UniXNU-Sun_SM8750/out/oneplus13t/actions/run-9/payload/payload.img
 ```
 
 下文保留已验证菜单基线和之前的故障定位过程。`menu-keys`、`no-sdcc` 镜像未被本轮覆盖。
 
 ## 菜单阶段保留产物
 
-相对同级 `UniXNU/`：
+相对本仓库：
 
 | 文件 | 用途 |
 | --- | --- |
@@ -257,7 +245,7 @@ cc -std=c11 -fshort-wchar -ffunction-sections -fdata-sections \
 
 2026-10-21 清理了首轮离线镜像及 `dxe-trace/`、`cpu-vectors/`、`scm-order/`、`integrated/`、`no-ufs/`、`no-storage/`、`menu-bds/` 中的旧诊断镜像和报告，同时移除了旧固件构建备份、独立 package 构建、中间文件、重复测试目录和缓存日志。`integrated/menu-smoke/` 仅保留文档引用的菜单截图及整理后的测试日志。历史故障结论、源码修正、补丁和 `sysinfo/` 原始设备资料继续保留。
 
-固件工作副本为同级 `uefi-oneplus13t/`，FD 位于 `Build/oneplus13tPkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd`，大小为 3 MiB；同目录保留 `Guid.xref`，供后续定位模块。当前固件内的 UniXNU 与 DarwinBoot 从本地源码编译，BootPayloadDxe 来自 13T 板级目录。本轮构建已重新生成中间文件。
+固件工作副本为同级 `UEFI-Sun_SM8750/`，FD 位于 `Build/oneplus13tPkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd`，大小为 3 MiB；同目录保留 `Guid.xref`，供后续定位模块。当前固件内的 UniXNU 与 DarwinBoot 从本地源码编译，BootPayloadDxe 来自 13T 板级目录。本轮构建已重新生成中间文件。
 
 独立 Python 环境、BaseTools 可执行工具、本地 uuid 开发头文件与链接库入口，以及打包所需的完整 DTB 集合均保留。临时下载的 QEMU/AAVMF 及其运行依赖、下载包、拆分 DTB 和 Android vendor ramdisk 已移除；重新做 QEMU 测试时需准备相应工具。文档站的 `node_modules` 和构建输出也已清理，重建前需按锁文件安装依赖。
 
@@ -309,17 +297,17 @@ DXE 堆按当前 `sysinfo/live.dtb` 的 `/memory` 与 `/reserved-memory/hwfence-
 
 ```sh
 export CLANG_BIN=/home/enc3l/Project/OP_Kernel_Dev/src/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/bin/
-export PATH=/home/enc3l/Project/UniXNU_SM8750/.venv-uefi/bin:/home/enc3l/Project/UniXNU_SM8750/UniXNU-oneplus13t/.cache/host-deps/sysroot/usr/bin:$CLANG_BIN:$PATH
-export CPATH=/home/enc3l/Project/UniXNU_SM8750/UniXNU-oneplus13t/.cache/host-deps/sysroot/usr/include
-export LIBRARY_PATH=/home/enc3l/Project/UniXNU_SM8750/UniXNU-oneplus13t/.cache/host-libs
-cd /home/enc3l/Project/UniXNU_SM8750/UniXNU
+export PATH=/home/enc3l/Project/UniXNU_SM8750/.venv-uefi/bin:/home/enc3l/Project/UniXNU_SM8750/UniXNU-Sun_SM8750/.cache/host-deps/sysroot/usr/bin:$CLANG_BIN:$PATH
+export CPATH=/home/enc3l/Project/UniXNU_SM8750/UniXNU-Sun_SM8750/.cache/host-deps/sysroot/usr/include
+export LIBRARY_PATH=/home/enc3l/Project/UniXNU_SM8750/UniXNU-Sun_SM8750/.cache/host-libs
+cd /home/enc3l/Project/UniXNU_SM8750/UniXNU-Sun_SM8750
 
-./unixnu build firmware -D ../UniXNU-oneplus13t \
-  --uefi ../uefi-oneplus13t --edk2 ../uefi-oneplus13t/Mu_Basecore \
-  --local-module refer:edk2=../uefi-oneplus13t/Mu_Basecore -j 4
+./unixnu build firmware \
+  --uefi ../UEFI-Sun_SM8750 --edk2 ../UEFI-Sun_SM8750/Mu_Basecore \
+  --local-module refer:edk2=../UEFI-Sun_SM8750/Mu_Basecore -j 4
 
-./unixnu bootimg -D ../UniXNU-oneplus13t --uefi ../uefi-oneplus13t \
-  --dtb ../UniXNU-oneplus13t/.cache/firmware/vendor_boot/dtb --ramdisk none \
+./unixnu bootimg --uefi ../UEFI-Sun_SM8750 \
+  --dtb .cache/firmware/vendor_boot/dtb --ramdisk none \
   -o out/oneplus13t/boot/xnu-loader/boot.img
 ```
 
@@ -329,7 +317,7 @@ cd /home/enc3l/Project/UniXNU_SM8750/UniXNU
 
 ## 已通过的离线检查
 
-在工作区根目录运行 `python3 UniXNU-oneplus13t/scripts/check-memory-map.py`，使用系统 `fdtget` 对照用户导出的设备树：14 个 UEFI RAM 分配区均在声明的 RAM 中，且不与静态保留区重叠；硬件 fence 区有显式保留分配 HOB。检查还约束 CPU_Vectors 的精确名称、地址、页大小、属性及与其它区域的边界，缺项、错误地址或跨入 Info_Blk 都会被拒绝。旧 pagani 内存图会因 DXE 堆跨越非 RAM 区间而失败。该检查不推断 Android 动态分配或 bootloader 的瞬时内存用途。
+在工作区根目录运行 `python3 UniXNU-Sun_SM8750/scripts/check-memory-map.py`，使用系统 `fdtget` 对照用户导出的设备树：14 个 UEFI RAM 分配区均在声明的 RAM 中，且不与静态保留区重叠；硬件 fence 区有显式保留分配 HOB。检查还约束 CPU_Vectors 的精确名称、地址、页大小、属性及与其它区域的边界，缺项、错误地址或跨入 Info_Blk 都会被拒绝。旧 pagani 内存图会因 DXE 堆跨越非 RAM 区间而失败。该检查不推断 Android 动态分配或 bootloader 的瞬时内存用途。
 
 重建后已检查链接的 SEC 模块与最终 FD，三段描述符均存在，`HW_Fence` 的内存类型为 `EfiReservedMemoryType`。新 v4 镜像解出的 FD 与本次构建一致，追加的历史 DTB 集合保持原样。
 
@@ -337,7 +325,7 @@ cd /home/enc3l/Project/UniXNU_SM8750/UniXNU
 
 v4 打包往返验证确认：192 字节 BootShim、完整 3 MiB FD、13 棵未改写 DTB 和空 ramdisk。通用打包器的 7 组测试通过，并额外使用实际 `mkbootimg.py` 验证 v0/v3/v4。签名区域检查只确认结构长度，不代表 AVB 或设备启动策略验证通过。
 
-上轮独立 `UniXNU.efi` 在 QEMU virt + Ubuntu AAVMF 下，以 1216 × 2640 显示了三个内置菜单项。模拟键盘下移并确认后，日志记录 `UNIXNU: action: reset`，检查通过且未出现 ASSERT 或同步异常。[菜单截图](../UniXNU/out/oneplus13t/boot/integrated/menu-smoke/menu.png)来自模拟器。本轮菜单程序未变，没有重复该项测试。独立应用使用通用 UEFI 库；此检查没有运行手机固件中的平台库、13T BootShim 或厂商 DXE。
+上轮独立 `UniXNU.efi` 在 QEMU virt + Ubuntu AAVMF 下，以 1216 × 2640 显示了三个内置菜单项。模拟键盘下移并确认后，日志记录 `UNIXNU: action: reset`，检查通过且未出现 ASSERT 或同步异常。[菜单截图](../UniXNU-Sun_SM8750/out/oneplus13t/boot/integrated/menu-smoke/menu.png)来自模拟器。本轮菜单程序未变，没有重复该项测试。独立应用使用通用 UEFI 库；此检查没有运行手机固件中的平台库、13T BootShim 或厂商 DXE。
 
 `menu-bds` 版已通过编译和 v4 打包核对。解包确认主固件卷仍有 98 个非填充 FFS 文件，78 项 APRIORI 与 `no-storage` 完全一致，五个已隔离模块仍未打包。BdsDxe 中的菜单 GUID 已变为 UniXNU，全部新增 BDS 阶段标记均存在。UniXNU 应用逐字节未变，注册驱动与当前构建一致；镜像中的 FD 与本次输出一致，BootShim 和 DTB 未变。此检查尚不能证明真机的事件处理和应用加载成功。
 
@@ -367,9 +355,9 @@ fastboot boot boot-13t-menu-keys.img
 Mu 变更保存在 `patches/mu-basecore-dxe-trace.patch`，Qcom BDS 日志变更保存在 `patches/uefi-bds-trace.patch`，键盘框架优先级修正在 `patches/uefi-keypad-tpl.patch`。当前工作副本已应用；从相同上游版本的干净工作副本重建时，在工作区根目录先执行一次：
 
 ```sh
-git -C uefi-oneplus13t/Mu_Basecore apply "$PWD/UniXNU-oneplus13t/patches/mu-basecore-dxe-trace.patch"
-git -C uefi-oneplus13t apply "$PWD/UniXNU-oneplus13t/patches/uefi-bds-trace.patch"
-git -C uefi-oneplus13t apply "$PWD/UniXNU-oneplus13t/patches/uefi-keypad-tpl.patch"
+git -C UEFI-Sun_SM8750/Mu_Basecore apply "$PWD/UniXNU-Sun_SM8750/patches/mu-basecore-dxe-trace.patch"
+git -C UEFI-Sun_SM8750 apply "$PWD/UniXNU-Sun_SM8750/patches/uefi-bds-trace.patch"
+git -C UEFI-Sun_SM8750 apply "$PWD/UniXNU-Sun_SM8750/patches/uefi-keypad-tpl.patch"
 ```
 
 这些定位日志已保留在当前 `menu-keys/boot.img` 中。构建目录 `FV/Guid.xref` 可将最后一个驱动 GUID 对应到具体模块。
@@ -490,13 +478,13 @@ SPMI ReadLong 内部将任务优先级提升到 TPL_CALLBACK。原键盘框架�
 cc -std=c11 -fshort-wchar -ffunction-sections -fdata-sections \
   -D_PCD_GET_MODE_32_PcdMaximumLinkedListLength=0 \
   -D_PCD_GET_MODE_BOOL_PcdVerifyNodeInList=1 \
-  -I uefi-oneplus13t/Mu_Basecore/MdePkg/Include \
-  -I uefi-oneplus13t/Mu_Basecore/MdePkg/Include/X64 \
-  -I uefi-oneplus13t/Silicon/Silicium/SiliciumPkg/Include \
-  -I uefi-oneplus13t/Silicon/Silicium/SiliciumPkg/Drivers/KeypadDxe \
-  uefi-oneplus13t/Platforms/OnePlus/oneplus13tPkg/Drivers/KeypadDeviceDxe/Test/keys_host.c \
-  uefi-oneplus13t/Mu_Basecore/MdePkg/Library/BaseDebugLibNull/DebugLib.c \
-  uefi-oneplus13t/Mu_Basecore/MdePkg/Library/BaseLib/LinkedList.c \
+  -I UEFI-Sun_SM8750/Mu_Basecore/MdePkg/Include \
+  -I UEFI-Sun_SM8750/Mu_Basecore/MdePkg/Include/X64 \
+  -I UEFI-Sun_SM8750/Silicon/Silicium/SiliciumPkg/Include \
+  -I UEFI-Sun_SM8750/Silicon/Silicium/SiliciumPkg/Drivers/KeypadDxe \
+  UEFI-Sun_SM8750/Platforms/OnePlus/oneplus13tPkg/Drivers/KeypadDeviceDxe/Test/keys_host.c \
+  UEFI-Sun_SM8750/Mu_Basecore/MdePkg/Library/BaseDebugLibNull/DebugLib.c \
+  UEFI-Sun_SM8750/Mu_Basecore/MdePkg/Library/BaseLib/LinkedList.c \
   -Wl,--gc-sections -o /tmp/oneplus13t-keys-test
 /tmp/oneplus13t-keys-test
 ```

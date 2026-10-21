@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 DEVICE = Path(__file__).resolve().parents[1]
-UEFI = DEVICE.parent / 'uefi-oneplus13t'
+UEFI = DEVICE.parent / 'UEFI-Sun_SM8750'
 PACKAGE = UEFI / 'Platforms/OnePlus/oneplus13tPkg'
 DTB = DEVICE / 'sysinfo/live.dtb'
 

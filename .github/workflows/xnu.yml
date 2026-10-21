@@ -1,4 +1,4 @@
-name: OnePlus 13T XNU
+name: Sun SM8750 XNU (OnePlus 13T)
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: upstream
+        working-directory: device
     steps:
       - name: Check out the 13T configuration
         uses: actions/checkout@v4
@@ -25,29 +25,22 @@ jobs:
           path: device
           persist-credentials: false
 
-      - name: Check out the pinned UniXNU source
-        uses: actions/checkout@v4
-        with:
-          repository: UniXNU/UniXNU
-          ref: b6ae99c17194e6a18fd819d3148e69fe405e91fc
-          path: upstream
-          submodules: recursive
-          persist-credentials: false
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Apply the source-kernel support
+      - name: Prepare the isolated UniXNU source and check the board
         run: |
-          git apply --check ../device/patches/unixnu-source-kernel.patch
-          git apply ../device/patches/unixnu-source-kernel.patch
-          python3 scripts/test-kernel-source.py
-          python3 ../device/scripts/test-adt.py AdtTest.test_tree_contract AdtTest.test_invalid_window
-          python3 drivers/DarwinBoot/Test/test-adt.py
+          python3 scripts/test-upstream.py
+          TREE=$(./unixnu --prepare)
+          echo "UNIXNU_TREE=$TREE" >> "$GITHUB_ENV"
+          python3 "$TREE/scripts/test-kernel-source.py"
+          python3 "$TREE/scripts/test-bootimg.py"
+          python3 scripts/test-adt.py AdtTest.test_tree_contract AdtTest.test_invalid_window
+          python3 "$TREE/drivers/DarwinBoot/Test/test-adt.py"
           cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
-            -I drivers/DarwinBoot/DarwinBootPkg/Driver \
-            ../device/drivers/BootProgress/Test/console.c -o /tmp/boot-progress-test
+            -I "$TREE/drivers/DarwinBoot/DarwinBootPkg/Driver" \
+            drivers/BootProgress/Test/console.c -o /tmp/boot-progress-test
           ASAN_OPTIONS=detect_leaks=0 /tmp/boot-progress-test
 
       - name: Install host tools and check the SDK
@@ -61,9 +54,9 @@ jobs:
       - name: Fetch the kernel sources
         run: |
           mkdir -p out/oneplus13t/logs
-          ./unixnu defconfig oneplus13t_defconfig -D "$GITHUB_WORKSPACE/device"
-          ./unixnu fetch xnu libplatform libdispatch AvailabilityVersions libpthread corecrypto-2023 2>&1 | tee out/oneplus13t/logs/actions-fetch.log
-          cp ../device/unixnu.lock out/oneplus13t/unixnu.lock
+          ./unixnu defconfig oneplus13t_defconfig
+          ./unixnu fetch xnu libplatform libdispatch AvailabilityVersions libpthread corecrypto-2023 IOStorageFamily 2>&1 | tee out/oneplus13t/logs/actions-fetch.log
+          cp unixnu.lock out/oneplus13t/unixnu.lock
 
       - name: Build XNU and the FAT payload
         env:
@@ -73,8 +66,8 @@ jobs:
 
       - name: Check the native panic argument path
         run: |
-          python3 ../device/drivers/BootProgress/Test/panic-entry.py out/oneplus13t/tree/.cache/xnu-work \
-            --font drivers/DarwinBoot/DarwinBootPkg/Driver
+          python3 drivers/BootProgress/Test/panic-entry.py out/oneplus13t/tree/.cache/xnu-work \
+            --font "$UNIXNU_TREE/drivers/DarwinBoot/DarwinBootPkg/Driver"
 
       - name: Upload the kernel, payload and logs
         if: always()
@@ -82,9 +75,9 @@ jobs:
         with:
           name: oneplus13t-xnu-${{ github.run_number }}
           path: |
-            upstream/out/oneplus13t/kernel/**
-            upstream/out/oneplus13t/payload/**
-            upstream/out/oneplus13t/logs/**
-            upstream/out/oneplus13t/unixnu.lock
+            device/out/oneplus13t/kernel/**
+            device/out/oneplus13t/payload/**
+            device/out/oneplus13t/logs/**
+            device/out/oneplus13t/unixnu.lock
           if-no-files-found: warn
           retention-days: 7
