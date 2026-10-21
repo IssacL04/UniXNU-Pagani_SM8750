@@ -1,4 +1,4 @@
-name: Sun SM8750 XNU (OnePlus 13T)
+name: Pagani SM8750 XNU (OnePlus 13T)
 
 on:
   workflow_dispatch:

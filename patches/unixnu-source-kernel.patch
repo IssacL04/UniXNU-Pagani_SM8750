@@ -106,7 +106,7 @@ index 0000000..eaa1a65
 @@ -0,0 +1,228 @@
 +# OnePlus 13T first-stage menu guide
 +
-+This page retains the first-stage `no-sdcc` / `menu-keys` baseline. Current development adds a source XNU profile, DarwinBoot, a read-only FAT payload driver and a single-CPU ADT. The macOS workflow uses `oneplus13t_defconfig` and `kernel payload`. These new paths remain untested on hardware; see the device repository `UniXNU-Sun_SM8750/README.md` for inputs, artifacts and commands.
++This page retains the first-stage `no-sdcc` / `menu-keys` baseline. Current development adds a source XNU profile, DarwinBoot, a read-only FAT payload driver and a single-CPU ADT. The macOS workflow uses `oneplus13t_defconfig` and `kernel payload`. These new paths remain untested on hardware; see the device repository `UniXNU-Pagani_SM8750/README.md` for inputs, artifacts and commands.
 +
 +The acceptance point for the original menu stage is a OnePlus 13T entering UEFI through a temporary boot method allowed by the device, then displaying and running the UniXNU menu. Stop there. Do not load XNU, mount an Apple root or start iPadOS/macOS userland.
 +
@@ -246,7 +246,7 @@ index 0000000..eaa1a65
 +
 +The historical 13T vendor_boot input contains 13 candidate DTBs. The local packer validates and retains the complete bundle for bootloader hardware selection. This run neither guessed a single tree nor changed the phone's DTBO. Real mkbootimg.py round-trip checks passed for v0, v3 and v4. These checks do not establish device acceptance.
 +
-+The current menu candidate excludes UFSDxe, SdccDxe, OplusProject and PIL/PILProxy/SPSS and is `out/oneplus13t/boot/menu-keys/boot.img` in the generic repository. Its adjacent boot.json still records `hardware_tested: false`. Device control files are in sibling `UniXNU-Sun_SM8750/`, and the firmware working copy is `UEFI-Sun_SM8750/`. They use the oneplus13t board name and separate DSC/FDF files. See the device directory README.md for differences, actual build commands and unresolved hardware conditions.
++The current menu candidate excludes UFSDxe, SdccDxe, OplusProject and PIL/PILProxy/SPSS and is `out/oneplus13t/boot/menu-keys/boot.img` in the generic repository. Its adjacent boot.json still records `hardware_tested: false`. Device control files are in sibling `UniXNU-Pagani_SM8750/`, and the firmware working copy is `UEFI-Pagani_SM8750/`. They use the oneplus13t board name and separate DSC/FDF files. See the device directory README.md for differences, actual build commands and unresolved hardware conditions.
 +
 +The new candidate retains the working menu baseline, adds side-button input and disables on-demand ConIn connection so input connects before the menu appears. The default timeout still returns to firmware after 10 seconds. Release all buttons, then briefly press volume down: selection should move down and the countdown should stop. A short power press confirms. If keys do not respond, capture every `13T keys:` log line.
 +
@@ -261,19 +261,19 @@ index 0000000..eaa1a65
 +The original menu-only board.toml defined only `[board]` and `[firmware]`, without `[ipsw]`, `[kernel]`, `[payload]` or `[userdata]`. After initializing submodules and preparing LLVM, Python and BaseTools, use the actual workspace paths from the generic repository:
 +
 +```sh
-+./unixnu status -D ../UniXNU-Sun_SM8750
-+./unixnu build firmware -D ../UniXNU-Sun_SM8750 \
-+  --uefi ../UEFI-Sun_SM8750 --edk2 ../UEFI-Sun_SM8750/Mu_Basecore \
-+  --local-module refer:edk2=../UEFI-Sun_SM8750/Mu_Basecore -j 4
++./unixnu status -D ../UniXNU-Pagani_SM8750
++./unixnu build firmware -D ../UniXNU-Pagani_SM8750 \
++  --uefi ../UEFI-Pagani_SM8750 --edk2 ../UEFI-Pagani_SM8750/Mu_Basecore \
++  --local-module refer:edk2=../UEFI-Pagani_SM8750/Mu_Basecore -j 4
 +```
 +
-+UniXNU was built inside the firmware in this run. Avoid an unqualified `build` or `build all`, which enters the complete flow. See `UniXNU-Sun_SM8750/README.md` for environment variables and host dependencies.
++UniXNU was built inside the firmware in this run. Avoid an unqualified `build` or `build all`, which enters the complete flow. See `UniXNU-Pagani_SM8750/README.md` for environment variables and host dependencies.
 +
 +Pack with the extracted historical 13T vendor_boot DTB bundle:
 +
 +```sh
-+./unixnu bootimg -D ../UniXNU-Sun_SM8750 --uefi ../UEFI-Sun_SM8750 \
-+  --dtb ../UniXNU-Sun_SM8750/.cache/firmware/vendor_boot/dtb --ramdisk none \
++./unixnu bootimg -D ../UniXNU-Pagani_SM8750 --uefi ../UEFI-Pagani_SM8750 \
++  --dtb ../UniXNU-Pagani_SM8750/.cache/firmware/vendor_boot/dtb --ramdisk none \
 +  -o out/oneplus13t/boot/xnu-loader/boot.img
 +```
 +
@@ -946,7 +946,7 @@ index 0000000..6082f7f
 @@ -0,0 +1,228 @@
 +# 一加 13T 首阶段菜单启动指南
 +
-+本页保留 `no-sdcc` / `menu-keys` 的首阶段菜单基线。当前开发已转入 XNU 源码内核适配：13T 配置新增 DarwinBoot、只读 FAT 负载驱动和单核 ADT，macOS Actions 使用 `oneplus13t_defconfig` 与 `kernel payload`。这些新增路径尚未真机验证；具体输入、产物与操作见设备目录 `UniXNU-Sun_SM8750/README.md`。
++本页保留 `no-sdcc` / `menu-keys` 的首阶段菜单基线。当前开发已转入 XNU 源码内核适配：13T 配置新增 DarwinBoot、只读 FAT 负载驱动和单核 ADT，macOS Actions 使用 `oneplus13t_defconfig` 与 `kernel payload`。这些新增路径尚未真机验证；具体输入、产物与操作见设备目录 `UniXNU-Pagani_SM8750/README.md`。
 +
 +菜单基线阶段的验收点是：一加 13T 从设备允许的临时启动路径进入 UEFI，随后显示并运行 UniXNU 菜单，到此停止。暂不加载 XNU，不挂载 Apple 根卷，不启动 iPadOS/macOS 用户态。
 +
@@ -1086,7 +1086,7 @@ index 0000000..6082f7f
 +
 +13T 历史 vendor_boot 输入包含 13 棵候选 DTB。本地打包器现在保留并逐棵检查整个集合，交给 bootloader 按实际硬件选择；本轮没有猜选其中一棵，也没有改写手机上的 DTBO。结构往返验证已使用实际 `mkbootimg.py` 通过 v0、v3、v4 检查，但不代表设备已接受这些镜像。
 +
-+当前停用 UFSDxe、SdccDxe、OplusProject 和 PIL/PILProxy/SPSS 的菜单候选为通用仓库中的 `out/oneplus13t/boot/menu-keys/boot.img`，同目录报告 `boot.json` 仍记录 `hardware_tested: false`。目标控制文件位于同级 `UniXNU-Sun_SM8750/`，固件工作副本位于 `UEFI-Sun_SM8750/`。它们分别使用 `oneplus13t` 板名与独立 DSC/FDF，详细差异、构建命令及尚未确认的硬件条件见设备目录的 `README.md`。
++当前停用 UFSDxe、SdccDxe、OplusProject 和 PIL/PILProxy/SPSS 的菜单候选为通用仓库中的 `out/oneplus13t/boot/menu-keys/boot.img`，同目录报告 `boot.json` 仍记录 `hardware_tested: false`。目标控制文件位于同级 `UniXNU-Pagani_SM8750/`，固件工作副本位于 `UEFI-Pagani_SM8750/`。它们分别使用 `oneplus13t` 板名与独立 DSC/FDF，详细差异、构建命令及尚未确认的硬件条件见设备目录的 `README.md`。
 +
 +新候选保留已经显示菜单的基础配置，新增侧键驱动，并关闭 ConIn 按需连接以提前接入输入。内置菜单默认 10 秒返回固件；进入后松开所有侧键，再短按音量减，应停止倒计时并向下移动，电源短按确认。若无响应，记录所有 `13T keys:` 日志。
 +
@@ -1101,19 +1101,19 @@ index 0000000..6082f7f
 +菜单基线当时的 `board.toml` 仅提供 `[board]` 和 `[firmware]`，没有配置 `[ipsw]`、`[kernel]`、`[payload]` 或 `[userdata]`。初始化子模块、准备 LLVM/Python/BaseTools 后，在通用仓库中使用本轮实际路径：
 +
 +```sh
-+./unixnu status -D ../UniXNU-Sun_SM8750
-+./unixnu build firmware -D ../UniXNU-Sun_SM8750 \
-+  --uefi ../UEFI-Sun_SM8750 --edk2 ../UEFI-Sun_SM8750/Mu_Basecore \
-+  --local-module refer:edk2=../UEFI-Sun_SM8750/Mu_Basecore -j 4
++./unixnu status -D ../UniXNU-Pagani_SM8750
++./unixnu build firmware -D ../UniXNU-Pagani_SM8750 \
++  --uefi ../UEFI-Pagani_SM8750 --edk2 ../UEFI-Pagani_SM8750/Mu_Basecore \
++  --local-module refer:edk2=../UEFI-Pagani_SM8750/Mu_Basecore -j 4
 +```
 +
-+本轮 UniXNU 应用随固件一同编译。不要执行无步骤参数的 `build` 或 `build all`，它们会进入完整构建流程。环境变量与主机依赖见 `UniXNU-Sun_SM8750/README.md`。
++本轮 UniXNU 应用随固件一同编译。不要执行无步骤参数的 `build` 或 `build all`，它们会进入完整构建流程。环境变量与主机依赖见 `UniXNU-Pagani_SM8750/README.md`。
 +
 +使用已经提取的历史 13T vendor_boot DTB 集合打包：
 +
 +```sh
-+./unixnu bootimg -D ../UniXNU-Sun_SM8750 --uefi ../UEFI-Sun_SM8750 \
-+  --dtb ../UniXNU-Sun_SM8750/.cache/firmware/vendor_boot/dtb --ramdisk none \
++./unixnu bootimg -D ../UniXNU-Pagani_SM8750 --uefi ../UEFI-Pagani_SM8750 \
++  --dtb ../UniXNU-Pagani_SM8750/.cache/firmware/vendor_boot/dtb --ramdisk none \
 +  -o out/oneplus13t/boot/xnu-loader/boot.img
 +```
 +
@@ -2564,7 +2564,7 @@ index 0000000..a0d952b
 +            verify(path, self.firmware[:-1], self.tree, self.ramdisk, image)
 +
 +    def test_real_shim_payload_header(self):
-+        uefi = Path(os.environ.get('UNIXNU_UEFI', Path(__file__).resolve().parents[2] / 'UEFI-Sun_SM8750'))
++        uefi = Path(os.environ.get('UNIXNU_UEFI', Path(__file__).resolve().parents[2] / 'UEFI-Pagani_SM8750'))
 +        if not (uefi / 'BootShim/BootShim.S').is_file():
 +            self.skipTest('local Mu-Silicium checkout not present')
 +        try:

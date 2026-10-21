@@ -59,7 +59,7 @@ def main():
         return
     os.environ.setdefault('UNIXNU_DEVICE', str(DEVICE))
     os.environ.setdefault('UNIXNU_OUT', str(DEVICE / 'out'))
-    uefi = DEVICE.parent / 'UEFI-Sun_SM8750'
+    uefi = DEVICE.parent / 'UEFI-Pagani_SM8750'
     if uefi.is_dir():
         output = DEVICE / 'out/oneplus13t/uefi-build'
         if not os.path.lexists(uefi / 'Build'):
