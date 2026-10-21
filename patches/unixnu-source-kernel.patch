@@ -1,3 +1,39 @@
+diff --git a/patches/xnu/offline-component-load-probes.patch b/patches/xnu/offline-component-load-probes.patch
+index 94bf523..69d5e48 100644
+--- a/patches/xnu/offline-component-load-probes.patch
++++ b/patches/xnu/offline-component-load-probes.patch
+@@ -1,6 +1,6 @@
+ --- a/bsd/kern/bsd_init.c
+ +++ b/bsd/kern/bsd_init.c
+-@@ -478,5 +478,88 @@
++@@ -478,5 +478,90 @@
+   * of the tro_ucred field so that the uthread structure can be
+   * used like any other.
+   */
+@@ -72,12 +72,14 @@
+ +	}
+ +	native_mobile_graphics_load_status = OSKextLoadKextWithIdentifier("com.apple.iokit.IOMobileGraphicsFamily");
+ +	native_mobile_graphics_probe_checkpoint();
+++#if defined(XNU_NATIVE_LEGACY_DISPLAY) && XNU_NATIVE_LEGACY_DISPLAY
+ +	int legacy_register = 0;
+ +	if (native_mobile_graphics_load_status == 0 &&
+ +	    PE_parse_boot_argn("offline-legacy-register", &legacy_register, sizeof(legacy_register)) && legacy_register) {
+ +		extern void native_legacy_display_probe(void);
+ +		native_legacy_display_probe();
+ +	}
+++#endif
+ +	int client_probe = 0;
+ +	if (native_mobile_graphics_load_status == 0 &&
+ +	    PE_parse_boot_argn("offline-mobile-graphics-client", &client_probe, sizeof(client_probe)) && client_probe) {
+@@ -89,7 +91,7 @@
+ +
+  void
+  bsd_init(void)
+-@@ -698,6 +774,27 @@
++@@ -698,6 +776,27 @@
+  	/* Initialize the file systems. */
+  	bsd_init_kprintf("calling vfsinit\n");
+  	vfsinit();
 diff --git a/scripts/unixnu/cli.py b/scripts/unixnu/cli.py
 index 3f79809..cc6b41a 100644
 --- a/scripts/unixnu/cli.py
@@ -116,14 +152,15 @@ index 0000000..6c79ba0
 +    main()
 diff --git a/scripts/test-kernel-source.py b/scripts/test-kernel-source.py
 new file mode 100644
-index 0000000..2899ef2
+index 0000000..ffa907d
 --- /dev/null
 +++ b/scripts/test-kernel-source.py
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,90 @@
 +#!/usr/bin/env python3
 +"""Source-kernel publication and compile-record regression checks (no Xcode)."""
 +import importlib.util
 +import struct
++import subprocess
 +import tempfile
 +import unittest
 +from pathlib import Path
@@ -193,6 +230,18 @@ index 0000000..2899ef2
 +                                   '-c', 'ArmCpu.cpp', '-o', 'ArmCpu.o'])
 +        with self.assertRaises(ValueError):
 +            arm_platform.compile_command({'file': 'missing', 'arguments': record['arguments']}, Path('a'), Path('b'))
++
++    def test_disabled_legacy_display_has_no_link_reference(self):
++        path = Path(__file__).resolve().parents[1] / 'patches/xnu/offline-component-load-probes.patch'
++        bsd_patch = path.read_text().split('--- a/iokit/')[0]
++        source = '\n'.join(line[1:] for line in bsd_patch.splitlines()
++                           if line.startswith('+') and not line.startswith('+++'))
++        for mode in (None, 0, 1):
++            with self.subTest(mode=mode):
++                flags = [] if mode is None else [f'-DXNU_NATIVE_LEGACY_DISPLAY={mode}']
++                output = subprocess.check_output(
++                    ['cc', '-E', '-P', '-x', 'c', '-DDEVELOPMENT=1', *flags, '-'], input=source, text=True)
++                self.assertEqual(output.count('native_legacy_display_probe'), 2 if mode == 1 else 0)
 +
 +
 +if __name__ == '__main__':
