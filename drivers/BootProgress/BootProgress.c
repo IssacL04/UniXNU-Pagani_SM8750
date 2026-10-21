@@ -10,7 +10,7 @@
 #include <kern/boot_progress.h>
 #include <kern/early_boot_progress.h>
 #include <arm64/proc_reg.h>
-_Static_assert(ARM_PGBYTES == 4096 && T0SZ_BOOT == 25 && CACHE_ATTRINDX_WRITECOMB == 1,
+_Static_assert(ARM_PGBYTES == 4096 && (T0SZ_BOOT == 25 || T0SZ_BOOT == 26) && CACHE_ATTRINDX_WRITECOMB == 1,
                "Early framebuffer map requires the native 4 KiB bootstrap ABI");
 #endif
 #include <DiagFont.h>
@@ -171,8 +171,11 @@ void early_boot_progress_init(boot_args *args)
     early_boot_virt_base = args->virtBase;
     early_boot_stage = 1;
     framebuffer = 0; column = 0; row = LOG_TOP; busy = 0;
-    boot_progress_bind(args->Video.v_baseAddr, args->Video.v_width, args->Video.v_height,
-                       args->Video.v_rowBytes, args->Video.v_depth);
+    framebuffer_pa = 0;
+    if (!geometry(args->Video.v_baseAddr, args->Video.v_width, args->Video.v_height,
+                  args->Video.v_rowBytes, args->Video.v_depth)) return;
+    boot_progress_bind(args->Video.v_baseAddr, (unsigned)args->Video.v_width, (unsigned)args->Video.v_height,
+                       (unsigned)args->Video.v_rowBytes, (unsigned)args->Video.v_depth);
     framebuffer_pa = framebuffer;
     for (unsigned y = 0; y + LINE <= height; y += LINE) clear_line(y);
     unsigned saved = row;
@@ -193,8 +196,8 @@ int early_boot_progress_map(uint64_t *l1, uintptr_t free_page, uintptr_t end)
     if (!framebuffer) return 1;
     uint64_t first = framebuffer_pa & ~(block - 1);
     uint64_t limit = (framebuffer_pa + (uint64_t)stride * 4 * height + block - 1) & ~(block - 1);
-    // T0SZ=25, 4 KiB pages. Reject an incompatible target instead of aliasing its L1.
-    if (limit > (1ULL << 39) || (free_page & 4095) || (end & 4095)) return 0;
+    // The kernel selects a full or half L1 table; never alias addresses beyond it.
+    if (limit > (1ULL << (64 - T0SZ_BOOT)) || (free_page & 4095) || (end & 4095)) return 0;
     for (uint64_t pa = first; pa < limit; pa += block) {
         uint64_t *slot = &l1[(pa >> 30) & 511];
         if (*slot == 0) {

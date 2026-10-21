@@ -6,6 +6,9 @@
 #include <string.h>
 #include <stdio.h>
 #define BOOT_PROGRESS_TEST 1
+#ifndef T0SZ_BOOT
+#define T0SZ_BOOT 26
+#endif
 typedef struct boot_args {
     uint16_t Revision, Version;
     uint64_t virtBase, physBase, memSize, topOfKernelData;
@@ -48,6 +51,11 @@ int main(void)
     assert(!geometry(4, W, H, PITCH * 4, 16));
     assert(!geometry(4, W, 100000, PITCH * 4, 32));
     assert(!geometry(5, W, H, PITCH * 4, 32));
+    args.Video.v_width += 1ULL << 32;
+    early_boot_progress_init(&args);
+    assert(!boot_progress_active() && framebuffer_pa == 0);
+    args.Video.v_width = W;
+    early_boot_progress_init(&args);
 
     uint64_t *tables = aligned_alloc(4096, 4 * 4096);
     assert(tables);
@@ -66,8 +74,11 @@ int main(void)
     memset(tables, 0, 4 * 4096);
     assert(!early_boot_progress_map(tables, (uintptr_t)(tables + 512), (uintptr_t)(tables + 512)));
     assert(tables[0] == 0);
-    framebuffer_pa = (1ULL << 39) - 4096;
+    framebuffer_pa = (1ULL << (64 - T0SZ_BOOT)) - 4096;
     assert(!early_boot_progress_map(tables, (uintptr_t)(tables + 512), (uintptr_t)(tables + 1536)));
+    framebuffer_pa = 1ULL << (64 - T0SZ_BOOT);
+    assert(!early_boot_progress_map(tables, (uintptr_t)(tables + 512), (uintptr_t)(tables + 1536)));
+    assert(tables[0] == 0);
     armcpu_timer_interrupts = 7;
     boot_progress_start(); poll(NULL, NULL);
     assert(poll_count == 1 && armcpu_timer_interrupts == 7);
