@@ -4,15 +4,19 @@
 
 ## XNU 内核适配与 macOS Actions
 
-当前新增的是源码内核的早期启动配置和 UEFI 负载通路。XNU 尚未在 macOS 编译，也未在 13T 实机执行。首个目标是进入 XNU 并初始化 ArmDTPlatform、ArmCpu 与架构定时器；没有根文件系统，因此不以启动 iOS 用户态为本轮验收点。
+当前提供源码内核的早期启动配置和 UEFI 负载通路。XNU 已在 macOS Actions 编译并生成 FAT payload，尚未在 13T 实机执行。首个目标是进入 XNU 并初始化 ArmDTPlatform、ArmCpu 与架构定时器；没有根文件系统，因此不以启动 iOS 用户态为本轮验收点。
 
 | 部分 | 本轮状态 | 执行位置 |
 | --- | --- | --- |
 | DarwinBoot 与 13T BootPayloadDxe | 已加入 DSC/FDF，固件编译通过 | 当前 Linux |
 | Apple 设备树 | `scripts/make-oneplus13t-adt.py`，主机测试对照实际 `sysinfo/live.dtb` 通过 | Linux 或 macOS |
-| XNU 与源码 corecrypto、pthread、ArmDTPlatform、ArmCpu | 已配置 `oneplus13t_defconfig` 与静态库构建步骤，编译待执行 | GitHub Actions macOS runner |
-| FAT payload 与 Android boot.img | 本地工具可构建；已生成仅检查负载读取的测试候选 | 当前 Linux |
+| XNU 与源码 corecrypto、pthread、ArmDTPlatform、ArmCpu | 第 2 次 Actions 构建通过，已输出 `kernel.macho` | GitHub Actions macOS runner |
+| FAT payload 与 Android boot.img | 第 2 次 Actions 已生成 payload；本地已生成 `xnu-source-run-2/boot.img` 并通过解包比对 | macOS Actions 与当前 Linux |
 | kernelcache 预链接、userdata、iOS 用户态 | 未配置，待内核入口验证后接入 | 预链接输入提取与 userdata 工具使用 macOS |
+
+2026-10-21 的[第 1 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39613407803)在最终链接时缺少 `_native_legacy_display_probe`：上游 `offline-component-load-probes.patch` 的一处调用漏了 `XNU_NATIVE_LEGACY_DISPLAY` 条件，关闭显示驱动的 13T 配置仍引用该符号。提交 `e352179` 补上条件并增加预处理回归测试，覆盖未定义、关闭和开启三种情况。[第 2 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39614832285)已成功完成内核与 payload 构建，artifact 为 `oneplus13t-xnu-2`。
+
+本地已下载到 `../UniXNU/out/oneplus13t/actions/run-2/`：源码内核为 21,430,552 字节，payload 为 64 MiB，两者均与云端报告中的哈希一致，FAT 卷内的内核也与独立内核逐字节相同。使用当前 UEFI 与完整原机 DTB 打包得到 `../UniXNU/out/oneplus13t/boot/xnu-source-run-2/boot.img`，大小 75,526,144 字节；固件、DTB 和 ramdisk 的解包比对通过。该候选尚未在手机启动，不能据此认定 XNU 已在 13T 运行。
 
 ### GitHub Actions 负责哪些部分
 
@@ -20,7 +24,7 @@
 
 ### 仓库怎么安排
 
-先创建一个公开仓库 **`你的账号/UniXNU-oneplus13t`**，将本目录作为仓库根目录。使用本仓库的 [OnePlus 13T XNU 工作流](.github/workflows/xnu.yml)，无需另建 UniXNU fork 或 UEFI 仓库。
+设备仓库已发布为 [IssacL04/UniXNU-oneplus13t](https://github.com/IssacL04/UniXNU-oneplus13t)，本目录就是仓库根目录。使用本仓库的 [OnePlus 13T XNU 工作流](.github/workflows/xnu.yml)，无需另建 UniXNU fork 或 UEFI 仓库。
 
 该工作流在 `macos-15` 上拉取上游 UniXNU 的固定提交 `b6ae99c17194e6a18fd819d3148e69fe405e91fc`，应用 [源码内核补丁](patches/unixnu-source-kernel.patch)，选中 `oneplus13t_defconfig`，然后执行 `build kernel payload`。补丁包含 `source_only`、ArmDTPlatform/ArmCpu 的静态库构建脚本与相应回归测试。Apple 源码版本沿用该提交的 `feeds.toml` 固定值。更新上游时，应同时检查补丁能否应用。
 
@@ -30,7 +34,7 @@
 
 ### 第一次发布到 GitHub
 
-本轮已经准备好工作流和补丁，但尚未创建远端仓库、提交代码或执行云端编译。当前 WSL 没有安装 `gh`，也没有可用的 GitHub token。下面的登录在你自己的浏览器中完成；命令会创建公开仓库并上传所列源码。
+当前工作区已安装并登录 `gh`，远端仓库也已创建。日常使用直接跳到下一节“触发构建与下载结果”。以下命令保留给从零部署的情况：登录在你自己的浏览器中完成，随后创建公开仓库并上传所列源码；已有仓库无需重复执行。
 
 在 WSL 终端执行一次：
 
@@ -70,7 +74,7 @@ gh workflow run xnu.yml --ref main
 gh run list --workflow xnu.yml --limit 5
 ```
 
-任务会依次检查补丁和测试、安装工具并检查 iPhoneOS SDK、拉取源码、构建内核与 FAT 负载。首次云端构建尚未执行，因此目前不承诺耗时或编译成功。超时上限为 6 小时。XNU 的第一遍 bootstrap 用于生成编译参数记录，最终以整个构建步骤的结果为准。
+任务会依次检查补丁和测试、安装工具并检查 iPhoneOS SDK、拉取源码、构建内核与 FAT 负载。每次使用新 runner 从源码构建，耗时随网络和 runner 状态变化，超时上限为 6 小时。XNU 的第一遍 bootstrap 用于生成编译参数记录，最终以整个构建步骤的结果为准。
 
 构建完成后，打开这次运行，在页面下方 **Artifacts** 下载 `oneplus13t-xnu-运行序号`。需登录 GitHub 才能下载。[下载说明](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts)
 
@@ -95,13 +99,13 @@ unixnu.lock
 ```sh
 cd /home/enc3l/Project/UniXNU_SM8750/UniXNU
 export PATH=/home/enc3l/Project/OP_Kernel_Dev/src/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/bin:$PATH
-unzip /path/to/oneplus13t-xnu-1.zip -d out/oneplus13t/actions/run-1
-test -s out/oneplus13t/actions/run-1/kernel/kernel.macho
-test -s out/oneplus13t/actions/run-1/payload/payload.img
+unzip /path/to/oneplus13t-xnu-2.zip -d out/oneplus13t/actions/run-2
+test -s out/oneplus13t/actions/run-2/kernel/kernel.macho
+test -s out/oneplus13t/actions/run-2/payload/payload.img
 ./unixnu bootimg -D ../UniXNU-oneplus13t --uefi ../uefi-oneplus13t \
   --dtb ../UniXNU-oneplus13t/.cache/firmware/vendor_boot/dtb \
-  --ramdisk out/oneplus13t/actions/run-1/payload/payload.img \
-  -o out/oneplus13t/boot/xnu-source-run-1/boot.img
+  --ramdisk out/oneplus13t/actions/run-2/payload/payload.img \
+  -o out/oneplus13t/boot/xnu-source-run-2/boot.img
 ```
 
 前两项文件检查应均成功，再执行打包。新的候选不会覆盖 `menu-keys`、`no-sdcc` 或 `payload-smoke`。将生成的 `boot.img` 复制到 Windows 后，用已验证的 `fastboot boot` 临时启动路径测试；不要直接刷写 boot 分区。
