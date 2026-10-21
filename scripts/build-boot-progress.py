@@ -44,7 +44,7 @@ def main():
     undefined = subprocess.check_output(['xcrun', 'nm', '-u', obj], text=True)
     if any(name in undefined for name in ('_memset', '_memcpy', '_bzero', 'stack_chk', 'chkstk')):
         raise SystemExit('Early console unexpectedly depends on a compiler runtime helper: ' + undefined)
-    assembly = subprocess.check_output(['llvm-objdump', '-d', obj], text=True)
+    assembly = subprocess.check_output(['llvm-objdump', '-d', '--no-show-raw-insn', '--no-leading-addr', obj], text=True)
     if re.search(r'\b(?:[qds][0-9]+|v[0-9]+\.[0-9a-z]+)\b', assembly):
         raise SystemExit('Early/IRQ console unexpectedly uses FP/SIMD registers')
     archive = output / 'libBootProgress.a'
