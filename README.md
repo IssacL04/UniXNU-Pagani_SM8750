@@ -36,7 +36,7 @@
 | 本仓库 `UniXNU-Sun_SM8750` | [设备仓库](https://github.com/IssacL04/UniXNU-Sun_SM8750)：13T 配置、诊断驱动、完整适配补丁与构建入口 |
 | `../UEFI-Sun_SM8750` | [UEFI 仓库](https://github.com/IssacL04/UEFI-Sun_SM8750)：BootShim、SEC、菜单交接及 13T 板级代码 |
 
-2026-10-22 已将官方检出同步至 `d9460ebbbf43dd7f21b0ef3f62e9437c35b2315c`，并把本地改动完整保存到 [适配补丁](patches/unixnu-source-kernel.patch)。`upstream.rev` 固定设备构建所用的上游提交。补丁覆盖源码内核、ArmDTPlatform/ArmCpu、DarwinBoot、菜单状态、boot.img 打包和此前的移植文档；官方目录及子模块保持干净。
+2026-10-22 已将官方检出同步至 `5a9264bd91fa52821fc4c333f2e8ce8a28e35981`，并把本地改动完整保存到 [适配补丁](patches/unixnu-source-kernel.patch)。设备构建的 `upstream.rev` 固定为本轮已验证的 `d9460ebbbf43dd7f21b0ef3f62e9437c35b2315c`；官方目录后续快进不改变这条构建基线。补丁覆盖源码内核、ArmDTPlatform/ArmCpu、DarwinBoot、菜单状态、boot.img 打包和此前的移植文档；官方目录及子模块保持干净。
 
 从本仓库执行 `./unixnu`。入口会优先从同级官方检出准备独立副本；没有该目录时从 GitHub 获取。补丁仅应用到本仓库 `.cache/upstream-<提交>-<补丁摘要>/`。相同版本直接复用，修改提交或补丁会生成新副本，不覆盖已有工作副本中的编辑。需要长期保留的适配应更新到仓库补丁中。
 
