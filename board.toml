@@ -1,7 +1,7 @@
 [board]
 name = "oneplus13t"
 soc = "SM8750"
-description = "OnePlus 13T PKX110: XNU source-kernel bring-up; hardware handoff untested"
+description = "OnePlus 13T PKX110: XNU source-kernel bring-up with early screen diagnostics"
 kit = "oneplus13t"
 
 [kernel]
@@ -28,6 +28,10 @@ kernel_args = ["-v", "serial=0", "debug=0x14e", "cpus=1"]
 tool = "scripts/make-oneplus13t-adt.py"
 owned_memory_size = "0x10000000"
 cpu_regs = "0"
+
+[bootimg]
+# This ABL loads init_boot's ramdisk even during fastboot boot.
+embed_payload = true
 
 [firmware]
 config = "oneplus13t"
@@ -56,4 +60,4 @@ DEVICE_MODEL = "oneplus13t"
 ENABLE_SECUREBOOT = "1"
 MEMORY_PROTECTION = "TRUE"
 SHIP_MODE = "FALSE"
-BUILDID_STRING = "oneplus13t-xnu-loader-20261021"
+BUILDID_STRING = "oneplus13t-xnu-early-progress-20261021"

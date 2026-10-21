@@ -34,24 +34,86 @@ index 94bf523..69d5e48 100644
   	/* Initialize the file systems. */
   	bsd_init_kprintf("calling vfsinit\n");
   	vfsinit();
-diff --git a/scripts/unixnu/cli.py b/scripts/unixnu/cli.py
-index 3f79809..cc6b41a 100644
---- a/scripts/unixnu/cli.py
-+++ b/scripts/unixnu/cli.py
-@@ -126,7 +126,10 @@ def cmd_build(ctx):
-     modules = prepare(ctx, steps + (['kernel'] if 'prelink' in steps else []))
-     if 'kernel' in steps:
-         kernel.build(ctx, modules)
--        kernel.prelink(ctx)
-+        if ctx.board.get('kernel', {}).get('source_only', False):
-+            kernel.export_source(ctx)
-+        else:
-+            kernel.prelink(ctx)
-     elif 'prelink' in steps:
-         kernel.prelink(ctx)
-     if 'package' in steps:
+diff --git a/scripts/build-xnu-4k-baseline.sh b/scripts/build-xnu-4k-baseline.sh
+index c0404ad..461e5ca 100755
+--- a/scripts/build-xnu-4k-baseline.sh
++++ b/scripts/build-xnu-4k-baseline.sh
+@@ -35,7 +35,7 @@ fi
+ # Remove them first so earlier independent patches retain their idempotent checks.
+ # The same holds for the boot-time GPU addon mount (zzy), which edits the owner Data mount function inside the systemos patch.
+ # Reverse newest first; the loop below re-applies them in name order.
+-for LATE_PATCH in "$ROOT/patches/xnu/zzz-boot-progress.patch" "$ROOT/patches/xnu/zzy-native-gpu-addon-mount.patch"; do
++for LATE_PATCH in "$ROOT/patches/xnu/zzzz-early-boot-progress.patch" "$ROOT/patches/xnu/zzz-boot-progress.patch" "$ROOT/patches/xnu/zzy-native-gpu-addon-mount.patch"; do
+   if git -C .cache/xnu-work apply --reverse --check "$LATE_PATCH" >/dev/null 2>&1; then
+     git -C .cache/xnu-work apply --reverse "$LATE_PATCH"
+   fi
+@@ -56,27 +56,36 @@ if [ "$BOOTSTRAP" != 0 ] && [ "$BOOTSTRAP" != 1 ]; then
+   exit 1
+ fi
+ BOOT_PROGRESS=${XNU_BOOT_PROGRESS:-0}
++EARLY_BOOT_PROGRESS=${XNU_EARLY_BOOT_PROGRESS:-0}
++if [ "$EARLY_BOOT_PROGRESS" != 0 ] && [ "$EARLY_BOOT_PROGRESS" != 1 ]; then
++  echo 'XNU_EARLY_BOOT_PROGRESS must be 0 or 1' >&2
++  exit 1
++fi
++if [ "$EARLY_BOOT_PROGRESS" = 1 ] && { [ "$BOOT_PROGRESS" != 1 ] || [ "${XNU_ARMCPU:-0}" != 1 ] || [ "${XNU_ARM_DT_PLATFORM:-0}" != 1 ]; }; then
++  echo 'Early boot progress requires BOOT_PROGRESS, ArmCpu and ArmDTPlatform' >&2
++  exit 1
++fi
+ if [ "$BOOT_PROGRESS" != 0 ] && [ "$BOOT_PROGRESS" != 1 ]; then
+   echo 'XNU_BOOT_PROGRESS must be 0 or 1' >&2
+   exit 1
+ fi
+ if [ "$BOOT_PROGRESS" = 1 ]; then
+-  if [ "${XNU_NATIVE_UFS:-0}" != 1 ] || [ "${XNU_OWNER_ROOT_AUDIT:-0}" != 1 ] || \
+-     [ "${XNU_NATIVE_VIRTIO_BLOCK:-0}" != 1 ] || [ "${XNU_SOURCE_CORECRYPTO14:-0}" != 1 ]; then
++  if [ "$EARLY_BOOT_PROGRESS" != 1 ] && { [ "${XNU_NATIVE_UFS:-0}" != 1 ] || [ "${XNU_OWNER_ROOT_AUDIT:-0}" != 1 ] || \
++     [ "${XNU_NATIVE_VIRTIO_BLOCK:-0}" != 1 ] || [ "${XNU_SOURCE_CORECRYPTO14:-0}" != 1 ]; }; then
+     echo 'Boot progress requires the audited UFS/owner-root, Virtio and source-corecrypto build' >&2
+     exit 1
+   fi
+   python3 scripts/build-boot-progress.py
+ fi
+-python3 - "$BOOT_PROGRESS" <<'PY'
++python3 - "$BOOT_PROGRESS" "$EARLY_BOOT_PROGRESS" <<'PY'
+ from pathlib import Path
+ import hashlib, sys
+ mode = sys.argv[1]
+ out = Path('build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837')
+ stamp = out / '.boot-progress-mode'
+-identity = mode + ':' + (hashlib.sha256(Path('build/boot-progress/libBootProgress.a').read_bytes()).hexdigest() if mode == '1' else 'disabled')
++identity = mode + ':' + sys.argv[2] + ':' + (hashlib.sha256(Path('build/boot-progress/libBootProgress.a').read_bytes()).hexdigest() if mode == '1' else 'disabled')
+ if not stamp.exists() or stamp.read_text() != identity:
+-    for directory, names in [('osfmk', ['arm_init','startup','video_console','serial_console','sleh']),
++    for directory, names in [('osfmk', ['start','arm_init','startup','video_console','serial_console','sleh']),
+                              ('bsd', ['bsd_init','kern_exec','kern_exit']), ('pexpert', ['pe_kprintf'])]:
+         for name in names:
+             (out / directory / 'DEVELOPMENT' / (name + '.o')).unlink(missing_ok=True)
+@@ -509,10 +518,12 @@ if [ "$NATIVE_ARCH_TIMER" = 1 ] && [ "${XNU_ARMCPU:-0}" != 1 ]; then
+   echo 'Architectural timer entry requires the actual ArmCpu interrupt provider' >&2
+   exit 1
+ fi
+-EXTRA_MAKE_ARGS+=("start.o_SFLAGS_ADD=-DXNU_NATIVE_ARCH_TIMER=$NATIVE_ARCH_TIMER")
++EXTRA_MAKE_ARGS+=("start.o_SFLAGS_ADD=-DXNU_NATIVE_ARCH_TIMER=$NATIVE_ARCH_TIMER -DXNU_EARLY_BOOT_PROGRESS=$EARLY_BOOT_PROGRESS")
++EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_NATIVE_ARCH_TIMER=$NATIVE_ARCH_TIMER"
+ NATIVE_TIMER_STAMP=$ROOT/build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/.native-arch-timer-mode
+ if [ "$(cat "$NATIVE_TIMER_STAMP" 2>/dev/null || echo 0)" != "$NATIVE_ARCH_TIMER" ]; then
+   rm -f "$ROOT/build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT/start.o"
++  rm -f "$ROOT/build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/pexpert/DEVELOPMENT/pe_identify_machine.o"
+   printf '%s\n' "$NATIVE_ARCH_TIMER" > "$NATIVE_TIMER_STAMP"
+ fi
+ NATIVE_PAN=${XNU_NATIVE_PAN:-0}
+@@ -761,7 +772,7 @@ if not stamp.exists() or stamp.read_text() != identity:
+     directory.mkdir(parents=True, exist_ok=True)
+     stamp.write_text(identity)
+ PY
+-EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_BOOT_PROGRESS=$BOOT_PROGRESS"
++EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_BOOT_PROGRESS=$BOOT_PROGRESS -DXNU_EARLY_BOOT_PROGRESS=$EARLY_BOOT_PROGRESS"
+ make -C .cache/xnu-work "${XNU_BUILD_TARGET:-build}" SDKROOT="${XNU_SDKROOT:-iphoneos}" ARCH_CONFIGS=ARM64 \
+   MACHINE_CONFIGS=BCM2837 KERNEL_CONFIGS=DEVELOPMENT \
+   ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG=arm64 LARGE_MEMORY_DEFINE=-UARM_LARGE_MEMORY \
 diff --git a/scripts/unixnu/kernel.py b/scripts/unixnu/kernel.py
-index 3c38159..20071cb 100644
+index 3c38159..95bd61a 100644
 --- a/scripts/unixnu/kernel.py
 +++ b/scripts/unixnu/kernel.py
 @@ -1,6 +1,8 @@
@@ -63,6 +125,15 @@ index 3c38159..20071cb 100644
  from pathlib import Path
  
  from . import ipsw
+@@ -84,7 +86,7 @@ def build(ctx, modules):
+         # skip the archive checks and link without the archives, so it stops at the link and only the records are
+         # required of it.
+         log('kernel: bootstrap pass for the compile records')
+-        subprocess_env = {**env, 'XNU_BOOT_PROGRESS': '0', 'XNU_BOOTSTRAP': '1'}
++        subprocess_env = {**env, 'XNU_BOOT_PROGRESS': '0', 'XNU_EARLY_BOOT_PROGRESS': '0', 'XNU_BOOTSTRAP': '1'}
+         try:
+             run(['bash', script], cwd=ctx.tree, env=subprocess_env, log_file=ctx.logs / 'kernel-bootstrap.log')
+         except Error:
 @@ -94,6 +96,30 @@ def build(ctx, modules):
      run(['bash', script], cwd=ctx.tree, env=env, log_file=ctx.logs / 'kernel.log')
  
@@ -94,6 +165,22 @@ index 3c38159..20071cb 100644
  def prelink(ctx):
      """Produce out/<device>/kernel/kernel.macho from the XNU build and the original kernelcache."""
      log('kernel: prelink')
+diff --git a/scripts/unixnu/cli.py b/scripts/unixnu/cli.py
+index 3f79809..cc6b41a 100644
+--- a/scripts/unixnu/cli.py
++++ b/scripts/unixnu/cli.py
+@@ -126,7 +126,10 @@ def cmd_build(ctx):
+     modules = prepare(ctx, steps + (['kernel'] if 'prelink' in steps else []))
+     if 'kernel' in steps:
+         kernel.build(ctx, modules)
+-        kernel.prelink(ctx)
++        if ctx.board.get('kernel', {}).get('source_only', False):
++            kernel.export_source(ctx)
++        else:
++            kernel.prelink(ctx)
+     elif 'prelink' in steps:
+         kernel.prelink(ctx)
+     if 'package' in steps:
 diff --git a/scripts/build-arm-platform.py b/scripts/build-arm-platform.py
 new file mode 100644
 index 0000000..6c79ba0
@@ -242,6 +329,539 @@ index 0000000..ffa907d
 +                output = subprocess.check_output(
 +                    ['cc', '-E', '-P', '-x', 'c', '-DDEVELOPMENT=1', *flags, '-'], input=source, text=True)
 +                self.assertEqual(output.count('native_legacy_display_probe'), 2 if mode == 1 else 0)
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/patches/xnu/native-arch-timer-frequency.patch b/patches/xnu/native-arch-timer-frequency.patch
+new file mode 100644
+index 0000000..53459bf
+--- /dev/null
++++ b/patches/xnu/native-arch-timer-frequency.patch
+@@ -0,0 +1,26 @@
++--- a/pexpert/arm/pe_identify_machine.c
+++++ b/pexpert/arm/pe_identify_machine.c
++@@ -146,11 +146,23 @@
++ 		}
++ 	}
++ 
+++#if defined(XNU_NATIVE_ARCH_TIMER) && XNU_NATIVE_ARCH_TIMER
+++	/* Architectural counter conversion must use the frequency programmed by firmware. */
+++	uint64_t counter_frequency;
+++	__asm__ volatile ("mrs %0, cntfrq_el0" : "=r"(counter_frequency));
+++	if (counter_frequency == 0 || counter_frequency > UINT32_MAX) {
+++		panic("Invalid architectural counter frequency: %llu", counter_frequency);
+++	}
+++	gPEClockFrequencyInfo.timebase_frequency_hz = (uint32_t)counter_frequency;
+++	gPEClockFrequencyInfo.dec_clock_rate_hz = (uint32_t)counter_frequency;
+++#endif
+++
++ 	/* Set the num / den pairs form the hz values. */
++ 	gPEClockFrequencyInfo.bus_clock_rate_num = gPEClockFrequencyInfo.bus_clock_rate_hz;
++ 	gPEClockFrequencyInfo.bus_clock_rate_den = 1;
++ 
++ 	gPEClockFrequencyInfo.bus_to_cpu_rate_num =
+++	    (gPEClockFrequencyInfo.bus_clock_rate_hz == 0) ? 0 :
++ 	    (2 * gPEClockFrequencyInfo.cpu_clock_rate_hz) / gPEClockFrequencyInfo.bus_clock_rate_hz;
++ 	gPEClockFrequencyInfo.bus_to_cpu_rate_den = 2;
++ 
+diff --git a/patches/xnu/zzzz-early-boot-progress.patch b/patches/xnu/zzzz-early-boot-progress.patch
+new file mode 100644
+index 0000000..9747910
+--- /dev/null
++++ b/patches/xnu/zzzz-early-boot-progress.patch
+@@ -0,0 +1,218 @@
++--- a/osfmk/arm64/start.s
+++++ b/osfmk/arm64/start.s
++@@ -224,7 +224,11 @@
++ 	.align	3
++ 	.globl EXT(_start)
++ LEXT(_start)
+++#if XNU_EARLY_BOOT_PROGRESS
+++	b EXT(early_boot_progress_entry)
+++#else
++ 	b	EXT(start_first_cpu)
+++#endif
++ 
++ 
++ /*
++@@ -472,8 +476,13 @@
++ 	mov		x21, #0
++ 
++ 	// Set low reset vector before attempting any loads
+++#if XNU_EARLY_BOOT_PROGRESS
+++	adrp x0, EXT(early_boot_progress_vectors)@page
+++	add x0, x0, EXT(early_boot_progress_vectors)@pageoff
+++#else
++ 	adrp	x0, EXT(LowExceptionVectorBase)@page
++ 	add		x0, x0, EXT(LowExceptionVectorBase)@pageoff
+++#endif
++ 	MSR_VBAR_EL1_X0
++ 
++ 
++@@ -623,6 +632,24 @@
++ 	// the early debugger rather than corrupting memory or forging a map.
++ 	b Lbootstrap_tables_exhausted
++ Lbootstrap_tables_ready:
+++#if XNU_EARLY_BOOT_PROGRESS
+++	// start_first_cpu has selected virtual stacks before enabling the MMU.
+++	mov x27, sp
+++	mov x28, lr
+++	adrp x9, EXT(early_boot_progress_stack)@page
+++	add x9, x9, EXT(early_boot_progress_stack)@pageoff
+++	add x9, x9, #4096
+++	mov sp, x9
+++	mov x0, x25
+++	add x1, x2, #PGBYTES
+++	add x2, x25, #(BOOTSTRAP_TABLE_BYTES >> 12), lsl #12
+++	bl EXT(early_boot_progress_map)
+++	cbnz x0, 1f
+++	brk #0xe01
+++1:
+++	mov lr, x28
+++	mov sp, x27
+++#endif
++ 	/* Ensure TTEs are visible */
++ 	dsb		ish
++ 
++@@ -750,10 +777,17 @@
++ 
++ 	cbnz		x21, 1f
++ #endif /* __ARM_KERNEL_PROTECT__ */
+++#if XNU_EARLY_BOOT_PROGRESS
+++	adrp x0, EXT(early_boot_progress_vectors)@page
+++	add x0, x0, EXT(early_boot_progress_vectors)@pageoff
+++#else
++ 	adrp	x0, EXT(ExceptionVectorsBase)@page			// Load exception vectors base address
++ 	add		x0, x0, EXT(ExceptionVectorsBase)@pageoff
+++#endif
+++#if !XNU_EARLY_BOOT_PROGRESS
++ 	add		x0, x0, x22									// Convert exception vector address to KVA
++ 	sub		x0, x0, x23
+++#endif
++ 1:
++ 	MSR_VBAR_EL1_X0
++ 
++@@ -771,6 +805,18 @@
++ 	cmp		x0, x1
++ 	bne		.
++ #endif /* !VMAPPLE */
+++
+++#if XNU_EARLY_BOOT_PROGRESS
+++	adrp x0, EXT(early_boot_progress_vectors)@page
+++	add x0, x0, EXT(early_boot_progress_vectors)@pageoff
+++	add x0, x0, x22
+++	sub x0, x0, x23
+++	msr VBAR_EL1, x0
+++	isb
+++	mov x28, lr
+++	bl EXT(early_boot_progress_mmu_on)
+++	mov lr, x28
+++#endif
++ 
++ #if (!CONFIG_KERNEL_INTEGRITY || (CONFIG_KERNEL_INTEGRITY && !defined(KERNEL_INTEGRITY_WT)))
++ 	/* Watchtower
++--- a/osfmk/arm/arm_init.c
+++++ b/osfmk/arm/arm_init.c
++@@ -1,3 +1,4 @@
+++#include <kern/early_boot_progress.h>
++ #include <kern/boot_progress.h>
++ /*
++  * Copyright (c) 2007-2021 Apple Inc. All rights reserved.
++@@ -354,6 +355,7 @@
++ 	DTEntry chosen = NULL;
++ 	unsigned int dt_entry_size = 0;
++ 
+++	early_boot_progress_arm_init();
++ 	arm_setup_pre_sign();
++ 
++ 	arm_slide_rebase_and_sign_image();
++@@ -532,7 +534,9 @@
++ #endif  /* __ARM_PAN_AVAILABLE__ */
++ 
++ 	boot_progress_stage("arm_vm_init enter");
+++	early_boot_progress_suspend();
++ 	arm_vm_init(xmaxmem, args);
+++	early_boot_progress_vm_ready();
++ 	boot_progress_stage("arm_vm_init returned");
++ 
++ 	if (debug_boot_arg) {
++--- a/osfmk/arm64/sleh.c
+++++ b/osfmk/arm64/sleh.c
++@@ -1,3 +1,4 @@
+++#include <kern/early_boot_progress.h>
++ #include <kern/boot_progress.h>
++ /*
++  * Copyright (c) 2012-2023 Apple Inc. All rights reserved.
++@@ -511,6 +512,7 @@
++ {
++ 	esr_exception_class_t  class = ESR_EC(esr);
++ 	arm_saved_state_t    * state = &context->ss;
+++	boot_progress_kernel_exception(esr, get_saved_state_pc(state), far);
++ 
++ 	switch (class) {
++ 	case ESR_EC_UNCATEGORIZED:
++@@ -1764,12 +1766,14 @@
++ 			}
++ 			return;
++ 		} else {
+++			boot_progress_kernel_exception(esr, get_saved_state_pc(state), fault_addr);
++ 			panic_with_thread_kernel_state("Unexpected page fault under dtrace_probe", state);
++ 		}
++ 	}
++ #endif
++ 
++ 	if (ml_at_interrupt_context()) {
+++		boot_progress_kernel_exception(esr, get_saved_state_pc(state), fault_addr);
++ 		panic_with_thread_kernel_state("Unexpected abort while on interrupt stack.", state);
++ 	}
++ 
++@@ -1791,6 +1795,7 @@
++ #endif /* CONFIG_XNUPOST */
++ 
++ 		if (fault_addr >= gVirtBase && fault_addr < static_memory_end) {
+++			boot_progress_kernel_exception(esr, get_saved_state_pc(state), fault_addr);
++ 			panic_with_thread_kernel_state("Unexpected fault in kernel static region\n", state);
++ 		}
++ 
++@@ -1828,6 +1833,7 @@
++ 		}
++ 
++ 		if (fault_addr >= gVirtBase && fault_addr < static_memory_end) {
+++			boot_progress_kernel_exception(esr, get_saved_state_pc(state), fault_addr);
++ 			panic_with_thread_kernel_state("Unexpected fault in kernel static region\n", state);
++ 		}
++ 
++@@ -1868,6 +1874,7 @@
++ 			handle_kernel_abort_recover(state, esr, fault_addr, thread, recover);
++ 			return;
++ 		}
+++		boot_progress_kernel_exception(esr, get_saved_state_pc(state), fault_addr);
++ 		panic_with_thread_kernel_state("Unaligned kernel data abort.", state);
++ 	} else if (is_parity_error(fault_code)) {
++ #if defined(APPLE_ARM64_ARCH_FAMILY)
++@@ -1875,11 +1882,14 @@
++ 		 * Platform errors are handled in sleh_sync before interrupts are enabled.
++ 		 */
++ #else
+++		boot_progress_kernel_exception(esr, get_saved_state_pc(state), fault_addr);
++ 		panic_with_thread_kernel_state("Kernel parity error.", state);
++ #endif
++ 	} else {
++ 		kprintf("Unclassified kernel abort (fault_code=0x%x)\n", fault_code);
++ 	}
+++
+++	boot_progress_kernel_exception(esr, get_saved_state_pc(state), fault_addr);
++ 
++ 	panic_with_thread_kernel_state("Kernel data abort.", state);
++ }
++--- a/osfmk/kern/Makefile
+++++ b/osfmk/kern/Makefile
++@@ -114,6 +114,7 @@
++ 
++ 
++ XNU_ONLY_EXPORTS = \
+++	early_boot_progress.h \
++ 	boot_progress.h \
++ 	arcade.h \
++ 	btlog.h \
++--- /dev/null
+++++ b/osfmk/kern/early_boot_progress.h
++@@ -0,0 +1,21 @@
+++// SPDX-License-Identifier: BSD-2-Clause-Patent
+++#ifndef XNU_EARLY_BOOT_PROGRESS_H
+++#define XNU_EARLY_BOOT_PROGRESS_H
+++#include <stdint.h>
+++#if defined(XNU_EARLY_BOOT_PROGRESS) && XNU_EARLY_BOOT_PROGRESS
+++struct boot_args;
+++void early_boot_progress_init(struct boot_args *);
+++int early_boot_progress_map(uint64_t *, uintptr_t, uintptr_t);
+++void early_boot_progress_mmu_on(void);
+++void early_boot_progress_arm_init(void);
+++void early_boot_progress_suspend(void);
+++void early_boot_progress_vm_ready(void);
+++void early_boot_progress_fatal(struct boot_args *, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+++void boot_progress_kernel_exception(uint64_t, uint64_t, uint64_t);
+++#else
+++#define early_boot_progress_arm_init() ((void)0)
+++#define early_boot_progress_suspend() ((void)0)
+++#define early_boot_progress_vm_ready() ((void)0)
+++#define boot_progress_kernel_exception(...) ((void)0)
+++#endif
+++#endif
+diff --git a/drivers/ArmCpu/ArmCpu.cpp b/drivers/ArmCpu/ArmCpu.cpp
+index a1f7bc6..72cdd28 100644
+--- a/drivers/ArmCpu/ArmCpu.cpp
++++ b/drivers/ArmCpu/ArmCpu.cpp
+@@ -311,13 +311,19 @@ bool ArmCpu::wakeRedistributor (bool local)
+ 
+ bool ArmCpu::prepareGic (void)
+ {
+-  if (!mapGic () || !initDistributor () || !wakeRedistributor (true)) { return false; }
++  kprintf ("ArmCpu: map GICv3\n");
++  if (!mapGic ()) { kprintf ("ArmCpu: GIC mapping failed\n"); return false; }
++  kprintf ("ArmCpu: initialize distributor\n");
++  if (!initDistributor ()) { kprintf ("ArmCpu: distributor initialization failed\n"); return false; }
++  kprintf ("ArmCpu: wake boot redistributor\n");
++  if (!wakeRedistributor (true)) { kprintf ("ArmCpu: redistributor wake failed\n"); return false; }
+   gGicShared = 1;
+   return true;
+ }
+ 
+ void ArmCpu::enableGic (void)
+ {
++  kprintf ("ArmCpu: enable CPU GIC interface\n");
+   uint64_t value;
+   __asm__ volatile ("mrs %0, icc_sre_el1" : "=r" (value));
+   value |= 1;
+@@ -353,11 +359,16 @@ void ArmCpu::enableGic (void)
+     armcpu_gic_boot[7] = static_cast<uint32_t> (sre);
+   }
+   armcpu_gic_ready = 1;
++  if (!secondary) {
++    kprintf ("ArmCpu: GIC ready PPI=%08x PMR=%x IGRPEN1=%x SRE=%x\n",
++             armcpu_gic_boot[1], armcpu_gic_boot[5], armcpu_gic_boot[6], armcpu_gic_boot[7]);
++  }
+ }
+ 
+ 
+ bool ArmCpu::start (IOService *provider)
+ {
++  kprintf ("ArmCpu: start\n");
+   unsigned skip = 0;
+   PE_parse_boot_argn ("armcpu-skip-gic", &skip, sizeof (skip));
+   skipGic = skip != 0;
+@@ -724,6 +735,11 @@ void ArmCpu::enableCPUTimeBase (bool enabled)
+ {
+   uint64_t value = enabled ? 1 : 2;
+   __asm__ volatile ("msr cntv_ctl_el0, %0; isb" :: "r" (value) : "memory");
++  if (enabled && !secondary) {
++    uint64_t frequency, control;
++    __asm__ volatile ("mrs %0, cntfrq_el0; mrs %1, cntv_ctl_el0" : "=r" (frequency), "=r" (control));
++    kprintf ("ArmCpu: virtual timer Hz=%llu CTL=%llx, PPI 27\n", frequency, control);
++  }
+ }
+ 
+ void ArmCpu::quiesceCPU (void)
+diff --git a/drivers/ArmDTPlatform/ArmDTPlatform.cpp b/drivers/ArmDTPlatform/ArmDTPlatform.cpp
+index fdafc43..a36187f 100644
+--- a/drivers/ArmDTPlatform/ArmDTPlatform.cpp
++++ b/drivers/ArmDTPlatform/ArmDTPlatform.cpp
+@@ -122,6 +122,7 @@ static void platformStageReset (void)
+ 
+ bool ArmDTPlatform::configure (IOService *provider)
+ {
++  kprintf ("ArmDTPlatform: configure\n");
+   IORegistryEntry *cpus = provider->childFromPath ("cpus", gIODTPlane);
+   IORegistryEntry *bus = provider->childFromPath ("arm-io", gIODTPlane);
+   IORegistryEntry *defaults = provider->childFromPath ("defaults", gIODTPlane);
+@@ -186,6 +187,7 @@ bool ArmDTPlatform::configure (IOService *provider)
+   armdt_platform_defaults_count = defaultsCount;
+   armdt_platform_nvram_proxy = 1;
+   armdt_platform_configured = 1;
++  kprintf ("ArmDTPlatform: CPU nubs=%u bus nubs=%u, NVRAM proxy ready\n", cpuCount, busCount);
+   // Publish the bus child devices (interrupt controller, VirtIO MMIO, ...)
+   // as real IOPlatformDevice nubs. No driver is started here.
+   if (!createDeviceNubs (provider)) {
+diff --git a/drivers/DarwinBoot/DarwinBootPkg/Driver/DarwinBoot.c b/drivers/DarwinBoot/DarwinBootPkg/Driver/DarwinBoot.c
+index 109479e..56bbd64 100644
+--- a/drivers/DarwinBoot/DarwinBootPkg/Driver/DarwinBoot.c
++++ b/drivers/DarwinBoot/DarwinBootPkg/Driver/DarwinBoot.c
+@@ -182,7 +182,7 @@ ParseKernel (CONST UINT8 *Data, UINTN Size, KERNEL *Kernel)
+ 
+ STATIC
+ BOOLEAN
+-AdtNode (CONST UINT8 *Data, UINTN Size, UINTN *Offset, UINTN Depth, UINTN ParentPath, UINTN *RamdiskOffset, UINTN *TrustCacheOffset, UINT64 *WindowSize, BOOLEAN *KeepPacked)
++AdtNode (CONST UINT8 *Data, UINTN Size, UINTN *Offset, UINTN Depth, UINTN ParentPath, UINTN *RamdiskOffset, UINTN *TrustCacheOffset, UINT64 *WindowSize, BOOLEAN *KeepPacked, UINTN DramOffsets[2])
+ {
+   UINT32 Properties;
+   UINT32 Children;
+@@ -192,6 +192,8 @@ AdtNode (CONST UINT8 *Data, UINTN Size, UINTN *Offset, UINTN Depth, UINTN Parent
+   UINTN  Candidate;
+   UINTN  TrustCandidate;
+   UINTN  MemoryCandidate;
++  UINTN  DramCandidate[2];
++  UINTN  Field;
+   CONST UINT8 *Name;
+   UINTN  NameLength;
+ 
+@@ -200,6 +202,7 @@ AdtNode (CONST UINT8 *Data, UINTN Size, UINTN *Offset, UINTN Depth, UINTN Parent
+   Candidate = MAX_UINTN;
+   TrustCandidate = MAX_UINTN;
+   MemoryCandidate = MAX_UINTN;
++  DramCandidate[0] = DramCandidate[1] = MAX_UINTN;
+   if ((Depth > 64) || (Size - *Offset < 8)) { return FALSE; }
+   Properties = U32 (Data + *Offset);
+   Children = U32 (Data + *Offset + 4);
+@@ -233,6 +236,12 @@ AdtNode (CONST UINT8 *Data, UINTN Size, UINTN *Offset, UINTN Depth, UINTN Parent
+       if ((MemoryCandidate != MAX_UINTN) || (Length != 8)) { return FALSE; }
+       MemoryCandidate = *Offset;
+     }
++    for (Field = 0; Field < 2; Field++) {
++      if (AsciiStrCmp ((CONST CHAR8 *)(Data + *Offset - 36), Field == 0 ? "dram-base" : "dram-size") == 0) {
++        if ((DramCandidate[Field] != MAX_UINTN) || (Length != 8)) { return FALSE; }
++        DramCandidate[Field] = *Offset;
++      }
++    }
+     *Offset += Length;
+     if (ALIGN_VALUE (*Offset, 4) > Size) { return FALSE; }
+     *Offset = ALIGN_VALUE (*Offset, 4);
+@@ -254,9 +263,15 @@ AdtNode (CONST UINT8 *Data, UINTN Size, UINTN *Offset, UINTN Depth, UINTN Parent
+     *WindowSize = U64 (Data + MemoryCandidate);
+     if (!DarwinWindowSizeValid (*WindowSize)) { return FALSE; }
+   }
++  for (Field = 0; Field < 2; Field++) {
++    if (DramCandidate[Field] != MAX_UINTN) {
++      if ((Path != 1) || (DramOffsets[Field] != MAX_UINTN)) { return FALSE; }
++      DramOffsets[Field] = DramCandidate[Field];
++    }
++  }
+   if (Children > (Size - *Offset) / 8) { return FALSE; }
+   for (Index = 0; Index < Children; Index++) {
+-    if (!AdtNode (Data, Size, Offset, Depth + 1, Path, RamdiskOffset, TrustCacheOffset, WindowSize, KeepPacked)) { return FALSE; }
++    if (!AdtNode (Data, Size, Offset, Depth + 1, Path, RamdiskOffset, TrustCacheOffset, WindowSize, KeepPacked, DramOffsets)) { return FALSE; }
+   }
+   return TRUE;
+ }
+@@ -470,6 +485,7 @@ Boot (
+   UINT64                          WindowSize;
+   UINT64                          RamdiskAddress;
+   UINTN                           RamdiskOffset;
++  UINTN                           DramOffsets[2];
+   UINTN                           RamdiskBytes;
+   UINTN                           RamdiskExpandedSize;
+   BOOLEAN                         RamdiskPacked;
+@@ -529,10 +545,13 @@ Boot (
+   if (EFI_ERROR (Status)) { goto Fail; }
+   Offset = 0;
+   RamdiskOffset = MAX_UINTN;
++  DramOffsets[0] = DramOffsets[1] = MAX_UINTN;
+   TrustCacheOffset = MAX_UINTN;
+   WindowSize = 0;
+   KeepPacked = FALSE;
+-  if (!AdtNode (Tree, TreeSize, &Offset, 0, 3, &RamdiskOffset, &TrustCacheOffset, &WindowSize, &KeepPacked) || (Offset != TreeSize)) { Status = EFI_COMPROMISED_DATA; goto Fail; }
++  if (!AdtNode (Tree, TreeSize, &Offset, 0, 3, &RamdiskOffset, &TrustCacheOffset, &WindowSize, &KeepPacked, DramOffsets) || (Offset != TreeSize)) { Status = EFI_COMPROMISED_DATA; goto Fail; }
++  if ((DramOffsets[0] == MAX_UINTN) != (DramOffsets[1] == MAX_UINTN)) { Status = EFI_COMPROMISED_DATA; goto Fail; }
++  if ((DramOffsets[0] != MAX_UINTN) && ((U64 ((UINT8 *)Tree + DramOffsets[0]) == 0) != (U64 ((UINT8 *)Tree + DramOffsets[1]) == 0))) { Status = EFI_COMPROMISED_DATA; goto Fail; }
+   if (KeepPacked && (!RamdiskPacked || (RamdiskOffset == MAX_UINTN))) { Status = EFI_COMPROMISED_DATA; goto Fail; }
+   if (WindowSize == 0) { WindowSize = WINDOW_SIZE; }
+   if (Kernel.Base > MAX_UINT64 - WindowSize) { Status = EFI_LOAD_ERROR; goto Fail; }
+@@ -586,6 +605,11 @@ Boot (
+   Args->DeviceTreeLength = (UINT32)TreeSize;
+   CopyMem (Args->CommandLine, CommandLine, sizeof (CommandLine));
+   CopyMem ((VOID *)(UINTN)TreeAddress, Tree, TreeSize);
++  // Zero placeholders request the XNU-visible RAM range actually owned by this boot.
++  if ((DramOffsets[0] != MAX_UINTN) && (U64 ((UINT8 *)Tree + DramOffsets[0]) == 0)) {
++    WriteUnaligned64 ((UINT64 *)(UINTN)(TreeAddress + DramOffsets[0]), Address);
++    WriteUnaligned64 ((UINT64 *)(UINTN)(TreeAddress + DramOffsets[1]), WindowSize);
++  }
+   if (Request->Ramdisk != NULL) {
+     if (KeepPacked) { CopyMem ((VOID *)(UINTN)RamdiskAddress, Request->Ramdisk, Request->RamdiskSize); }
+     else { CopyRamdisk ((VOID *)(UINTN)RamdiskAddress, Request->Ramdisk, Request->RamdiskSize, RamdiskPacked); }
+@@ -629,7 +653,8 @@ Boot (
+   DEBUG ((DEBUG_ERROR, "ID_AA64MMFR0_EL1 0x%lx  (PARange %lu, 4 KiB granule %a)\n", READ_SYSREG (id_aa64mmfr0_el1),
+           READ_SYSREG (id_aa64mmfr0_el1) & 0xF, (((READ_SYSREG (id_aa64mmfr0_el1) >> 28) & 0xF) == 0xF) ? "NOT supported" : "supported"));
+   DEBUG ((DEBUG_ERROR, "ID_AA64PFR0_EL1  0x%lx\n", READ_SYSREG (id_aa64pfr0_el1)));
+-  DEBUG ((DEBUG_ERROR, "\nExiting boot services. A green bar across the top\nmeans the kernel entry code ran.\n"));
++  DEBUG ((DEBUG_ERROR, "CNTFRQ_EL0 %lu Hz  MPIDR_EL1 0x%lx\n", READ_SYSREG (cntfrq_el0), READ_SYSREG (mpidr_el1)));
++  DEBUG ((DEBUG_ERROR, "\nExiting boot services. Green marks the loader trampoline.\nXNU prints its own S1 entry checkpoint.\n"));
+   for (Attempt = 0; Attempt < 3; Attempt++) {
+     MapSize = Capacity;
+     Status = gBS->GetMemoryMap (&MapSize, Map, &Key, &Stride, &Version);
+diff --git a/drivers/DarwinBoot/Test/test-adt.py b/drivers/DarwinBoot/Test/test-adt.py
+new file mode 100644
+index 0000000..4438159
+--- /dev/null
++++ b/drivers/DarwinBoot/Test/test-adt.py
+@@ -0,0 +1,92 @@
++#!/usr/bin/env python3
++"""Compile the real loader ADT parser and check the DRAM placeholder contract."""
++import ctypes
++from pathlib import Path
++import struct
++import subprocess
++import tempfile
++import unittest
++
++
++def node(name, properties=(), children=()):
++    props = [('name', name.encode() + b'\0'), *properties]
++    data = struct.pack('<II', len(props), len(children))
++    for key, value in props:
++        data += struct.pack('<32sI', key.encode(), len(value)) + value + bytes(-len(value) % 4)
++    return data + b''.join(children)
++
++
++class AdtParserTest(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        cls.temp = tempfile.TemporaryDirectory()
++        cls.addClassCleanup(cls.temp.cleanup)
++        root = Path(__file__).resolve().parents[1] / 'DarwinBootPkg/Driver'
++        source = (root / 'DarwinBoot.c').read_text()
++        body = source[source.index('STATIC\nBOOLEAN\nAdtNode ('):source.index('STATIC\nBOOLEAN\nValidTrustCaches (')]
++        code = r'''
++#include <stdint.h>
++#include <stddef.h>
++#include <string.h>
++#include "WindowSize.h"
++#define STATIC static
++#define CONST const
++#define TRUE 1
++#define FALSE 0
++#define MAX_UINTN SIZE_MAX
++#define ALIGN_VALUE(v,a) (((v)+(a)-1)&~((a)-1))
++#define ScanMem8 memchr
++#define AsciiStrCmp strcmp
++#define CompareMem memcmp
++typedef uint8_t UINT8;
++typedef uint32_t UINT32;
++typedef uint64_t UINT64;
++typedef size_t UINTN;
++typedef char CHAR8;
++typedef int BOOLEAN;
++static uint32_t U32(const void *p) { uint32_t n; memcpy(&n,p,4); return n; }
++static uint64_t U64(const void *p) { uint64_t n; memcpy(&n,p,8); return n; }
++'''
++        # UEFI ScanMem8 has (buffer, length, value), unlike memchr.
++        code = code.replace('#define ScanMem8 memchr', '#define ScanMem8(p,n,v) memchr(p,v,n)')
++        code += body + r'''
++int parse(const uint8_t *data, size_t size, size_t out[2]) {
++    size_t offset=0, ram=SIZE_MAX, trust=SIZE_MAX;
++    uint64_t window=0; int packed=0;
++    out[0]=out[1]=SIZE_MAX;
++    return AdtNode(data,size,&offset,0,3,&ram,&trust,&window,&packed,out) && offset==size;
++}
++'''
++        path = Path(cls.temp.name)
++        (path / 'parser.c').write_text(code)
++        subprocess.run(['cc', '-shared', '-fPIC', '-Wall', '-Wextra', '-Werror', '-I', root,
++                        path / 'parser.c', '-o', path / 'parser.so'], check=True)
++        cls.lib = ctypes.CDLL(str(path / 'parser.so'))
++        cls.lib.parse.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
++
++    def parse(self, data):
++        offsets = (ctypes.c_size_t * 2)()
++        return self.lib.parse(data, len(data), offsets), list(offsets)
++
++    def test_placeholder_offsets(self):
++        data = node('device-tree', children=[node('chosen', [
++            ('darwinboot-memory-size', struct.pack('<Q', 0x10000000)),
++            ('dram-base', bytes(8)), ('dram-size', bytes(8))])])
++        valid, offsets = self.parse(data)
++        self.assertEqual(valid, 1)
++        self.assertEqual([data[o:o + 8] for o in offsets], [bytes(8), bytes(8)])
++        self.assertNotEqual(*offsets)
++        for length in range(len(data)):
++            self.assertEqual(self.parse(data[:length])[0], 0)
++
++    def test_malformed_dram_fields(self):
++        for properties, name in [([('dram-base', bytes(4))], 'chosen'),
++                                 ([('dram-base', bytes(8)), ('dram-base', bytes(8))], 'chosen'),
++                                 ([('dram-size', bytes(8))], 'options')]:
++            self.assertEqual(self.parse(node('device-tree', children=[node(name, properties)]))[0], 0)
++        chosen = node('chosen', [('dram-base', bytes(8)), ('dram-size', bytes(8))])
++        self.assertEqual(self.parse(node('device-tree', children=[chosen, chosen]))[0], 0)
 +
 +
 +if __name__ == '__main__':

@@ -44,6 +44,11 @@ jobs:
           git apply ../device/patches/unixnu-source-kernel.patch
           python3 scripts/test-kernel-source.py
           python3 ../device/scripts/test-adt.py AdtTest.test_tree_contract AdtTest.test_invalid_window
+          python3 drivers/DarwinBoot/Test/test-adt.py
+          cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+            -I drivers/DarwinBoot/DarwinBootPkg/Driver \
+            ../device/drivers/BootProgress/Test/console.c -o /tmp/boot-progress-test
+          ASAN_OPTIONS=detect_leaks=0 /tmp/boot-progress-test
 
       - name: Install host tools and check the SDK
         run: |

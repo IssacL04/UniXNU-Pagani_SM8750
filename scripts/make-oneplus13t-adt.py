@@ -56,6 +56,7 @@ def make_tree(memory_size, random_seed):
     return node('device-tree', [('model', b'OnePlus 13T\0'),
                                ('compatible', b'oneplus,pkx110\0qcom,sm8750\0')], [
         node('chosen', [('random-seed', random_seed), *empty_nvram_proxy(),
+                        ('dram-base', bytes(8)), ('dram-size', bytes(8)),
                         ('darwinboot-memory-size', struct.pack('<Q', memory_size))],
              [node('memory-map')]),
         node('cpus', children=[node('cpu0', [

@@ -41,6 +41,8 @@ class AdtTest(unittest.TestCase):
         self.assertTrue({root + '/' + n for n in ('chosen', 'cpus', 'arm-io', 'defaults', 'options')} <= nodes.keys())
         self.assertEqual(nodes[root + '/chosen']['random-seed'], bytes(range(64)))
         self.assertEqual(struct.unpack('<Q', nodes[root + '/chosen']['darwinboot-memory-size']), (0x10000000,))
+        self.assertEqual(nodes[root + '/chosen']['dram-base'], bytes(8))
+        self.assertEqual(nodes[root + '/chosen']['dram-size'], bytes(8))
         self.assertEqual(list(nodes[root + '/chosen/memory-map']), ['name'])
         self.assertEqual(nodes[root + '/cpus/cpu0']['reg'], bytes(4))
         self.assertFalse(any('/cpu1' in p or '/psci' in p or '/ufshc' in p for p in nodes))
