@@ -10,15 +10,15 @@
 | --- | --- | --- |
 | DarwinBoot 与 13T BootPayloadDxe | 已加入 DSC/FDF，固件编译通过 | 当前 Linux |
 | Apple 设备树 | `scripts/make-oneplus13t-adt.py`，主机测试对照实际 `sysinfo/live.dtb` 通过 | Linux 或 macOS |
-| XNU 与源码 corecrypto、pthread、ArmDTPlatform、ArmCpu、早期诊断库 | 第 6 次 Actions 构建通过，已输出 `kernel.macho` | GitHub Actions macOS runner |
-| FAT payload 与 Android boot.img | 第 6 次 Actions 已生成 payload；本地已生成 `xnu-source-run-6-early-progress/boot.img` 并通过解包比对 | macOS Actions 与当前 Linux |
-| kernelcache 预链接、userdata、iOS 用户态 | 未配置，待内核入口验证后接入 | 预链接输入提取与 userdata 工具使用 macOS |
+| XNU 与源码 corecrypto、pthread、ArmDTPlatform、ArmCpu、早期诊断库 | 第 7 次 Actions 构建通过，已包含控制台 panic 修复 | GitHub Actions macOS runner |
+| FAT payload 与 Android boot.img | 第 7 次 Actions 已生成 payload；本地已生成 `xnu-source-run-7-panic-fix/boot.img` 并通过解包比对 | macOS Actions 与当前 Linux |
+| kernelcache 预链接、userdata、iOS 用户态 | 未配置，后续接入 | 预链接输入提取与 userdata 工具使用 macOS |
 
 2026-10-21 的[第 1 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39613407803)在最终链接时缺少 `_native_legacy_display_probe`：上游 `offline-component-load-probes.patch` 的一处调用漏了 `XNU_NATIVE_LEGACY_DISPLAY` 条件，关闭显示驱动的 13T 配置仍引用该符号。提交 `e352179` 补上条件并增加预处理回归测试，覆盖未定义、关闭和开启三种情况。[第 2 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39614832285)已成功完成内核与 payload 构建，artifact 为 `oneplus13t-xnu-2`。
 
 2026-10-22 的早期诊断构建修复了三处问题：[第 3 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39634416285)发现当前 XNU 的 `T0SZ_BOOT=26`，屏幕映射现按内核选择的 38/39 位地址范围检查；[第 4 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39635731429)遇到 GitHub API 匿名限流，公开头文件元数据请求现使用 Actions 自带的只读令牌；[第 5 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39636435946)已编译诊断库，但指令检查把整数指令机器码误认作浮点寄存器，现只检查反汇编指令。相关边界、令牌发送范围与真实 SIMD 指令拦截均已验证。
 
-[第 6 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39637689404)以提交 `1643c4c` 成功完成，artifact 为 `oneplus13t-xnu-6`，本地位于 `../UniXNU/out/oneplus13t/actions/run-6/`。新内核为 21,451,832 字节，FAT payload 为 64 MiB；最终 `boot.img` 为 15,196,160 字节。已核对云端与本地哈希、FAT 内的内核和 ADT、内嵌负载及未改写的 DTB，并从最终 Mach-O 确认真实入口跳至 `early_boot_progress_entry`，初始页表为 4 KiB、`T0SZ_BOOT=26`。这些是编译和产物检查，真机 XNU 入口及定时器行为仍待验证。
+[第 6 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39637689404)以提交 `1643c4c` 成功完成，artifact 为 `oneplus13t-xnu-6`，本地位于 `../UniXNU/out/oneplus13t/actions/run-6/`。新内核为 21,451,832 字节，FAT payload 为 64 MiB；最终 `boot.img` 为 15,196,160 字节。已核对云端与本地哈希、FAT 内的内核和 ADT、内嵌负载及未改写的 DTB，并从最终 Mach-O 确认真实入口跳至 `early_boot_progress_entry`，初始页表为 4 KiB、`T0SZ_BOOT=26`。后续真机照片已确认该镜像执行至 `S6`，随后在控制台初始化时异常，见下文“S6 后的控制台异常”。定时器中断与调度仍待验证。
 
 本地已下载到 `../UniXNU/out/oneplus13t/actions/run-2/`：源码内核为 21,430,552 字节，payload 为 64 MiB，两者均与云端报告中的哈希一致，FAT 卷内的内核也与独立内核逐字节相同。旧候选 `xnu-source-run-2/boot.img` 经用户实测进入 UniXNU 后显示 `no boot entry found`，说明配置卷尚未被发现，不能视为 XNU 已启动。修复逐字节扫描后的 `xnu-source-run-2-payload-fix/boot.img` 经用户实测仍显示相同提示，随后 BDS 报找不到文件系统协议。后续带状态提示的完整镜像显示 `payload FAT scan B6B54000-B7FFF50C: Not Found`：FDT 与输入范围检查通过，但实际 initrd 只有 21,673,228 字节（20.67 MiB），装不下本轮 64 MiB FAT 卷。内核镜像内嵌负载传递现已实测显示启动项，选择后出现 DarwinBoot 绿色交接条。绿色条位于跳转 XNU 之前，证明加载器交接代码执行；旧提示 “kernel entry code ran” 已改正。
 
@@ -103,13 +103,13 @@ unixnu.lock
 ```sh
 cd /home/enc3l/Project/UniXNU_SM8750/UniXNU
 export PATH=/home/enc3l/Project/OP_Kernel_Dev/src/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/bin:$PATH
-unzip /path/to/oneplus13t-xnu-6.zip -d out/oneplus13t/actions/run-6
-test -s out/oneplus13t/actions/run-6/kernel/kernel.macho
-test -s out/oneplus13t/actions/run-6/payload/payload.img
+unzip /path/to/oneplus13t-xnu-7.zip -d out/oneplus13t/actions/run-7
+test -s out/oneplus13t/actions/run-7/kernel/kernel.macho
+test -s out/oneplus13t/actions/run-7/payload/payload.img
 ./unixnu bootimg -D ../UniXNU-oneplus13t --uefi ../uefi-oneplus13t \
   --dtb ../UniXNU-oneplus13t/.cache/firmware/vendor_boot/dtb \
-  --ramdisk out/oneplus13t/actions/run-6/payload/payload.img \
-  -o out/oneplus13t/boot/xnu-source-run-6-early-progress/boot.img
+  --ramdisk out/oneplus13t/actions/run-7/payload/payload.img \
+  -o out/oneplus13t/boot/xnu-source-run-7-panic-fix/boot.img
 ```
 
 前两项文件检查应均成功，再执行打包。新的候选不会覆盖 `menu-keys`、`no-sdcc` 或 `payload-smoke`。将生成的 `boot.img` 复制到 Windows 后，用已验证的 `fastboot boot` 临时启动路径测试；不要直接刷写 boot 分区。
@@ -126,7 +126,7 @@ test -s out/oneplus13t/actions/run-6/payload/payload.img
 
 首轮仅发布 MPIDR 为 0 的启动 CPU。GICD 为 `0x16000000/0x10000`，GICR 为 `0x16080000/0x200000`，redistributor stride 为 `0x40000`，timebase 为 19.2 MHz；均已对照本机导出的设备树。ADT 包含 ArmDTPlatform 所需的 chosen、cpus、arm-io、defaults、options 和易失 CHRP NVRAM，不填入虚构的 Apple 设备身份或 sheng 的 UFS/GPU 地址。
 
-DarwinBoot 向 UEFI 申请 256 MiB 连续窗口，并通过 `boot_args` 传入实际基址和大小。ADT 不把 13T 分散的物理内存拼成一段连续可用 RAM。framebuffer 地址与 pitch 由运行时 GOP 提供。侧核、PSCI、电源管理、存储和 GPU 需要后续独立适配；19.2 MHz、GIC 路由及 GOP 在退出 boot services 后的行为仍须实测。
+DarwinBoot 向 UEFI 申请 256 MiB 连续窗口，并通过 `boot_args` 传入实际基址和大小。ADT 不把 13T 分散的物理内存拼成一段连续可用 RAM。framebuffer 地址与 pitch 由运行时 GOP 提供。侧核、PSCI、电源管理、存储和 GPU 需要后续独立适配。真机已确认硬件 CNTFRQ 与内核 timebase 均为 19.2 MHz，并能沿用 GOP framebuffer 显示至 S6；GIC 路由、持续显示与调度仍待验证。
 
 当前 `[bootimg] embed_payload = true` 将完整 FAT 卷追加在 UEFI FD 后，与 BootShim 一起压缩到 Android boot 的 kernel 字段。ARM64 镜像头声明包含负载的完整解压长度。BootShim 只把 FD 搬到固件基址，负载留在原 kernel 输入缓冲区；它用 `x1/x2` 传递负载地址和长度，用 `x3` 标记交接格式。SEC 保存参数并生成独立 HOB。BootPayloadDxe 优先使用此 HOB，范围通过检查后发布只读 Block I/O。它仍只接受 SEC 已保留的 `Kernel` 内存，不放宽到 DXE 堆或任意物理内存。
 
@@ -140,11 +140,11 @@ Android v4 可能在 FAT 前拼接 vendor ramdisk、在尾部追加 bootconfig�
 
 ### 当前可测试镜像
 
-使用 `../UniXNU/out/oneplus13t/boot/xnu-source-run-6-early-progress/boot.img`。该镜像包含 UEFI、DarwinBoot、云端第 6 次构建的真实 XNU 内核、早期诊断代码及 13T ADT，使用内嵌负载交接，并保留菜单错误显示。固件构建标识为 `oneplus13t-xnu-early-progress-20261021`。复制到 Windows 并命名为 `boot-13t-xnu-early.img` 后：
+使用 `../UniXNU/out/oneplus13t/boot/xnu-source-run-7-panic-fix/boot.img`。该镜像包含 UEFI、DarwinBoot、云端第 7 次构建的真实 XNU 内核、控制台 panic 修复、早期诊断代码及 13T ADT，使用内嵌负载交接，并保留菜单错误显示。固件构建标识为 `oneplus13t-xnu-early-progress-20261021`。复制到 Windows 并命名为 `boot-13t-xnu-panic-fix.img` 后：
 
 ```bat
 adb reboot bootloader
-fastboot boot boot-13t-xnu-early.img
+fastboot boot boot-13t-xnu-panic-fix.img
 ```
 
 如果已在 bootloader，只执行第二条。使用 `fastboot boot` 临时启动，不刷写分区。成功读取配置时应出现 **OnePlus 13T XNU bring-up** 启动项，配置来源为 `\EFI\UniXNU\unixnu.toml`，默认等待 10 秒后尝试加载内核。建议从执行命令前开始录像，以便保留菜单切换、报错和重启前的最后画面。
@@ -153,7 +153,7 @@ fastboot boot boot-13t-xnu-early.img
 
 用户此前日志中的 `964E5B22-6459-11D2-8E39-00A0C969723B` 是 `EFI_SIMPLE_FILE_SYSTEM_PROTOCOL`。错误由 BDS 后续 USB 启动路径枚举文件系统时产生，不代表 XNU 内核入口失败。
 
-若出现 XNU 启动项前仍使用 `built-in configuration`，启动停在配置卷发现阶段；如果出现 XNU 启动项后才报错或黑屏，则已经进入后续加载阶段。能取得串口日志时，重点记录 `13T payload:` 的 FDT 地址、initrd 范围和错误码，以及 `DARWINBOOT: inputs validated; exiting boot services`、内核版本和平台日志。绿色交接条只说明 DarwinEnter 执行，不能代替 XNU 启动证据。此前第 2 次内核的内嵌候选已实测走到绿色交接条；本轮新镜像尚未上机。选中启动项后，重点记录是否出现 `S1`、最后一个检查点或异常寄存器，含义见下节。当前仍没有根文件系统与完整 iOS 用户态。
+若出现 XNU 启动项前仍使用 `built-in configuration`，启动停在配置卷发现阶段；如果出现 XNU 启动项后才报错或黑屏，则已经进入后续加载阶段。能取得串口日志时，重点记录 `13T payload:` 的 FDT 地址、initrd 范围和错误码，以及 `DARWINBOOT: inputs validated; exiting boot services`、内核版本和平台日志。绿色交接条只说明 DarwinEnter 执行，不能代替 XNU 启动证据。第 6 次候选已实测走到 `S6`，之后触发下文所述控制台异常；本轮第 7 次修复镜像尚未上机。选中启动项后，重点记录是否出现 `S1`、最后一个检查点或异常寄存器，含义见下节。当前仍没有根文件系统与完整 iOS 用户态。
 
 ### XNU 入口、异常与单核定时器诊断
 
@@ -181,6 +181,8 @@ fastboot boot boot-13t-xnu-early.img
 
 配置现开启 `XNU_DT_PANIC_REGION`，复用仓库已有的设备树日志区检查。当前 ADT 没有 `pram` 节点，因此跳过保留日志区读取，继续初始化控制台，不再访问旧板物理地址。照片中 panic 字符重复来自普通控制台和 `PE_kputc` 同时转向屏幕；补丁在屏幕诊断启用时跳过第二次屏幕输出，保留 `debug_putc`。主机测试使用实际生产函数，覆盖无日志区、有效日志区、正常控制台初始化和两种 panic 输出路径。
 
+[第 7 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39649951453)以提交 `37cdaab` 成功完成，artifact 为 `oneplus13t-xnu-7`，本地下载目录为 `../UniXNU/out/oneplus13t/actions/run-7/`。最终 Mach-O 已确认 `PE_create_console` 查找设备树并在缺少区域时跳过读取，不再使用 `0x3c0fc000`；两条 panic 输出路径均检查屏幕诊断状态。新完整镜像为 15,196,160 字节，已核对 FAT 中的真实内核、`-enable_kprintf_spam` 参数、完整内嵌负载及未改写的 DTB。上述检查通过，越过本次故障后的真机启动阶段仍待验证。
+
 ### 本地验证
 
 ```sh
@@ -202,7 +204,7 @@ cc -std=c11 -fshort-wchar -ffunction-sections -fdata-sections \
   uefi-oneplus13t/Platforms/OnePlus/oneplus13tPkg/Drivers/BootPayloadDxe/Test/payload_host.c \
   uefi-oneplus13t/Platforms/OnePlus/oneplus13tPkg/Library/MemoryMapLib/MemoryMapLib.c \
   -Wl,--gc-sections -o /tmp/oneplus13t-payload-test
-/tmp/oneplus13t-payload-test UniXNU/out/oneplus13t/actions/run-6/payload/payload.img
+/tmp/oneplus13t-payload-test UniXNU/out/oneplus13t/actions/run-7/payload/payload.img
 ```
 
 下文保留已验证菜单基线和之前的故障定位过程。`menu-keys`、`no-sdcc` 镜像未被本轮覆盖。
