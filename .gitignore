@@ -1,0 +1,13 @@
+/.cache/
+/out/
+/build/
+/sysinfo/
+__pycache__/
+*.pyc
+*.img
+*.macho
+*.efi
+*.o
+*.a
+*.log
+local.toml

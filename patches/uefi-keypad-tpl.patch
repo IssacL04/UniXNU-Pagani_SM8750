@@ -1,0 +1,103 @@
+diff --git a/Silicon/Silicium/SiliciumPkg/Drivers/KeypadDxe/KeypadController.c b/Silicon/Silicium/SiliciumPkg/Drivers/KeypadDxe/KeypadController.c
+index a499353..6f282c1 100644
+--- a/Silicon/Silicium/SiliciumPkg/Drivers/KeypadDxe/KeypadController.c
++++ b/Silicon/Silicium/SiliciumPkg/Drivers/KeypadDxe/KeypadController.c
+@@ -31,11 +31,8 @@ KeypadError (
+ }
+ 
+ /**
+-  Timer event handler: read a series of scancodes from 8042
+-  and put them into memory scancode buffer.
+-  it read as much scancodes to either fill
+-  the memory buffer or empty the keypad buffer.
+-  It is registered as running under TPL_NOTIFY
++  Poll the keypad at TPL_CALLBACK. Bus protocols such as Qualcomm SPMI
++  cannot be called at TPL_NOTIFY; the return callback protects the queues.
+ 
+   @param Event       The timer event
+   @param Context     A KEYPAD_CONSOLE_IN_DEV pointer
+@@ -46,21 +43,11 @@ KeypadTimerHandler (
+   IN EFI_EVENT Event,
+   IN VOID     *Context)
+ {
+-  EFI_TPL                OldTpl;
+   KEYPAD_CONSOLE_IN_DEV *ConsoleIn;
+ 
+   ConsoleIn = (KEYPAD_CONSOLE_IN_DEV *)Context;
+ 
+-  //
+-  // Enter critical section
+-  //
+-  OldTpl = gBS->RaiseTPL (TPL_NOTIFY);
+-
+-  if (((KEYPAD_CONSOLE_IN_DEV *)Context)->KeypadErr) {
+-    //
+-    // Leave critical section and return
+-    //
+-    gBS->RestoreTPL (OldTpl);
++  if (ConsoleIn->KeypadErr) {
+     return;
+   }
+ 
+@@ -70,10 +57,6 @@ KeypadTimerHandler (
+ 
+   ConsoleIn->KeypadDevice->GetKeys (ConsoleIn->KeypadDevice, &ConsoleIn->KeypadReturnApi, GetTimeInNanoSecond(DeltaCounter));
+ 
+-  //
+-  // Leave critical section and return
+-  //
+-  gBS->RestoreTPL (OldTpl);
+ }
+ 
+ /**
+diff --git a/Silicon/Silicium/SiliciumPkg/Drivers/KeypadDxe/KeypadDxe.c b/Silicon/Silicium/SiliciumPkg/Drivers/KeypadDxe/KeypadDxe.c
+index b8b94b5..da82046 100644
+--- a/Silicon/Silicium/SiliciumPkg/Drivers/KeypadDxe/KeypadDxe.c
++++ b/Silicon/Silicium/SiliciumPkg/Drivers/KeypadDxe/KeypadDxe.c
+@@ -150,6 +150,7 @@ KeypadReturnApiPushEfikeyBufTail (
+   KEYPAD_CONSOLE_IN_DEV       *ConsoleIn;
+   LIST_ENTRY                  *Link;
+   KEYPAD_CONSOLE_IN_EX_NOTIFY *CurrentNotify;
++  EFI_TPL                    OldTpl;
+ 
+   ConsoleIn = KEYPAD_CONSOLE_IN_DEV_FROM_KEYPAD_RETURN_API(This);
+ 
+@@ -163,6 +164,8 @@ KeypadReturnApiPushEfikeyBufTail (
+     }
+   }
+ 
++  OldTpl = gBS->RaiseTPL (TPL_NOTIFY);
++
+   //
+   // Signal KeyNotify process event if this key pressed matches any key
+   // registered.
+@@ -181,6 +184,7 @@ KeypadReturnApiPushEfikeyBufTail (
+   }
+ 
+   PushEfikeyBufTail (&ConsoleIn->EfiKeyQueue, KeyData);
++  gBS->RestoreTPL (OldTpl);
+ }
+ 
+ /**
+diff --git a/Silicon/Silicium/SiliciumPkg/Drivers/KeypadDxe/KeypadTextIn.c b/Silicon/Silicium/SiliciumPkg/Drivers/KeypadDxe/KeypadTextIn.c
+index bc3278c..56be248 100644
+--- a/Silicon/Silicium/SiliciumPkg/Drivers/KeypadDxe/KeypadTextIn.c
++++ b/Silicon/Silicium/SiliciumPkg/Drivers/KeypadDxe/KeypadTextIn.c
+@@ -150,8 +150,6 @@ KeypadReadKeyStrokeWorker(
+   //
+   OldTpl = gBS->RaiseTPL(TPL_NOTIFY);
+ 
+-  KeypadTimerHandler(NULL, ConsoleInDev);
+-
+   if (ConsoleInDev->KeypadErr) {
+     DEBUG ((EFI_D_ERROR, "An Keypad Error occured!\n"));
+     Status = EFI_DEVICE_ERROR;
+@@ -299,8 +297,6 @@ KeypadWaitForKey(
+   //
+   OldTpl = gBS->RaiseTPL(TPL_NOTIFY);
+ 
+-  KeypadTimerHandler(NULL, ConsoleIn);
+-
+   if (!ConsoleIn->KeypadErr) {
+     //
+     // WaitforKey doesn't suppor the partial key.

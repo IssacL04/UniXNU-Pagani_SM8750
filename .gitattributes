@@ -1,0 +1,2 @@
+# Preserve line endings in patches for the original UEFI source files.
+*.patch -text

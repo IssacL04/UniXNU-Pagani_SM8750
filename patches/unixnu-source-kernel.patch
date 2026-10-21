@@ -1,0 +1,199 @@
+diff --git a/scripts/unixnu/cli.py b/scripts/unixnu/cli.py
+index 3f79809..cc6b41a 100644
+--- a/scripts/unixnu/cli.py
++++ b/scripts/unixnu/cli.py
+@@ -126,7 +126,10 @@ def cmd_build(ctx):
+     modules = prepare(ctx, steps + (['kernel'] if 'prelink' in steps else []))
+     if 'kernel' in steps:
+         kernel.build(ctx, modules)
+-        kernel.prelink(ctx)
++        if ctx.board.get('kernel', {}).get('source_only', False):
++            kernel.export_source(ctx)
++        else:
++            kernel.prelink(ctx)
+     elif 'prelink' in steps:
+         kernel.prelink(ctx)
+     if 'package' in steps:
+diff --git a/scripts/unixnu/kernel.py b/scripts/unixnu/kernel.py
+index 3c38159..20071cb 100644
+--- a/scripts/unixnu/kernel.py
++++ b/scripts/unixnu/kernel.py
+@@ -1,6 +1,8 @@
+ """XNU kernel: build from the patched Apple source, then prelink against the original kernelcache."""
+ import os
+ import shlex
++import shutil
++import struct
+ from pathlib import Path
+ 
+ from . import ipsw
+@@ -94,6 +96,30 @@ def build(ctx, modules):
+     run(['bash', script], cwd=ctx.tree, env=env, log_file=ctx.logs / 'kernel.log')
+ 
+ 
++def export_source(ctx):
++    """Publish the source kernel for boards bringing up XNU without a kernelcache."""
++    if ctx.board.get('kernel', {}).get('prelink'):
++        raise Error('source_only and [kernel.prelink] cannot be used together')
++    source = ctx.tree / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf'
++    if not source.is_file():
++        raise Error(f'source kernel not found: {source}')
++    with source.open('rb') as stream:
++        header = stream.read(32)
++    if len(header) != 32 or struct.unpack_from('<4I', header) != (0xfeedfacf, 0x100000c, 0, 2):
++        raise Error('source kernel must be an ordinary ARM64 Mach-O executable')
++    output = ctx.work / 'kernel/kernel.macho'
++    output.parent.mkdir(parents=True, exist_ok=True)
++    temporary = output.with_suffix('.macho.tmp')
++    try:
++        shutil.copyfile(source, temporary)
++        temporary.replace(output)
++    finally:
++        temporary.unlink(missing_ok=True)
++    output.with_suffix('.json').unlink(missing_ok=True)  # A previous prelink report no longer describes this image.
++    log(f'kernel: {output} (source only; no prelinked Apple drivers or root filesystem)')
++    return output
++
++
+ def prelink(ctx):
+     """Produce out/<device>/kernel/kernel.macho from the XNU build and the original kernelcache."""
+     log('kernel: prelink')
+diff --git a/scripts/build-arm-platform.py b/scripts/build-arm-platform.py
+new file mode 100644
+index 0000000..6c79ba0
+--- /dev/null
++++ b/scripts/build-arm-platform.py
+@@ -0,0 +1,50 @@
++#!/usr/bin/env python3
++"""Build the source ArmDTPlatform and ArmCpu with XNU's recorded IOKit flags."""
++import json
++import struct
++import subprocess
++from pathlib import Path
++
++
++def compile_command(record, source, output):
++    args = iter(record['arguments'])
++    command = []
++    found_source = False
++    for value in args:
++        if value == record['file']:
++            command.append(str(source))
++            found_source = True
++        elif value == '-o':
++            next(args)
++            command.extend(['-o', str(output)])
++        elif value in ('-MF', '-MJ', '-MT', '-MQ'):
++            next(args)
++        elif value not in ('-MD', '-MMD', '-MP'):
++            command.append(value)
++    if not found_source or '-o' not in command:
++        raise ValueError('IOKit compile record lacks its source or output argument')
++    return command
++
++
++def main():
++    root = Path(__file__).resolve().parents[1]
++    recipe = root / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/iokit/DEVELOPMENT/IOPlatformExpert.cpo.json'
++    record = json.loads(recipe.read_text().strip().rstrip(','))
++    for driver, folder in [('ArmDTPlatform', 'armdt-platform'), ('ArmCpu', 'armcpu')]:
++        output = root / 'build' / folder
++        output.mkdir(parents=True, exist_ok=True)
++        obj = output / f'{driver}.o'
++        command = compile_command(record, root / 'drivers' / driver / f'{driver}.cpp', obj)
++        subprocess.run(command, cwd=record['directory'], check=True)
++        with obj.open('rb') as stream:
++            header = stream.read(16)
++        if len(header) != 16 or struct.unpack('<4I', header) != (0xfeedfacf, 0x100000c, 0, 1):
++            raise SystemExit(f'{driver}: expected ordinary ARM64 Mach-O object')
++        archive = output / f'lib{driver}.a'
++        archive.unlink(missing_ok=True)
++        subprocess.run(['xcrun', 'ar', 'rcs', archive, obj], check=True)
++        print(archive)
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/scripts/test-kernel-source.py b/scripts/test-kernel-source.py
+new file mode 100644
+index 0000000..2899ef2
+--- /dev/null
++++ b/scripts/test-kernel-source.py
+@@ -0,0 +1,77 @@
++#!/usr/bin/env python3
++"""Source-kernel publication and compile-record regression checks (no Xcode)."""
++import importlib.util
++import struct
++import tempfile
++import unittest
++from pathlib import Path
++from types import SimpleNamespace
++from unittest.mock import patch
++
++from unixnu import cli, kernel
++from unixnu.util import Error
++
++spec = importlib.util.spec_from_file_location('arm_platform', Path(__file__).with_name('build-arm-platform.py'))
++arm_platform = importlib.util.module_from_spec(spec)
++spec.loader.exec_module(arm_platform)
++
++
++class SourceKernelTest(unittest.TestCase):
++    def setUp(self):
++        self.temp = tempfile.TemporaryDirectory()
++        self.addCleanup(self.temp.cleanup)
++        root = Path(self.temp.name)
++        self.ctx = SimpleNamespace(tree=root / 'tree', work=root, board={'kernel': {'source_only': True}})
++        self.source = root / 'tree/build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf'
++        self.source.parent.mkdir(parents=True)
++        self.image = struct.pack('<8I', 0xfeedfacf, 0x100000c, 0, 2, 0, 0, 0, 0)
++        self.source.write_bytes(self.image)
++
++    def test_source_publication_removes_stale_prelink_record(self):
++        out = self.ctx.work / 'kernel'
++        out.mkdir()
++        (out / 'kernel.json').write_text('old prelink')
++        result = kernel.export_source(self.ctx)
++        self.assertEqual(result.read_bytes(), self.image)
++        self.assertFalse((out / 'kernel.json').exists())
++        self.assertFalse((out / 'kernel.macho.tmp').exists())
++
++    def test_invalid_image_preserves_previous_kernel(self):
++        old = kernel.export_source(self.ctx)
++        for image in (b'', b'\xcf\xfa\xed\xfe', struct.pack('<8I', 0xfeedfacf, 0x100000c, 2, 2, 0, 0, 0, 0)):
++            self.source.write_bytes(image)
++            with self.assertRaises(Error):
++                kernel.export_source(self.ctx)
++            self.assertEqual(old.read_bytes(), self.image)
++
++    def test_conflicting_config(self):
++        self.ctx.board['kernel']['prelink'] = {'tool': 'something.py'}
++        with self.assertRaises(Error):
++            kernel.export_source(self.ctx)
++
++    def test_source_build_never_calls_prelink(self):
++        self.ctx.args = SimpleNamespace(steps=['kernel'])
++        self.ctx.refuse_example = lambda: None
++        self.ctx.need_config = lambda: {}
++        for source_only in (True, False):
++            self.ctx.board['kernel']['source_only'] = source_only
++            with patch.object(cli, 'prepare', return_value={}), patch.object(kernel, 'build'), \
++                    patch.object(kernel, 'prelink') as prelink, patch.object(kernel, 'export_source') as export:
++                cli.cmd_build(self.ctx)
++                self.assertEqual(export.call_count, int(source_only))
++                self.assertEqual(prelink.call_count, int(not source_only))
++
++    def test_driver_flags_keep_abi_and_do_not_overwrite_xnu_records(self):
++        record = {'file': 'IOPlatformExpert.cpp', 'arguments': [
++            'clang++', '-target', 'arm64-apple-ios17.0', '-mkernel', '-Werror', '-MMD', '-MP',
++            '-MF', 'original.d', '-MJ', 'original.json', '-MT', 'original.o',
++            '-c', 'IOPlatformExpert.cpp', '-o', 'original.o']}
++        command = arm_platform.compile_command(record, Path('ArmCpu.cpp'), Path('ArmCpu.o'))
++        self.assertEqual(command, ['clang++', '-target', 'arm64-apple-ios17.0', '-mkernel', '-Werror',
++                                   '-c', 'ArmCpu.cpp', '-o', 'ArmCpu.o'])
++        with self.assertRaises(ValueError):
++            arm_platform.compile_command({'file': 'missing', 'arguments': record['arguments']}, Path('a'), Path('b'))
++
++
++if __name__ == '__main__':
++    unittest.main()

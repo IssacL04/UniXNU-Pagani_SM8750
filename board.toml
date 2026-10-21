@@ -1,0 +1,59 @@
+[board]
+name = "oneplus13t"
+soc = "SM8750"
+description = "OnePlus 13T PKX110: XNU source-kernel bring-up; hardware handoff untested"
+kit = "oneplus13t"
+
+[kernel]
+defconfig = "oneplus13t_defconfig"
+# First reach the platform expert without importing Apple's device drivers.
+source_only = true
+archives = [
+  "build-corecrypto-14.py",
+  "build-corecrypto-14.py --namespace",
+  "build-libpthread-kernel.py",
+  "build-arm-platform.py",
+]
+
+[payload]
+volume = "UNIXNU13T"
+size_mib = 64
+loader = "firmware"
+title = "OnePlus 13T XNU bring-up"
+dram_size = "0x10000000"
+timeout = 10
+kernel_args = ["-v", "serial=0", "debug=0x14e", "cpus=1"]
+
+[payload.adt]
+tool = "scripts/make-oneplus13t-adt.py"
+owned_memory_size = "0x10000000"
+cpu_regs = "0"
+
+[firmware]
+config = "oneplus13t"
+dsc = "Platforms/OnePlus/oneplus13tPkg/oneplus13t.dsc"
+fd = "Build/oneplus13tPkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"
+submodules = [
+  "Binaries",
+  "Common/Mu",
+  "Common/Mu_OEM_Sample",
+  "Silicon/Silicium/OpensslPkg/Library/OpensslLib/openssl",
+]
+packages = [
+  "{uefi}",
+  "{uefi}/Platforms/OnePlus",
+  "{tree}/package",
+  "{tree}/drivers/DarwinBoot",
+  "{edk2}",
+  "{uefi}/Common/Mu",
+  "{uefi}/Common/Mu_OEM_Sample",
+  "{uefi}/Silicon/Qualcomm",
+  "{uefi}/Silicon/Silicium",
+]
+
+[firmware.defines]
+DEVICE_MODEL = "oneplus13t"
+ENABLE_SECUREBOOT = "1"
+MEMORY_PROTECTION = "TRUE"
+SHIP_MODE = "FALSE"
+BUILDID_STRING = "oneplus13t-xnu-loader-20261021"

@@ -1,0 +1,14 @@
+diff --git a/Silicon/Qualcomm/QcomPkg/Library/PlatformBootManagerLib/PlatformBootManager.c b/Silicon/Qualcomm/QcomPkg/Library/PlatformBootManagerLib/PlatformBootManager.c
+index 97c29d3..9cfd8bb 100644
+--- a/Silicon/Qualcomm/QcomPkg/Library/PlatformBootManagerLib/PlatformBootManager.c
++++ b/Silicon/Qualcomm/QcomPkg/Library/PlatformBootManagerLib/PlatformBootManager.c
+@@ -36,7 +36,9 @@ DeviceBootManagerAfterConsole ()
+   }
+ 
+   // Init SD Card
++  DEBUG ((DEBUG_WARN, "BDS: SD init signal begin\n"));
+   gBS->SignalEvent (InitEvent);
++  DEBUG ((DEBUG_WARN, "BDS: SD init signal end\n"));
+   gBS->CloseEvent  (InitEvent);
+ 
+   return NULL;

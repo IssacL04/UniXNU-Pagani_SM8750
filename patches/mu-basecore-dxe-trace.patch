@@ -1,0 +1,237 @@
+diff --git a/ArmPkg/Library/ArmPsciResetSystemLib/ArmPsciResetSystemLib.c b/ArmPkg/Library/ArmPsciResetSystemLib/ArmPsciResetSystemLib.c
+index 2597afa..e9bdb35 100644
+--- a/ArmPkg/Library/ArmPsciResetSystemLib/ArmPsciResetSystemLib.c
++++ b/ArmPkg/Library/ArmPsciResetSystemLib/ArmPsciResetSystemLib.c
+@@ -51,6 +51,8 @@ ResetCold (
+ {
+   ARM_MONITOR_ARGS  Args;
+ 
++  DEBUG ((DEBUG_WARN, "RESET: PSCI SYSTEM_RESET (cold)\n"));
++
+   // Send a PSCI 0.2 SYSTEM_RESET command
+   Args.Arg0 = ARM_SMC_ID_PSCI_SYSTEM_RESET;
+ 
+@@ -77,6 +79,8 @@ ResetWarm (
+   // Is SYSTEM_RESET2 supported?
+   ArmMonitorCall (&Args);
+   if (Args.Arg0 == ARM_SMC_PSCI_RET_SUCCESS) {
++    DEBUG ((DEBUG_WARN, "RESET: PSCI SYSTEM_RESET2 (warm)\n"));
++
+     // Send PSCI SYSTEM_RESET2 command
+     Args.Arg0 = ARM_SMC_ID_PSCI_SYSTEM_RESET2_AARCH64;
+     Args.Arg1 = 0; // Reset type
+@@ -107,7 +111,9 @@ ResetShutdown (
+ {
+   ARM_MONITOR_ARGS  Args;
+ 
+-  // Send a PSCI 0.2 SYSTEM_RESET command
++  DEBUG ((DEBUG_WARN, "RESET: PSCI SYSTEM_OFF (shutdown)\n"));
++
++  // Send a PSCI 0.2 SYSTEM_OFF command
+   Args.Arg0 = ARM_SMC_ID_PSCI_SYSTEM_OFF;
+ 
+   ArmMonitorCall (&Args);
+diff --git a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
+index 4c9df94..657201e 100644
+--- a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
++++ b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
+@@ -452,7 +452,7 @@ CoreDispatcher (
+       // skip the LoadImage
+       //
+       if ((DriverEntry->ImageHandle == NULL) && !DriverEntry->IsFvImage) {
+-        DEBUG ((DEBUG_INFO, "Loading driver %g\n", &DriverEntry->FileName));
++        DEBUG ((DEBUG_WARN, "DXE: load driver %g\n", &DriverEntry->FileName));
+         Status = CoreLoadImage (
+                    FALSE,
+                    gDxeCoreImageHandle,
+@@ -517,7 +517,9 @@ CoreDispatcher (
+           );
+         ASSERT (DriverEntry->ImageHandle != NULL);
+ 
++        DEBUG ((DEBUG_WARN, "DXE: start driver %g\n", &DriverEntry->FileName));
+         Status = CoreStartImage (DriverEntry->ImageHandle, NULL, NULL);
++        DEBUG ((DEBUG_WARN, "DXE: driver returned %g %r\n", &DriverEntry->FileName, Status));
+ 
+         REPORT_STATUS_CODE_WITH_EXTENDED_DATA (
+           EFI_PROGRESS_CODE,
+diff --git a/MdeModulePkg/Core/Dxe/DxeMain/DxeMain.c b/MdeModulePkg/Core/Dxe/DxeMain/DxeMain.c
+index 3c20568..88e969d 100644
+--- a/MdeModulePkg/Core/Dxe/DxeMain/DxeMain.c
++++ b/MdeModulePkg/Core/Dxe/DxeMain/DxeMain.c
+@@ -399,6 +399,7 @@ DxeMain (
+     );
+ 
+   DEBUG ((DEBUG_INFO | DEBUG_LOAD, "HOBLIST address in DXE = 0x%p\n", HobStart));
++  DEBUG ((DEBUG_WARN, "DXE: allocation HOB scan at %p\n", HobStart));
+ 
+   DEBUG_CODE_BEGIN ();
+   EFI_PEI_HOB_POINTERS  Hob;
+@@ -415,6 +416,7 @@ DxeMain (
+     }
+   }
+ 
++  DEBUG ((DEBUG_WARN, "DXE: FV HOB scan\n"));
+   for (Hob.Raw = HobStart; !END_OF_HOB_LIST (Hob); Hob.Raw = GET_NEXT_HOB (Hob)) {
+     if (GET_HOB_TYPE (Hob) == EFI_HOB_TYPE_FV) {
+       DEBUG ((
+@@ -461,18 +463,25 @@ DxeMain (
+   //
+   // Initialize the Event Services
+   //
++  DEBUG ((DEBUG_WARN, "DXE: event services begin\n"));
+   Status = CoreInitializeEventServices ();
++  DEBUG ((DEBUG_WARN, "DXE: event services end %r\n", Status));
+   ASSERT_EFI_ERROR (Status);
+ 
+   //
+   // Give the debug agent a chance to initialize with events.
+   //
++  DEBUG ((DEBUG_WARN, "DXE: late debug agent begin\n"));
+   InitializeDebugAgent (DEBUG_AGENT_INIT_DXE_CORE_LATE, HobStart, NULL);
++  DEBUG ((DEBUG_WARN, "DXE: late debug agent end\n"));
+ 
++  DEBUG ((DEBUG_WARN, "DXE: memory profile begin\n"));
+   MemoryProfileInstallProtocol ();
+-
++  DEBUG ((DEBUG_WARN, "DXE: memory attributes begin\n"));
+   CoreInitializeMemoryAttributesTable ();
++  DEBUG ((DEBUG_WARN, "DXE: memory protection begin\n"));
+   CoreInitializeMemoryProtection ();
++  DEBUG ((DEBUG_WARN, "DXE: memory protection end\n"));
+ 
+   //
+   // Get persisted vector hand-off info from GUIDeed HOB again due to HobStart may be updated,
+@@ -509,6 +518,7 @@ DxeMain (
+   //
+   // Publish the EFI, Tiano, and Custom Decompress protocols for use by other DXE components
+   //
++  DEBUG ((DEBUG_WARN, "DXE: protocol installation begin\n"));
+   Status = CoreInstallMultipleProtocolInterfaces (
+              &mDecompressHandle,
+              &gEfiDecompressProtocolGuid,
+@@ -527,27 +537,37 @@ DxeMain (
+   //
+   // Produce Firmware Volume Protocols, one for each FV in the HOB list.
+   //
++  DEBUG ((DEBUG_WARN, "DXE: FV block services begin\n"));
+   Status = FwVolBlockDriverInit (gDxeCoreImageHandle, gDxeCoreST);
++  DEBUG ((DEBUG_WARN, "DXE: FV block services end %r\n", Status));
+   ASSERT_EFI_ERROR (Status);
+ 
++  DEBUG ((DEBUG_WARN, "DXE: FV services begin\n"));
+   Status = FwVolDriverInit (gDxeCoreImageHandle, gDxeCoreST);
++  DEBUG ((DEBUG_WARN, "DXE: FV services end %r\n", Status));
+   ASSERT_EFI_ERROR (Status);
+ 
+   //
+   // Produce the Section Extraction Protocol
+   //
++  DEBUG ((DEBUG_WARN, "DXE: section extraction begin\n"));
+   Status = InitializeSectionExtraction (gDxeCoreImageHandle, gDxeCoreST);
++  DEBUG ((DEBUG_WARN, "DXE: section extraction end %r\n", Status));
+   ASSERT_EFI_ERROR (Status);
+ 
+   //
+   // Initialize the DXE Dispatcher
+   //
++  DEBUG ((DEBUG_WARN, "DXE: dispatcher init begin\n"));
+   CoreInitializeDispatcher ();
++  DEBUG ((DEBUG_WARN, "DXE: dispatcher init end\n"));
+ 
+   //
+   // Invoke the DXE Dispatcher
+   //
++  DEBUG ((DEBUG_WARN, "DXE: dispatcher begin\n"));
+   CoreDispatcher ();
++  DEBUG ((DEBUG_WARN, "DXE: dispatcher end\n"));
+ 
+   //
+   // Display Architectural protocols that were not loaded if this is DEBUG build
+diff --git a/MdeModulePkg/Library/UefiBootManagerLib/BmBoot.c b/MdeModulePkg/Library/UefiBootManagerLib/BmBoot.c
+index 6e093e9..263062b 100644
+--- a/MdeModulePkg/Library/UefiBootManagerLib/BmBoot.c
++++ b/MdeModulePkg/Library/UefiBootManagerLib/BmBoot.c
+@@ -2002,14 +2002,18 @@ EfiBootManagerBoot (
+   //    the boot option.
+   //
+   if (BmIsBootManagerMenuFilePath (BootOption->FilePath)) {
+-    DEBUG ((DEBUG_INFO, "[Bds] Booting Boot Manager Menu.\n"));
++    DEBUG ((DEBUG_WARN, "BDS: firmware menu; ReadyToBoot skipped\n"));
+     BmStopHotkeyService (NULL, NULL);
+   } else {
+     PERF_EVENT_SIGNAL_BEGIN (&gEfiEventPreReadyToBootGuid); // MU_CHANGE
++    DEBUG ((DEBUG_WARN, "BDS: PreReadyToBoot begin\n"));
+     EfiEventGroupSignal (&gEfiEventPreReadyToBootGuid);     // MU_CHANGE
++    DEBUG ((DEBUG_WARN, "BDS: PreReadyToBoot end\n"));
+     PERF_EVENT_SIGNAL_END (&gEfiEventPreReadyToBootGuid);   // MU_CHANGE
+     PERF_EVENT_SIGNAL_BEGIN (&gEfiEventReadyToBootGuid);    // MU_CHANGE
++    DEBUG ((DEBUG_WARN, "BDS: ReadyToBoot begin\n"));
+     EfiSignalEventReadyToBoot ();
++    DEBUG ((DEBUG_WARN, "BDS: ReadyToBoot end\n"));
+     PERF_EVENT_SIGNAL_END (&gEfiEventReadyToBootGuid);       // MU_CHANGE
+     //
+     // Report Status Code to indicate ReadyToBoot was signalled
+@@ -2067,8 +2071,10 @@ EfiBootManagerBoot (
+       );
+     // MU_CHANGE End
+ 
++    DEBUG ((DEBUG_WARN, "BDS: image buffer %p\n", FileBuffer));
+     if (FileBuffer != NULL) {
+       RamDiskDevicePath = BmGetRamDiskDevicePath (FilePath);
++      DEBUG ((DEBUG_WARN, "BDS: LoadImage begin\n"));
+ 
+       // REPORT_STATUS_CODE (EFI_PROGRESS_CODE, PcdGet32 (PcdProgressCodeOsLoaderLoad)); MU_CHANGE
+       Status = gBS->LoadImage (
+@@ -2081,6 +2087,7 @@ EfiBootManagerBoot (
+                       );
+     }
+ 
++    DEBUG ((DEBUG_WARN, "BDS: LoadImage result %r\n", Status));
+     if (FileBuffer != NULL) {
+       FreePool (FileBuffer);
+     }
+@@ -2195,8 +2202,9 @@ EfiBootManagerBoot (
+ 
+   REPORT_STATUS_CODE (EFI_PROGRESS_CODE, PcdGet32 (PcdProgressCodeOsLoaderStart));
+ 
++  DEBUG ((DEBUG_WARN, "BDS: StartImage begin\n"));
+   Status = gBS->StartImage (ImageHandle, &BootOption->ExitDataSize, &BootOption->ExitData);
+-  DEBUG ((DEBUG_INFO | DEBUG_LOAD, "Image Return Status = %r\n", Status));
++  DEBUG ((DEBUG_WARN, "BDS: StartImage returned %r\n", Status));
+   BootOption->Status = Status;
+ 
+   //
+diff --git a/MdeModulePkg/Universal/BdsDxe/BdsEntry.c b/MdeModulePkg/Universal/BdsDxe/BdsEntry.c
+index d3c1dff..3497ad5 100644
+--- a/MdeModulePkg/Universal/BdsDxe/BdsEntry.c
++++ b/MdeModulePkg/Universal/BdsDxe/BdsEntry.c
+@@ -414,7 +414,9 @@ BootBootOptions (
+     // All the driver options should have been processed since
+     // now boot will be performed.
+     //
++    DEBUG ((DEBUG_WARN, "BDS: Boot%04x %s begin\n", BootOptions[Index].OptionNumber, BootOptions[Index].Description));
+     EfiBootManagerBoot (&BootOptions[Index]);
++    DEBUG ((DEBUG_WARN, "BDS: Boot%04x returned %r\n", BootOptions[Index].OptionNumber, BootOptions[Index].Status));
+ 
+     //
+     // If infinite retries is enabled, do not break out of the loop.
+@@ -969,7 +971,9 @@ BdsEntry (
+   // > Special boot: e.g.: USB boot, enter UI
+   //
+   PERF_INMODULE_BEGIN ("PlatformBootManagerAfterConsole");
++  DEBUG ((DEBUG_WARN, "BDS: after-console begin\n"));
+   PlatformBootManagerAfterConsole ();
++  DEBUG ((DEBUG_WARN, "BDS: after-console end\n"));
+   PERF_INMODULE_END ("PlatformBootManagerAfterConsole");
+ 
+   //
+@@ -1083,7 +1087,9 @@ BdsEntry (
+     // Execute Key####
+     //
+     PERF_INMODULE_BEGIN ("BdsWait");
++    DEBUG ((DEBUG_WARN, "BDS: wait begin\n"));
+     BdsWait (HotkeyTriggered);
++    DEBUG ((DEBUG_WARN, "BDS: wait end\n"));
+     PERF_INMODULE_END ("BdsWait");
+     //
+     // BdsReadKeys() can be removed after all keyboard drivers invoke callback in timer callback.

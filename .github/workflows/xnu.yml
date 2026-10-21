@@ -1,0 +1,78 @@
+name: OnePlus 13T XNU
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oneplus13t-xnu-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: bash
+        working-directory: upstream
+    steps:
+      - name: Check out the 13T configuration
+        uses: actions/checkout@v4
+        with:
+          path: device
+          persist-credentials: false
+
+      - name: Check out the pinned UniXNU source
+        uses: actions/checkout@v4
+        with:
+          repository: UniXNU/UniXNU
+          ref: b6ae99c17194e6a18fd819d3148e69fe405e91fc
+          path: upstream
+          submodules: recursive
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Apply the source-kernel support
+        run: |
+          git apply --check ../device/patches/unixnu-source-kernel.patch
+          git apply ../device/patches/unixnu-source-kernel.patch
+          python3 scripts/test-kernel-source.py
+          python3 ../device/scripts/test-adt.py AdtTest.test_tree_contract AdtTest.test_invalid_window
+
+      - name: Install host tools and check the SDK
+        run: |
+          brew install cmake ninja unifdef llvm mtools
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+          df -h .
+
+      - name: Fetch the kernel sources
+        run: |
+          mkdir -p out/oneplus13t/logs
+          ./unixnu defconfig oneplus13t_defconfig -D "$GITHUB_WORKSPACE/device"
+          ./unixnu fetch xnu libplatform libdispatch AvailabilityVersions libpthread corecrypto-2023 2>&1 | tee out/oneplus13t/logs/actions-fetch.log
+          cp ../device/unixnu.lock out/oneplus13t/unixnu.lock
+
+      - name: Build XNU and the FAT payload
+        run: |
+          ./unixnu build kernel payload -j 3 2>&1 | tee out/oneplus13t/logs/actions-build.log
+
+      - name: Upload the kernel, payload and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oneplus13t-xnu-${{ github.run_number }}
+          path: |
+            upstream/out/oneplus13t/kernel/**
+            upstream/out/oneplus13t/payload/**
+            upstream/out/oneplus13t/logs/**
+            upstream/out/oneplus13t/unixnu.lock
+          if-no-files-found: warn
+          retention-days: 7
