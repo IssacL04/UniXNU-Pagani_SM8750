@@ -51,6 +51,8 @@ git -C ../UniXNU submodule update --init --recursive
 
 设备构建继续使用固定的 `upstream.rev`。采用新的上游版本时，先更新该文件并检查补丁与测试，确认兼容后再提交，避免直接改变当前可用的构建基线。上游本次新增 `CONFIG_XNU_BUILD_ARCHIVES` 门控，13T 配置已显式开启。
 
+迁移后的 UEFI 已在 Linux 重新编译通过，Mu_Basecore 补丁在构建完成后正常撤回。固件仓库当前为私有，访问或克隆需要授权账户；设备仓库沿用原有公开可见性。
+
 云端使用本仓库的 [XNU 工作流](.github/workflows/xnu.yml)，通过同一入口准备源码和输出。仍仅手动触发，不需要私有 Secrets，不下载 IPSW，也不构建 userdata。UEFI 和含原机 DTB 的最终 boot.img 留在 Linux 本地构建。仓库更名保留原有提交与 Actions 历史。
 
 ### 触发构建与下载结果
