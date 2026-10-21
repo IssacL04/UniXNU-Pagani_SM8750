@@ -4,7 +4,7 @@
 
 ## XNU 内核适配与 macOS Actions
 
-当前提供源码内核的早期启动配置和 UEFI 负载通路。XNU 已在 macOS Actions 编译并生成 FAT payload。内嵌负载镜像已经实机显示 XNU 启动项，并在 ExitBootServices 后进入 DarwinEnter 跳板；尚无 XNU 自身入口执行的证据。首个目标是进入 XNU 并初始化 ArmDTPlatform、ArmCpu 与架构定时器；没有根文件系统，因此不以启动 iOS 用户态为本轮验收点。
+当前提供源码内核的早期启动配置和 UEFI 负载通路。第 6 次构建的镜像已实机显示 `S1` 至 `S6`：XNU 入口、MMU 启用、早期平台和内存初始化均已执行，随后在控制台初始化时发生异常。接下来验证 ArmDTPlatform、ArmCpu 与架构定时器；没有根文件系统，因此不以启动 iOS 用户态为本轮验收点。
 
 | 部分 | 本轮状态 | 执行位置 |
 | --- | --- | --- |
@@ -171,9 +171,15 @@ fastboot boot boot-13t-xnu-early.img
 
 在 `arm_vm_init` 更换页表期间暂停普通 framebuffer 写入。早期致命异常使用保留的初始页表切回物理地址、关闭 MMU/cache 后显示 `ESR_EL1`、`ELR_EL1`、`FAR_EL1`、`SPSR_EL1` 和最后检查点，再停住。检查点 `0x50` 表示正在进行 `arm_vm_init`。后续不可恢复的内核数据异常保留原有 panic 流程并追加寄存器输出。该早期异常路径仅用于当前单核配置，启用 SMP 前需要重新设计同步与缓存处理。
 
-加载器将 `/chosen/dram-base`、`dram-size` 的成对零占位符填写为本次实际分配的 XNU 可用内存窗口，避免后续查找缺失字段时 panic。非零的既有 DRAM 字段保持原值。内核以硬件 `CNTFRQ_EL0` 作为架构时钟换算频率，屏幕显示其值。GIC 映射、Distributor、Redistributor、CPU 接口和 PPI 27 的启用分别输出阶段信息。
+加载器将 `/chosen/dram-base`、`dram-size` 的成对零占位符填写为本次实际分配的 XNU 可用内存窗口，避免后续查找缺失字段时 panic。非零的既有 DRAM 字段保持原值。内核以硬件 `CNTFRQ_EL0` 作为架构时钟换算频率，屏幕显示其值。GIC 映射、Distributor、Redistributor、CPU 接口和 PPI 27 的启用分别输出阶段信息；启动参数开启 `-enable_kprintf_spam`，使 DEVELOPMENT 内核实际输出这些 `kprintf` 日志。
 
 进入内核线程阶段后，屏幕顶部显示 `poll`、`timer` 与 `DT/CPU/GIC`。数值使用十六进制；`poll` 增长表示内核定时工作线程执行，`timer` 来自真实 PPI 27 中断计数，不由观察器累加。两者持续增长才可作为单核定时器和调度已运行的证据。上述行为尚待新版镜像的真机结果验证。
+
+### S6 后的控制台异常
+
+第 6 次镜像的真机照片显示 `arm_vm_init returned`，随后报告 `ESR_EL1=0x96000010`、`ELR_EL1=0xfffffff00794cb64`、`FAR_EL1=0xfffffff027c3f000`。用同一产物的符号和反汇编定位，故障指令是 `PE_create_console+0x48` 的 `ldr w8, [x0]`；该地址来自 `ml_io_map_wcomb(0x3c0fc000, 0x4000)`，读取的是 BCM2837 固定 panic 日志区。13T 配置复用了 BCM2837 编译目标，却遗漏了已有的 `XNU_DT_PANIC_REGION` 开关。
+
+配置现开启 `XNU_DT_PANIC_REGION`，复用仓库已有的设备树日志区检查。当前 ADT 没有 `pram` 节点，因此跳过保留日志区读取，继续初始化控制台，不再访问旧板物理地址。照片中 panic 字符重复来自普通控制台和 `PE_kputc` 同时转向屏幕；补丁在屏幕诊断启用时跳过第二次屏幕输出，保留 `debug_putc`。主机测试使用实际生产函数，覆盖无日志区、有效日志区、正常控制台初始化和两种 panic 输出路径。
 
 ### 本地验证
 

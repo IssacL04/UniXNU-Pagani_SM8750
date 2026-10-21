@@ -940,3 +940,34 @@ index 3c19f4d..5e0b9b9 100755
          trust_destination = Path('.cache/xnu-work/EXTERNAL_HEADERS/TrustCache')
          def restore_trust(entry):
              return restore(entry, trust_destination, trust_tag)
+diff --git a/patches/xnu/zzzz-boot-progress-panic-output.patch b/patches/xnu/zzzz-boot-progress-panic-output.patch
+new file mode 100644
+index 0000000..f5830eb
+--- /dev/null
++++ b/patches/xnu/zzzz-boot-progress-panic-output.patch
+@@ -0,0 +1,25 @@
++--- a/osfmk/kern/printf.c
+++++ b/osfmk/kern/printf.c
++@@ -1,3 +1,4 @@
+++#include <kern/boot_progress.h>
++ /*
++  * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
++  *
++@@ -920,7 +921,7 @@
++ 
++ 	debug_putc(c);
++ 
++-	if (!console_is_serial() && !disable_serial_output) {
+++	if (!console_is_serial() && !disable_serial_output && !boot_progress_active()) {
++ 		PE_kputc(c);
++ 	}
++ }
++@@ -932,7 +933,7 @@
++ 
++ 	debug_putc(c);
++ 
++-	if (!console_is_serial() && !disable_serial_output) {
+++	if (!console_is_serial() && !disable_serial_output && !boot_progress_active()) {
++ 		PE_kputc(c);
++ 	}
++ }

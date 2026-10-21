@@ -22,7 +22,7 @@ loader = "firmware"
 title = "OnePlus 13T XNU bring-up"
 dram_size = "0x10000000"
 timeout = 10
-kernel_args = ["-v", "serial=0", "debug=0x14e", "cpus=1"]
+kernel_args = ["-v", "serial=0", "debug=0x14e", "cpus=1", "-enable_kprintf_spam"]
 
 [payload.adt]
 tool = "scripts/make-oneplus13t-adt.py"
