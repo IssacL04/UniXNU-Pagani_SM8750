@@ -71,6 +71,11 @@ jobs:
         run: |
           ./unixnu build kernel payload -j 3 2>&1 | tee out/oneplus13t/logs/actions-build.log
 
+      - name: Check the native panic argument path
+        run: |
+          python3 ../device/drivers/BootProgress/Test/panic-entry.py out/oneplus13t/tree/.cache/xnu-work \
+            --font drivers/DarwinBoot/DarwinBootPkg/Driver
+
       - name: Upload the kernel, payload and logs
         if: always()
         uses: actions/upload-artifact@v4

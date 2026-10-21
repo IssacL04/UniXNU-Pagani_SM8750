@@ -22,11 +22,20 @@ volatile uint64_t armcpu_timer_interrupts;
 void early_boot_progress_vectors_done(void) {}
 static uintptr_t ml_io_map_wcomb(uintptr_t base, uint64_t size) { (void)size; return base; }
 static void clock_interval_to_deadline(unsigned n, unsigned scale, uint64_t *deadline) { *deadline = (uint64_t)n * scale; }
-static void thread_call_enter_delayed(thread_call_t call, uint64_t deadline) { (void)call; assert(deadline == NSEC_PER_SEC); }
+static unsigned scheduled;
+static void thread_call_enter_delayed(thread_call_t call, uint64_t deadline) { (void)call; assert(deadline == NSEC_PER_SEC); scheduled++; }
 static void thread_call_enter(thread_call_t call) { assert(call); }
 static thread_call_t thread_call_allocate_with_options(void (*fn)(void *, void *), void *arg, int priority, int options)
 { (void)fn; (void)arg; (void)priority; (void)options; return (void *)1; }
 #include "../BootProgress.c"
+
+static void panic_for_test(const char *format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    boot_progress_panic(format, &args, 0xfffffff007123456, 9, 0x140);
+    va_end(args);
+}
 
 int main(void)
 {
@@ -82,8 +91,46 @@ int main(void)
     armcpu_timer_interrupts = 7;
     boot_progress_start(); poll(NULL, NULL);
     assert(poll_count == 1 && armcpu_timer_interrupts == 7);
+    boot_progress_root("root device wait begin", "IOMedia Content=Apple_HFS", 60);
+    assert(root_sequence == 1 && root_value == 60);
+    assert(!strcmp(root_stage, "root device wait begin"));
+    assert(!strcmp(root_detail, "IOMedia Content=Apple_HFS"));
+    boot_progress_kernel_exception(0x96000010, 0xfffffff007345678, 0x12345000);
+    assert(fault_valid && fault_esr == 0x96000010 && fault_far == 0x12345000);
+    panic_for_test("Failed to mount %s: %u %llx %%", "root device", 60U, 0x123456789abcdef0ULL);
+    assert(panic_state == 1 && busy);
+    assert(!strcmp(boot_progress_panic_text, "Failed to mount root device: 60 123456789abcdef0 %"));
+    assert(allocation[GUARD] == 0xffff4040);
+    assert(allocation[GUARD + W / 3] == 0xff40ff40);
+    assert(allocation[GUARD + 2 * W / 3] == 0xff4080ff);
+    unsigned before_scheduled = scheduled, before_stages = stage_count;
+    boot_progress_putc('X'); boot_progress_stage("must not overwrite panic");
+    boot_progress_root("must not replace root state", NULL, 1); poll(NULL, NULL);
+    assert(scheduled == before_scheduled && stage_count == before_stages && root_sequence == 1);
+    assert(poll_count == 1 && armcpu_timer_interrupts == 7);
+    uintptr_t before_framebuffer = framebuffer;
+    boot_progress_bind(4, W, H, PITCH * 4, 32);
+    assert(framebuffer == before_framebuffer);
+    panic_for_test("nested failure %d", 123);
+    assert(!strcmp(boot_progress_panic_text, "Failed to mount root device: 60 123456789abcdef0 %"));
+    boot_progress_kernel_exception(0x96000004, 0xabcd, 0xdead);
+    assert(fault_esr == 0x96000010); // The first fault remains available.
+    early_boot_progress_init(&args);
+    char long_message[3000];
+    memset(long_message, 'P', sizeof(long_message) - 1); long_message[sizeof(long_message) - 1] = 0;
+    for (unsigned i = 0; i < HISTORY + 3; i++) boot_progress_stage("history wraps within its fixed storage");
+    panic_for_test("%s", long_message);
+    assert(strlen(boot_progress_panic_text) == sizeof(boot_progress_panic_text) - 1 && panic_clipped);
+    assert(allocation[GUARD] == 0xffff4040); // Long text never wraps over the panic banner.
+    for (unsigned i = 0; i < GUARD; i++) {
+        assert(allocation[i] == 0x12345678);
+        assert(allocation[GUARD + PITCH * H + i] == 0x12345678);
+    }
+    for (unsigned y = 0; y < H; y++)
+        for (unsigned x = W; x < PITCH; x++) assert(allocation[GUARD + y * PITCH + x] == 0x12345678);
     early_boot_progress_suspend();
     assert(!boot_progress_active());
     free(tables); free(allocation);
-    puts("PASS: framebuffer bounds, wrap, identity-map conflicts/exhaustion, observed timer count");
+    puts("PASS: framebuffer/map bounds, root state, panic formatting, truncation, first-fault retention and frozen observer");
+    return 0;
 }

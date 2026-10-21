@@ -4,7 +4,7 @@
 
 ## XNU 内核适配与 macOS Actions
 
-当前提供源码内核的早期启动配置和 UEFI 负载通路。第 6 次构建的镜像已实机显示 `S1` 至 `S6`；第 7 次镜像已越过控制台异常，继续到 `zalloc`，随后触发类型分配器的池数量断言。接下来验证分配器修复、ArmDTPlatform、ArmCpu 与架构定时器；没有根文件系统，因此不以启动 iOS 用户态为本轮验收点。
+当前提供源码内核的早期启动配置和 UEFI 负载通路。第 6 次镜像已实机显示 `S1` 至 `S6`；第 7 次越过控制台异常；第 8 次越过 `zalloc` 并进入 BSD 初始化，最后可见 `calling setconf`。观察线程刷新至 `poll=0x3b`，定时器计数约为 `0xf3`，`DT/CPU/GIC=1/1/1`，随后画面停止。单核中断与线程已运行过，持续稳定性和具体停止位置仍待验证；当前没有根文件系统。
 
 | 部分 | 本轮状态 | 执行位置 |
 | --- | --- | --- |
@@ -153,7 +153,7 @@ fastboot boot boot-13t-xnu-kalloc-fix.img
 
 用户此前日志中的 `964E5B22-6459-11D2-8E39-00A0C969723B` 是 `EFI_SIMPLE_FILE_SYSTEM_PROTOCOL`。错误由 BDS 后续 USB 启动路径枚举文件系统时产生，不代表 XNU 内核入口失败。
 
-若出现 XNU 启动项前仍使用 `built-in configuration`，启动停在配置卷发现阶段；如果出现 XNU 启动项后才报错或黑屏，则已经进入后续加载阶段。能取得串口日志时，重点记录 `13T payload:` 的 FDT 地址、initrd 范围和错误码，以及 `DARWINBOOT: inputs validated; exiting boot services`、内核版本和平台日志。绿色交接条只说明 DarwinEnter 执行，不能代替 XNU 启动证据。第 7 次候选已实测越过 `S6` 后的控制台故障，继续到 `zalloc` 并触发下文所述分配器断言；第 8 次修复镜像尚待实机验证。选中启动项后，重点记录是否出现 `S1`、最后一个检查点或异常寄存器，含义见下节。当前仍没有根文件系统与完整 iOS 用户态。
+若出现 XNU 启动项前仍使用 `built-in configuration`，启动停在配置卷发现阶段；如果出现 XNU 启动项后才报错或黑屏，则已经进入后续加载阶段。能取得串口日志时，重点记录 `13T payload:` 的 FDT 地址、initrd 范围和错误码，以及 `DARWINBOOT: inputs validated; exiting boot services`、内核版本和平台日志。绿色交接条只说明 DarwinEnter 执行，不能代替 XNU 启动证据。第 8 次候选已实测越过分配器断言，执行到 BSD 的 `setconf` 入口。屏幕日志到底部后从顶部覆盖，底部一行未必是最新日志。后续测试重点记录固定 `ROOT` 状态行或完整 panic 页。当前仍没有根文件系统与完整 iOS 用户态。
 
 ### XNU 入口、异常与单核定时器诊断
 
@@ -173,7 +173,27 @@ fastboot boot boot-13t-xnu-kalloc-fix.img
 
 加载器将 `/chosen/dram-base`、`dram-size` 的成对零占位符填写为本次实际分配的 XNU 可用内存窗口，避免后续查找缺失字段时 panic。非零的既有 DRAM 字段保持原值。内核以硬件 `CNTFRQ_EL0` 作为架构时钟换算频率，屏幕显示其值。GIC 映射、Distributor、Redistributor、CPU 接口和 PPI 27 的启用分别输出阶段信息；启动参数开启 `-enable_kprintf_spam`，使 DEVELOPMENT 内核实际输出这些 `kprintf` 日志。
 
-进入内核线程阶段后，屏幕顶部显示 `poll`、`timer` 与 `DT/CPU/GIC`。数值使用十六进制；`poll` 增长表示内核定时工作线程执行，`timer` 来自真实 PPI 27 中断计数，不由观察器累加。两者持续增长才可作为单核定时器和调度已运行的证据。上述行为尚待新版镜像的真机结果验证。
+进入内核线程阶段后，屏幕顶部显示 `poll`、`timer` 与 `DT/CPU/GIC`。数值使用十六进制；`poll` 增长表示内核定时工作线程执行，`timer` 来自真实 PPI 27 中断计数，不由观察器累加。第 8 次镜像已观察到 59 次刷新和约 243 次定时器中断。两个数字由同一回调刷新，画面停止不能单独证明硬件中断停止；代码没有 59 次或 60 秒的观察器停止条件。
+
+### 根设备检查点与完整 panic 屏
+
+`zzzzz-root-panic-progress.patch` 在 `setconf` 与 `IOFindBSDRoot` 加入直接屏幕输出，覆盖 IOBSD 资源的 30 秒等待、`rd/rootdev` 选择、chosen ramfile 与 RAMDisk 属性、设备匹配条件、根设备等待返回、缺失根卷图标，以及最终 panic。每一步打印 `[ROOT]`，并将最新状态保留在顶部第四行。数值按十六进制显示，例如当前 DEVELOPMENT 配置的根设备等待上限为 `0x3c`，即 60 秒。
+
+| 最后状态 | 对应位置 |
+| --- | --- |
+| `IOBSD resource wait` | 正在等文件系统服务完成 IOBSD 资源匹配 |
+| `root device wait begin` | 已提交实际根设备匹配条件，正在等服务 |
+| `root device wait returned` / `timeout` | 等待函数已返回空结果 |
+| `root timeout: noroot icon` | 即将进入缺失根卷图标的绘制路径 |
+| `root timeout: icon returned` | 缺失根卷图标调用已经返回 |
+| `root timeout: panic` | 即将调用 `panic("Failed to mount root device")` |
+| `root device selected` / `setconf returned` | 已选到设备，或 setconf 查询已经返回；仍需观察挂载结果 |
+
+完整 panic 屏直接接在源码 `panic_trap_to_debugger` 的入口，覆盖 `panic`、`panic_with_options` 与 `panic_with_data` 的公共路径。它在机器调试器和复位流程之前显示格式化错误正文、调用地址、MPIDR、处理函数的 SP/FP/DAIF、页表控制寄存器、最后根设备状态、计数器快照及最近八个阶段。已记录致命异常时另列 ESR/ELR/FAR/SPSR；普通主动 panic 不把旧异常寄存器冒充故障现场。XNU 异常包装函数传来的通用寄存器保留在错误正文中。
+
+页面顶部的红、绿、蓝三段只标识 panic 页面已经接管显示，不代表 UFS 或其他适配阶段。首条错误写入 2 KiB 固定缓冲区，过长正文或屏幕空间不足会标记 `SCREEN TEXT CLIPPED`。普通日志与观察器停止覆盖该页面，嵌套 panic/异常保留第一条错误并在底部另行标记。当前单核诊断配置进入 panic 后停住，不调用软件自动复位流程。早期 MMU 异常继续使用物理 framebuffer 的异常页。
+
+该屏幕随 `XNU_EARLY_BOOT_PROGRESS` 编译进源码内核，未使用参考设备的二进制地址补丁。因此 `payload.json` 中表示二进制补丁的 `panic_screen` 字段仍为 `false`。主机检查覆盖实际绘图代码的地址边界、长文本、冻结与嵌套异常，并提取当前 XNU 的真实 panic 包装函数验证参数传递；云端再用 macOS 原生 ABI 执行同一检查。新屏幕和根设备停点仍需实机照片确认。
 
 ### zalloc 类型分配器断言
 
@@ -181,7 +201,7 @@ fastboot boot boot-13t-xnu-kalloc-fix.img
 
 本设备现使用已有启动参数 `kt_fixed_zones=240`。同一分配函数计算出的最大槽位需求为 30，ASan/UBSan 主机检查通过；类型分池、共享池及原有边界断言均保留。此预算针对当前源码内核的类型分布，增加驱动或更换编译器后应重新核对最终内核的分配结果。照片中的 zone 虚拟地址范围不代表实际分配了相同容量的物理 RAM；本设备仍只向 XNU 提供 256 MiB 窗口。
 
-[第 8 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39652160998)以提交 `4726941` 成功完成，artifact 为 `oneplus13t-xnu-8`，本地位于 `../UniXNU/out/oneplus13t/actions/run-8/`。下载后重新从最终内核提取类型分布并执行原始预算函数，最大槽位需求仍为 30；FAT 内核与独立产物逐字节相同，配置实际包含 `kt_fixed_zones=240`。完整 `xnu-source-run-8-kalloc-fix/boot.img` 为 15,196,160 字节，Android v4 头、ARM64 长度、UEFI、64 MiB 内嵌负载与原机 DTB 的解包比对均通过。新版仍待真机确认是否越过 `zalloc`。
+[第 8 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39652160998)以提交 `4726941` 成功完成，artifact 为 `oneplus13t-xnu-8`，本地位于 `../UniXNU/out/oneplus13t/actions/run-8/`。下载后重新从最终内核提取类型分布并执行原始预算函数，最大槽位需求仍为 30；FAT 内核与独立产物逐字节相同，配置实际包含 `kt_fixed_zones=240`。完整 `xnu-source-run-8-kalloc-fix/boot.img` 为 15,196,160 字节，Android v4 头、ARM64 长度、UEFI、64 MiB 内嵌负载与原机 DTB 的解包比对均通过。后续真机照片已确认越过 `zalloc` 并执行至 `setconf` 入口。
 
 ### S6 后的控制台异常
 
