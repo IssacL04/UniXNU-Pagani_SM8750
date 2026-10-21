@@ -53,6 +53,8 @@ git -C ../UniXNU submodule update --init --recursive
 
 迁移后的 UEFI 已在 Linux 重新编译通过，Mu_Basecore 补丁在构建完成后正常撤回。固件仓库当前为私有，访问或克隆需要授权账户；设备仓库沿用原有公开可见性。
 
+迁移后的[第 10 次 Actions](https://github.com/IssacL04/UniXNU-Sun_SM8750/actions/runs/39665495073)以提交 `7205527` 成功完成，覆盖独立源码准备、前置测试、XNU/payload 构建和 macOS 原生 panic 参数检查。产物已下载到 `out/oneplus13t/actions/run-10/`，内核与 FAT 内容、ADT 和启动参数核对通过。此次用于验证迁移后的构建通路；已实测的 run-9 完整镜像保持原样，新基线尚未实机启动。
+
 云端使用本仓库的 [XNU 工作流](.github/workflows/xnu.yml)，通过同一入口准备源码和输出。仍仅手动触发，不需要私有 Secrets，不下载 IPSW，也不构建 userdata。UEFI 和含原机 DTB 的最终 boot.img 留在 Linux 本地构建。仓库更名保留原有提交与 Actions 历史。
 
 ### 触发构建与下载结果
