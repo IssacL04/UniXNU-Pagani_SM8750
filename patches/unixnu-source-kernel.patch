@@ -239,13 +239,15 @@ index 0000000..6c79ba0
 +    main()
 diff --git a/scripts/test-kernel-source.py b/scripts/test-kernel-source.py
 new file mode 100644
-index 0000000..ffa907d
+index 0000000..45521e3
 --- /dev/null
 +++ b/scripts/test-kernel-source.py
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,104 @@
 +#!/usr/bin/env python3
 +"""Source-kernel publication and compile-record regression checks (no Xcode)."""
 +import importlib.util
++import os
++import runpy
 +import struct
 +import subprocess
 +import tempfile
@@ -263,6 +265,18 @@ index 0000000..ffa907d
 +
 +
 +class SourceKernelTest(unittest.TestCase):
++    def test_header_fetch_auth_stays_on_github_api(self):
++        read_url = runpy.run_path(str(Path(__file__).with_name('prepare-xnu-source.py')))['read_url']
++        for token in ('test-token', ''):
++            with patch.dict(os.environ, {'GITHUB_TOKEN': token}), patch('urllib.request.urlopen') as opened:
++                opened.return_value.read.return_value = b'headers'
++                for url in ('https://api.github.com/repos/apple-oss-distributions/xnu/contents',
++                            'https://raw.githubusercontent.com/apple-oss-distributions/xnu/tag/file.h',
++                            'https://api.github.com.example.org/file', 'http://api.github.com/file'):
++                    self.assertEqual(read_url(url), b'headers')
++                    expected = f'Bearer {token}' if token and url.startswith('https://api.github.com/') else None
++                    self.assertEqual(opened.call_args.args[0].get_header('Authorization'), expected)
++
 +    def setUp(self):
 +        self.temp = tempfile.TemporaryDirectory()
 +        self.addCleanup(self.temp.cleanup)
@@ -866,3 +880,63 @@ index 0000000..4438159
 +
 +if __name__ == '__main__':
 +    unittest.main()
+diff --git a/scripts/prepare-xnu-source.py b/scripts/prepare-xnu-source.py
+index 3c19f4d..5e0b9b9 100755
+--- a/scripts/prepare-xnu-source.py
++++ b/scripts/prepare-xnu-source.py
+@@ -6,6 +6,7 @@ import json
+ import os
+ from pathlib import Path
+ import urllib.request
++from urllib.parse import urlsplit
+ 
+ # Tags of the Apple sources that still carry the headers newer xnu omits; feeds.toml sets them for the unixnu driver.
+ TAG = os.environ.get('UNIXNU_DRIVERKIT_TAG', 'xnu-10063.121.3')
+@@ -15,6 +16,14 @@ CACHE = Path(f'.cache/sources/xnu-driverkit-{TAG.removeprefix("xnu-")}.json')
+ URL = f'https://api.github.com/repos/apple-oss-distributions/xnu/contents/iokit/DriverKit?ref={TAG}'
+ 
+ 
++def read_url(url):
++    token = os.environ.get('GITHUB_TOKEN')
++    headers = {}
++    if token and urlsplit(url).scheme == 'https' and urlsplit(url).netloc == 'api.github.com':
++        headers['Authorization'] = f'Bearer {token}'
++    return urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30).read()
++
++
+ def restore(entry, destination=DESTINATION, tag=TAG):
+     if entry['type'] != 'file' or not entry['name'].endswith('.h'):
+         return None
+@@ -22,7 +31,7 @@ def restore(entry, destination=DESTINATION, tag=TAG):
+     target = destination / name
+     if target.exists():
+         return None
+-    data = urllib.request.urlopen(entry['download_url'], timeout=30).read()
++    data = read_url(entry['download_url'])
+     digest = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+     if digest != entry['sha']:
+         raise ValueError(f'Git blob hash mismatch: {entry["name"]}')
+@@ -37,12 +46,12 @@ if __name__ == '__main__':
+         raise SystemExit('Create the local XNU work source before preparing headers')
+     if not CACHE.exists():
+         CACHE.parent.mkdir(parents=True, exist_ok=True)
+-        CACHE.write_bytes(urllib.request.urlopen(URL, timeout=30).read())
++        CACHE.write_bytes(read_url(URL))
+     entries = json.loads(CACHE.read_text())
+     crypto_cache = CACHE.with_name(f'xnu-driverkit-crypto-{TAG.removeprefix("xnu-")}.json')
+     if not crypto_cache.exists():
+         crypto_url = URL.replace('/DriverKit?', '/DriverKit/crypto?')
+-        crypto_cache.write_bytes(urllib.request.urlopen(crypto_url, timeout=30).read())
++        crypto_cache.write_bytes(read_url(crypto_url))
+     for entry in json.loads(crypto_cache.read_text()):
+         entry['relative'] = 'crypto/' + entry['name']
+         entries.append(entry)
+@@ -53,7 +62,7 @@ if __name__ == '__main__':
+         if not trust_cache.exists():
+             url = ('https://api.github.com/repos/apple-oss-distributions/xnu/'
+                    f'contents/EXTERNAL_HEADERS/TrustCache?ref={trust_tag}')
+-            trust_cache.write_bytes(urllib.request.urlopen(url, timeout=30).read())
++            trust_cache.write_bytes(read_url(url))
+         trust_destination = Path('.cache/xnu-work/EXTERNAL_HEADERS/TrustCache')
+         def restore_trust(entry):
+             return restore(entry, trust_destination, trust_tag)

@@ -66,6 +66,8 @@ jobs:
           cp ../device/unixnu.lock out/oneplus13t/unixnu.lock
 
       - name: Build XNU and the FAT payload
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           ./unixnu build kernel payload -j 3 2>&1 | tee out/oneplus13t/logs/actions-build.log
 
