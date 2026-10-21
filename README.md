@@ -10,8 +10,8 @@
 | --- | --- | --- |
 | DarwinBoot 与 13T BootPayloadDxe | 已加入 DSC/FDF，固件编译通过 | 当前 Linux |
 | Apple 设备树 | `scripts/make-oneplus13t-adt.py`，主机测试对照实际 `sysinfo/live.dtb` 通过 | Linux 或 macOS |
-| XNU 与源码 corecrypto、pthread、ArmDTPlatform、ArmCpu、早期诊断库 | 第 8 次 Actions 构建通过，保留控制台修复并调整类型分配器预算 | GitHub Actions macOS runner |
-| FAT payload 与 Android boot.img | 第 8 次 Actions 已生成 payload；本地已生成 `xnu-source-run-8-kalloc-fix/boot.img` 并通过解包比对 | macOS Actions 与当前 Linux |
+| XNU 与源码 corecrypto、pthread、ArmDTPlatform、ArmCpu、早期诊断库 | 第 9 次 Actions 构建通过，加入根设备检查点与完整 panic 页，保留此前修复 | GitHub Actions macOS runner |
+| FAT payload 与 Android boot.img | 第 9 次 Actions 已生成 payload；本地已生成 `xnu-source-run-9-root-panic/boot.img` 并通过解包比对 | macOS Actions 与当前 Linux |
 | kernelcache 预链接、userdata、iOS 用户态 | 未配置，后续接入 | 预链接输入提取与 userdata 工具使用 macOS |
 
 2026-10-21 的[第 1 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39613407803)在最终链接时缺少 `_native_legacy_display_probe`：上游 `offline-component-load-probes.patch` 的一处调用漏了 `XNU_NATIVE_LEGACY_DISPLAY` 条件，关闭显示驱动的 13T 配置仍引用该符号。提交 `e352179` 补上条件并增加预处理回归测试，覆盖未定义、关闭和开启三种情况。[第 2 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39614832285)已成功完成内核与 payload 构建，artifact 为 `oneplus13t-xnu-2`。
@@ -103,13 +103,13 @@ unixnu.lock
 ```sh
 cd /home/enc3l/Project/UniXNU_SM8750/UniXNU
 export PATH=/home/enc3l/Project/OP_Kernel_Dev/src/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/bin:$PATH
-unzip /path/to/oneplus13t-xnu-8.zip -d out/oneplus13t/actions/run-8
-test -s out/oneplus13t/actions/run-8/kernel/kernel.macho
-test -s out/oneplus13t/actions/run-8/payload/payload.img
+unzip /path/to/oneplus13t-xnu-9.zip -d out/oneplus13t/actions/run-9
+test -s out/oneplus13t/actions/run-9/kernel/kernel.macho
+test -s out/oneplus13t/actions/run-9/payload/payload.img
 ./unixnu bootimg -D ../UniXNU-oneplus13t --uefi ../uefi-oneplus13t \
   --dtb ../UniXNU-oneplus13t/.cache/firmware/vendor_boot/dtb \
-  --ramdisk out/oneplus13t/actions/run-8/payload/payload.img \
-  -o out/oneplus13t/boot/xnu-source-run-8-kalloc-fix/boot.img
+  --ramdisk out/oneplus13t/actions/run-9/payload/payload.img \
+  -o out/oneplus13t/boot/xnu-source-run-9-root-panic/boot.img
 ```
 
 前两项文件检查应均成功，再执行打包。新的候选不会覆盖 `menu-keys`、`no-sdcc` 或 `payload-smoke`。将生成的 `boot.img` 复制到 Windows 后，用已验证的 `fastboot boot` 临时启动路径测试；不要直接刷写 boot 分区。
@@ -140,11 +140,11 @@ Android v4 可能在 FAT 前拼接 vendor ramdisk、在尾部追加 bootconfig�
 
 ### 当前可测试镜像
 
-使用 `../UniXNU/out/oneplus13t/boot/xnu-source-run-8-kalloc-fix/boot.img`。该镜像包含 UEFI、DarwinBoot、云端第 8 次构建的真实 XNU 内核、控制台 panic 修复、`kt_fixed_zones=240` 分配器预算、早期诊断代码及 13T ADT，使用内嵌负载交接，并保留菜单错误显示。固件构建标识为 `oneplus13t-xnu-early-progress-20261021`。复制到 Windows 并命名为 `boot-13t-xnu-kalloc-fix.img` 后：
+使用 `../UniXNU/out/oneplus13t/boot/xnu-source-run-9-root-panic/boot.img`。该镜像包含 UEFI、DarwinBoot、云端第 9 次构建的真实 XNU 内核、根设备检查点、完整 panic 页、`kt_fixed_zones=240` 分配器预算及 13T ADT，使用内嵌负载交接，并保留此前控制台修复和菜单错误显示。UEFI 沿用已构建版本，固件标识仍为 `oneplus13t-xnu-early-progress-20261021`。复制到 Windows 并命名为 `boot-13t-xnu-root-panic.img` 后：
 
 ```bat
 adb reboot bootloader
-fastboot boot boot-13t-xnu-kalloc-fix.img
+fastboot boot boot-13t-xnu-root-panic.img
 ```
 
 如果已在 bootloader，只执行第二条。使用 `fastboot boot` 临时启动，不刷写分区。成功读取配置时应出现 **OnePlus 13T XNU bring-up** 启动项，配置来源为 `\EFI\UniXNU\unixnu.toml`，默认等待 10 秒后尝试加载内核。建议从执行命令前开始录像，以便保留菜单切换、报错和重启前的最后画面。
@@ -194,6 +194,10 @@ fastboot boot boot-13t-xnu-kalloc-fix.img
 页面顶部的红、绿、蓝三段只标识 panic 页面已经接管显示，不代表 UFS 或其他适配阶段。首条错误写入 2 KiB 固定缓冲区，过长正文或屏幕空间不足会标记 `SCREEN TEXT CLIPPED`。普通日志与观察器停止覆盖该页面，嵌套 panic/异常保留第一条错误并在底部另行标记。当前单核诊断配置进入 panic 后停住，不调用软件自动复位流程。早期 MMU 异常继续使用物理 framebuffer 的异常页。
 
 该屏幕随 `XNU_EARLY_BOOT_PROGRESS` 编译进源码内核，未使用参考设备的二进制地址补丁。因此 `payload.json` 中表示二进制补丁的 `panic_screen` 字段仍为 `false`。主机检查覆盖实际绘图代码的地址边界、长文本、冻结与嵌套异常，并提取当前 XNU 的真实 panic 包装函数验证参数传递；云端再用 macOS 原生 ABI 执行同一检查。新屏幕和根设备停点仍需实机照片确认。
+
+[第 9 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39657848352)以提交 `bf87a02` 成功完成，绘图测试与 macOS 原生 panic 参数检查均通过。artifact 为 `oneplus13t-xnu-9`，本地位于 `../UniXNU/out/oneplus13t/actions/run-9/`。最终 Mach-O 已确认三种 panic 包装函数进入公共入口，该入口的首个函数调用为 `boot_progress_panic`；`IOFindBSDRoot` 内含 17 处根设备检查点调用。类型分配器最大槽位需求仍为 30。
+
+本轮内核为 21,469,496 字节，完整 `xnu-source-run-9-root-panic/boot.img` 为 15,200,256 字节。已核对云端报告哈希、FAT 内核与 ADT、实际启动参数、Android v4 头、ARM64 长度、UEFI、64 MiB 内嵌负载及原机 DTB。新镜像尚未实机启动；测试时保留最后的固定 `ROOT` 行或完整 panic 页，以确定上一轮画面停止的具体位置。
 
 ### zalloc 类型分配器断言
 
