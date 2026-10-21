@@ -10,11 +10,15 @@
 | --- | --- | --- |
 | DarwinBoot 与 13T BootPayloadDxe | 已加入 DSC/FDF，固件编译通过 | 当前 Linux |
 | Apple 设备树 | `scripts/make-oneplus13t-adt.py`，主机测试对照实际 `sysinfo/live.dtb` 通过 | Linux 或 macOS |
-| XNU 与源码 corecrypto、pthread、ArmDTPlatform、ArmCpu | 第 2 次 Actions 构建通过，已输出 `kernel.macho` | GitHub Actions macOS runner |
-| FAT payload 与 Android boot.img | 第 2 次 Actions 已生成 payload；本地已生成 `xnu-source-run-2-embedded/boot.img` 并通过解包比对 | macOS Actions 与当前 Linux |
+| XNU 与源码 corecrypto、pthread、ArmDTPlatform、ArmCpu、早期诊断库 | 第 6 次 Actions 构建通过，已输出 `kernel.macho` | GitHub Actions macOS runner |
+| FAT payload 与 Android boot.img | 第 6 次 Actions 已生成 payload；本地已生成 `xnu-source-run-6-early-progress/boot.img` 并通过解包比对 | macOS Actions 与当前 Linux |
 | kernelcache 预链接、userdata、iOS 用户态 | 未配置，待内核入口验证后接入 | 预链接输入提取与 userdata 工具使用 macOS |
 
 2026-10-21 的[第 1 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39613407803)在最终链接时缺少 `_native_legacy_display_probe`：上游 `offline-component-load-probes.patch` 的一处调用漏了 `XNU_NATIVE_LEGACY_DISPLAY` 条件，关闭显示驱动的 13T 配置仍引用该符号。提交 `e352179` 补上条件并增加预处理回归测试，覆盖未定义、关闭和开启三种情况。[第 2 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39614832285)已成功完成内核与 payload 构建，artifact 为 `oneplus13t-xnu-2`。
+
+2026-10-22 的早期诊断构建修复了三处问题：[第 3 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39634416285)发现当前 XNU 的 `T0SZ_BOOT=26`，屏幕映射现按内核选择的 38/39 位地址范围检查；[第 4 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39635731429)遇到 GitHub API 匿名限流，公开头文件元数据请求现使用 Actions 自带的只读令牌；[第 5 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39636435946)已编译诊断库，但指令检查把整数指令机器码误认作浮点寄存器，现只检查反汇编指令。相关边界、令牌发送范围与真实 SIMD 指令拦截均已验证。
+
+[第 6 次构建](https://github.com/IssacL04/UniXNU-oneplus13t/actions/runs/39637689404)以提交 `1643c4c` 成功完成，artifact 为 `oneplus13t-xnu-6`，本地位于 `../UniXNU/out/oneplus13t/actions/run-6/`。新内核为 21,451,832 字节，FAT payload 为 64 MiB；最终 `boot.img` 为 15,196,160 字节。已核对云端与本地哈希、FAT 内的内核和 ADT、内嵌负载及未改写的 DTB，并从最终 Mach-O 确认真实入口跳至 `early_boot_progress_entry`，初始页表为 4 KiB、`T0SZ_BOOT=26`。这些是编译和产物检查，真机 XNU 入口及定时器行为仍待验证。
 
 本地已下载到 `../UniXNU/out/oneplus13t/actions/run-2/`：源码内核为 21,430,552 字节，payload 为 64 MiB，两者均与云端报告中的哈希一致，FAT 卷内的内核也与独立内核逐字节相同。旧候选 `xnu-source-run-2/boot.img` 经用户实测进入 UniXNU 后显示 `no boot entry found`，说明配置卷尚未被发现，不能视为 XNU 已启动。修复逐字节扫描后的 `xnu-source-run-2-payload-fix/boot.img` 经用户实测仍显示相同提示，随后 BDS 报找不到文件系统协议。后续带状态提示的完整镜像显示 `payload FAT scan B6B54000-B7FFF50C: Not Found`：FDT 与输入范围检查通过，但实际 initrd 只有 21,673,228 字节（20.67 MiB），装不下本轮 64 MiB FAT 卷。内核镜像内嵌负载传递现已实测显示启动项，选择后出现 DarwinBoot 绿色交接条。绿色条位于跳转 XNU 之前，证明加载器交接代码执行；旧提示 “kernel entry code ran” 已改正。
 
@@ -26,7 +30,7 @@
 
 设备仓库已发布为 [IssacL04/UniXNU-oneplus13t](https://github.com/IssacL04/UniXNU-oneplus13t)，本目录就是仓库根目录。使用本仓库的 [OnePlus 13T XNU 工作流](.github/workflows/xnu.yml)，无需另建 UniXNU fork 或 UEFI 仓库。
 
-该工作流在 `macos-15` 上拉取上游 UniXNU 的固定提交 `b6ae99c17194e6a18fd819d3148e69fe405e91fc`，应用 [源码内核补丁](patches/unixnu-source-kernel.patch)，选中 `oneplus13t_defconfig`，然后执行 `build kernel payload`。补丁包含 `source_only`、ArmDTPlatform/ArmCpu 的静态库构建脚本与相应回归测试。Apple 源码版本沿用该提交的 `feeds.toml` 固定值。更新上游时，应同时检查补丁能否应用。
+该工作流在 `macos-15` 上拉取上游 UniXNU 的固定提交 `b6ae99c17194e6a18fd819d3148e69fe405e91fc`，应用 [源码内核补丁](patches/unixnu-source-kernel.patch)，选中 `oneplus13t_defconfig`，然后执行 `build kernel payload`。补丁包含 `source_only`、ArmDTPlatform/ArmCpu 的静态库构建、早期诊断钩子、架构时钟频率读取和相应回归测试。Apple 源码版本沿用该提交的 `feeds.toml` 固定值。更新上游时，应同时检查补丁能否应用。
 
 云端只需本目录的源码和配置。`.gitignore` 已排除 `.cache/`、原始 `sysinfo/` 和镜像；工作流也不读取它们。与真实 `live.dtb` 对照的测试留在本地执行，云端运行不依赖设备资料的两项 ADT 测试。当前无需设置仓库 Secrets，不下载 IPSW，也不构建 userdata。UEFI 和含原机 DTB 的最终 boot.img 继续使用当前 Linux 工作区生成。
 
@@ -99,13 +103,13 @@ unixnu.lock
 ```sh
 cd /home/enc3l/Project/UniXNU_SM8750/UniXNU
 export PATH=/home/enc3l/Project/OP_Kernel_Dev/src/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/bin:$PATH
-unzip /path/to/oneplus13t-xnu-2.zip -d out/oneplus13t/actions/run-2
-test -s out/oneplus13t/actions/run-2/kernel/kernel.macho
-test -s out/oneplus13t/actions/run-2/payload/payload.img
+unzip /path/to/oneplus13t-xnu-6.zip -d out/oneplus13t/actions/run-6
+test -s out/oneplus13t/actions/run-6/kernel/kernel.macho
+test -s out/oneplus13t/actions/run-6/payload/payload.img
 ./unixnu bootimg -D ../UniXNU-oneplus13t --uefi ../uefi-oneplus13t \
   --dtb ../UniXNU-oneplus13t/.cache/firmware/vendor_boot/dtb \
-  --ramdisk out/oneplus13t/actions/run-2/payload/payload.img \
-  -o out/oneplus13t/boot/xnu-source-run-2-embedded/boot.img
+  --ramdisk out/oneplus13t/actions/run-6/payload/payload.img \
+  -o out/oneplus13t/boot/xnu-source-run-6-early-progress/boot.img
 ```
 
 前两项文件检查应均成功，再执行打包。新的候选不会覆盖 `menu-keys`、`no-sdcc` 或 `payload-smoke`。将生成的 `boot.img` 复制到 Windows 后，用已验证的 `fastboot boot` 临时启动路径测试；不要直接刷写 boot 分区。
@@ -136,11 +140,11 @@ Android v4 可能在 FAT 前拼接 vendor ramdisk、在尾部追加 bootconfig�
 
 ### 当前可测试镜像
 
-使用 `../UniXNU/out/oneplus13t/boot/xnu-source-run-2-embedded/boot.img`。该镜像包含 UEFI、DarwinBoot、云端第 2 次成功构建的真实 XNU 内核及 13T ADT，使用内嵌负载交接，并保留菜单错误显示。固件构建标识为 `oneplus13t-embedded-payload-20261021`。复制到 Windows 并命名为 `boot-13t-xnu-embedded.img` 后：
+使用 `../UniXNU/out/oneplus13t/boot/xnu-source-run-6-early-progress/boot.img`。该镜像包含 UEFI、DarwinBoot、云端第 6 次构建的真实 XNU 内核、早期诊断代码及 13T ADT，使用内嵌负载交接，并保留菜单错误显示。固件构建标识为 `oneplus13t-xnu-early-progress-20261021`。复制到 Windows 并命名为 `boot-13t-xnu-early.img` 后：
 
 ```bat
 adb reboot bootloader
-fastboot boot boot-13t-xnu-embedded.img
+fastboot boot boot-13t-xnu-early.img
 ```
 
 如果已在 bootloader，只执行第二条。使用 `fastboot boot` 临时启动，不刷写分区。成功读取配置时应出现 **OnePlus 13T XNU bring-up** 启动项，配置来源为 `\EFI\UniXNU\unixnu.toml`，默认等待 10 秒后尝试加载内核。建议从执行命令前开始录像，以便保留菜单切换、报错和重启前的最后画面。
@@ -149,7 +153,7 @@ fastboot boot boot-13t-xnu-embedded.img
 
 用户此前日志中的 `964E5B22-6459-11D2-8E39-00A0C969723B` 是 `EFI_SIMPLE_FILE_SYSTEM_PROTOCOL`。错误由 BDS 后续 USB 启动路径枚举文件系统时产生，不代表 XNU 内核入口失败。
 
-若出现 XNU 启动项前仍使用 `built-in configuration`，启动停在配置卷发现阶段；如果出现 XNU 启动项后才报错或黑屏，则已经进入后续加载阶段。能取得串口日志时，重点记录 `13T payload:` 的 FDT 地址、initrd 范围和错误码，以及 `DARWINBOOT: inputs validated; exiting boot services`、内核版本和平台日志。绿色交接条只说明 DarwinEnter 执行，不能代替 XNU 启动证据。此候选已实测走到绿色交接条，尚未确认 XNU 入口；当前仍没有根文件系统与完整 iOS 用户态。
+若出现 XNU 启动项前仍使用 `built-in configuration`，启动停在配置卷发现阶段；如果出现 XNU 启动项后才报错或黑屏，则已经进入后续加载阶段。能取得串口日志时，重点记录 `13T payload:` 的 FDT 地址、initrd 范围和错误码，以及 `DARWINBOOT: inputs validated; exiting boot services`、内核版本和平台日志。绿色交接条只说明 DarwinEnter 执行，不能代替 XNU 启动证据。此前第 2 次内核的内嵌候选已实测走到绿色交接条；本轮新镜像尚未上机。选中启动项后，重点记录是否出现 `S1`、最后一个检查点或异常寄存器，含义见下节。当前仍没有根文件系统与完整 iOS 用户态。
 
 ### XNU 入口、异常与单核定时器诊断
 
@@ -192,7 +196,7 @@ cc -std=c11 -fshort-wchar -ffunction-sections -fdata-sections \
   uefi-oneplus13t/Platforms/OnePlus/oneplus13tPkg/Drivers/BootPayloadDxe/Test/payload_host.c \
   uefi-oneplus13t/Platforms/OnePlus/oneplus13tPkg/Library/MemoryMapLib/MemoryMapLib.c \
   -Wl,--gc-sections -o /tmp/oneplus13t-payload-test
-/tmp/oneplus13t-payload-test UniXNU/out/oneplus13t/actions/run-2/payload/payload.img
+/tmp/oneplus13t-payload-test UniXNU/out/oneplus13t/actions/run-6/payload/payload.img
 ```
 
 下文保留已验证菜单基线和之前的故障定位过程。`menu-keys`、`no-sdcc` 镜像未被本轮覆盖。
