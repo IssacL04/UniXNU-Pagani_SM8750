@@ -1,6 +1,6 @@
 # Stage 6：一加 13T 存储与根卷
 
-更新：2026-10-23。第 14 次真机日志确认页表修复生效，内核已进入 BSD 根设备查找；当前停点为 `UFS ROOT FAILURE: unsupported SMMU geometry`。已按实测寄存器和原机设备树修正 SMMU 映射范围，本地回归通过，待新镜像验证。8.74 GiB 的 iPadOS 根镜像和签名策略已生成并通过本地校验，尚未写入手机。XNU 根卷挂载及 `launchd` 启动仍未完成。
+更新：2026-10-23。第 14 次真机日志确认页表修复生效；第 15 次通过 SMMU 几何检查后，停在新增的 `unsupported SMMU stream count` 限制。模式 7 已读到 IDR0=0x4c017e84（132 组），UFS 的精确 SID 0x60 位于条目 0、指向 bank 0。已按高通规则限制到 128 个标准组，并允许将该 UFS 条目重定向至经过占用检查的空闲 bank；本地验证通过，待新内核真机验证。8.74 GiB 的 iPadOS 根镜像和签名策略已生成并通过本地校验，尚未写入手机。XNU 根卷挂载及 `launchd` 启动仍未完成。
 
 最终目标是在一加 13T 上启动 iPadOS 用户态和界面。当前源码 XNU 仅用于打通硬件路径；本阶段以 iPadOS 根卷挂载及其 `launchd` 启动为验收条件，图形界面仍需后续用户态、显示与输入适配。
 
@@ -49,13 +49,16 @@ DeviceTree、两份 trust cache 和原始 KernelCache 也已从同一恢复包�
 
 ## 当前断点与下一步
 
-1. [第 11 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39835493916)以 `3d7f658` 构建成功，产物位于 `out/oneplus13t/actions/run-11/`。最终 Mach-O 已包含 NativeUfs；独立内核与 FAT 内核一致，内核和 payload 哈希与云端报告一致。该镜像配置为 `native-ufs-probe=2`，只读 GCC/UFS 寄存器后通过诊断 panic 页面显示结果。
-2. 完整镜像位于 `out/oneplus13t/boot/stage6-run-11-registers/boot.img`，大小 15,216,640 字节；v4 头、内嵌 64 MiB 负载、UEFI 与原机 DTB 解包比对通过。类型记录由 1,265 增至 1,266，参与分池的记录由 1,118 增至 1,119；使用同版 XNU 原始预算函数重放，`kt_fixed_zones=240` 最大槽位仍为 30，ASan/UBSan 检查通过（当前沙箱禁用 LeakSanitizer）。已对序列号 `3B15BB01BAT00000`、槽位 B 执行临时启动，fastboot 的 Sending 和 Booting 均返回 OKAY；日志为 `out/oneplus13t/logs/stage6-run-11-fastboot.log`。后续照片已确认内核显示探测结果，见下节。诊断 panic 后停住是探测模式的预期行为。
-3. 寄存器照片已确认电源、时钟和旧式队列条件满足；模式 10 首次启动停在早期 `pmap_steal` 日志，当前先用详细初始化日志定位。越过停点后，再核对控制器接管、SMMU、LUN、GPT 和 `unixnu` 首块；预期首末 LBA 与上表一致，空分区 manifest 状态为 1。若时钟关闭或 MCQ 活跃，按实际停点继续适配，不能忽略拒绝条件。
-4. 准备匹配的 IPSW、APFS/IOStorageFamily 预链接、平台 provider、签名根窗口及 UUID。当前源码探测内核不发布根卷，不能仅追加 `native-ufs-root=1` 启动系统。
-5. 根卷镜像已生成并完成本地校验。先确认 XNU 只读 GPT/首块探测，再将镜像部署到 `unixnu`，用模式 11 读取窗口，随后切换具备完整根卷支持的内核。只有看到根卷挂载和 `launchd` 启动，才能将 Stage 6 标为完成。
+1. 用户已恢复 Fastboot。准备构建包含标准组数量修正和 UFS 条目重定向的新内核，继续模式 10；启动前核对实际 payload、内核、参数与 boot 封装。
+2. 继续核对 SMMU 接管、LUN、GPT 和 `unixnu` 首块。预期首末 LBA 与上表一致，空分区 manifest 状态为 1；目前尚无 XNU 成功读取存储块的真机证据。
+3. IPSW、原始 KernelCache、OS/SystemOS 根镜像、实际卷 UUID 和签名策略已准备；仍需完成 Apple APFS/IOStorageFamily 预链接及平台 provider 集成。当前源码探测内核不发布根卷，不能仅追加 `native-ufs-root=1` 启动系统。
+4. 只读 GPT/首块探测通过后，再将根镜像部署到 `unixnu`，用模式 11 读取窗口，随后切换具备完整根卷支持的内核。根卷挂载和 `launchd` 启动均通过才算 Stage 6 完成。
 
 ## 真机寄存器结果与第二轮启动
+
+[第 11 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39835493916)以 `3d7f658` 构建成功，产物位于 `out/oneplus13t/actions/run-11/`。最终 Mach-O 已包含 NativeUfs；独立内核与 FAT 内核一致，内核和 payload 哈希与云端报告一致。该镜像配置为 `native-ufs-probe=2`，只读 GCC/UFS 寄存器后通过诊断 panic 页面显示结果。
+
+完整镜像位于 `out/oneplus13t/boot/stage6-run-11-registers/boot.img`，大小 15,216,640 字节；v4 头、内嵌 64 MiB 负载、UEFI 与原机 DTB 解包比对通过。类型记录由 1,265 增至 1,266，参与分池的记录由 1,118 增至 1,119；使用同版 XNU 原始预算函数重放，`kt_fixed_zones=240` 最大槽位仍为 30，ASan/UBSan 检查通过（当前沙箱禁用 LeakSanitizer）。已对序列号 `3B15BB01BAT00000`、槽位 B 执行临时启动，fastboot 的 Sending 和 Booting 均返回 OKAY；日志为 `out/oneplus13t/logs/stage6-run-11-fastboot.log`。后续照片已确认内核显示探测结果，见下节。诊断 panic 后停住是探测模式的预期行为。
 
 用户提供的第 11 次镜像照片已显示 `NATIVE_UFS inspect`，停点为 `PE_lockdown_iokit`；此前未记录 fatal exception。这是模式 2 主动触发的诊断 panic。
 
@@ -108,7 +111,21 @@ DeviceTree、两份 trust cache 和原始 KernelCache 也已从同一恢复包�
 
 修复将 SM8750 的映射范围、规划器和只读 context-bank 探测统一为该 1 MiB 区域；旧平台保持原范围。保留地址宽度、页大小、占用、读回和写入顺序检查；SM8750 超过当前完整扫描能力的 stream 数量会明确拒绝，避免只扫描部分条目后占用其他设备的 context bank。现有 SMMU 测试新增实测 IDR1/DMA、最高 context bank、占用回退、映射边界及拒绝后零写入检查。七项 Stage 6 生产路径测试（含采集 GPT）、旧平台 SMMU 测试、八项源码测试和原机资源检查均通过，ASan/UBSan 未报错。
 
-已删除定位 VM 卡点时加入的每页 VA/PA 打印，`startup_debug` 改为 `0`，保留 VM 阶段边界及 panic 页。全套有序补丁应用检查通过；后续启动应减少初始化地址刷屏。等待下一轮云端构建和临时启动。
+已删除定位 VM 卡点时加入的每页 VA/PA 打印，`startup_debug` 改为 `0`，保留 VM 阶段边界及 panic 页。全套有序补丁应用检查通过；后续启动应减少初始化地址刷屏。第 15 次云端构建及临时启动已完成，后续屏幕结果见下文。
+
+[第 15 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39849922905)以提交 `af3a84e` 成功构建并通过全部检查。产物位于 `out/oneplus13t/actions/run-15/`；内核为 21,504,240 字节，SHA-256 为 `ceaec696563b2345710ce0ce351c6dda33c3c4c894c3ab2bfed5e7bf957d8fb1`。云端/本地哈希和 FAT 内嵌内核一致；实际配置为模式 10、`startup_debug=0`，逐页打印字符串已从最终内核删除，关键阶段日志仍在。分池输入仍为 1,266/1,119 条，ADT 与 run-14 仅随机种子不同。
+
+已生成 `out/oneplus13t/boot/stage6-run-15-smmu/boot.img`（15,216,640 字节），封装与解包验证通过。对同一 Fastboot 设备临时启动，Sending 和 Booting 均返回 OKAY；日志为 `out/oneplus13t/logs/stage6-run-15-smmu-fastboot.log`。随后照片确认新的 panic 为 `unsupported SMMU stream count`，详见下文。
+
+第 15 次新照片的正文从 `unsupported SMMU geometry` 变为 `unsupported SMMU stream count`，源码位置为 `NativeUfs.cpp:1771`。后一个字符串仅存在于新加入的检查中，确认运行的是新内核；几何检查已通过，但尚未配置 context bank 或发送 UFS 命令。当前拒绝来自 `IDR0.NUMSMRG > 128`，原始 IDR0 尚未出现在此 panic 页中。
+
+同版 OnePlus Linux `arm-smmu-qcom.c` 的 `qcom_smmu_cfg_probe` 明确将超过 128 的映射组限制为前 128 个标准组，原因是额外组的寄存器行为不同。上一轮新增的直接拒绝条件比该兼容处理更严格。后续模式 7 已取得原始 IDR0 和现有 stream 状态，修复见下文。
+
+已从 run-15 的原 payload 制作 `out/oneplus13t/boot/stage6-run-15-smmu-registers/boot.img`，只将模式 10 改为模式 7 并更新菜单标题。内核与 ADT 均逐字节一致，配置读回及 boot 封装验证通过。对用户恢复的 Fastboot 设备临时启动，Sending 和 Booting 均返回 OKAY；日志为 `out/oneplus13t/logs/stage6-run-15-smmu-registers-fastboot.log`。模式 7 只读取 SMMU 全局寄存器及标准 stream 条目，不修改 stream 配置。
+
+模式 7 照片显示 `sCR0=002f0406`、`IDR0=4c017e84`、`IDR1=60000053`、`gfsr=0`。原始组数为 132，诊断扫描前 128 组，其中 7 个有效条目均为 TRANSLATE；UFS SID `0x60` 匹配条目 0，`SMR=80000060`、`S2CR=00000000`。这是只读诊断的预期 panic，尚无 UFS 命令或存储块读取结果。
+
+修复恢复高通驱动的 128 组上限，不访问额外四组。对 SM8750，仅允许实测的精确 SID `0x60`、`S2CR=0` 条目从 bank 0 转向空闲的顶部 bank；其他属性、掩码匹配和重复 SID 继续拒绝。接管前仍要求 UFS 队列空闲并停止；先完成新 bank 配置及读回，再修改 UFS 的 S2CR。原 bank 0 及其他 stream 不写入。主机测试使用实测 ID 和 UFS 条目，另用合成的其他 stream/旧 bank 内容验证保留、回退、写入顺序、读回失败和 MMIO 边界；旧平台回归也通过。完整存储回归结果记录在 `out/oneplus13t/logs/stage6-run-16-tests.log`。硬件效果待新构建验证。
 
 当前未刷写任何手机分区，未启用 Data 持久化或诊断日志落盘。已实测的 run-9 回退镜像仍位于 `out/oneplus13t/boot/xnu-source-run-9-root-panic/boot.img`。
 

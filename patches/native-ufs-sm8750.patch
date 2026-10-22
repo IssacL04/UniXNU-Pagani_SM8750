@@ -484,7 +484,7 @@ index 989b956..3ed9aae 100644
    // request list or the storage stream's SMMU routing.
    if (!(read32 (gHost.hc, 0x34) & 1) || (read32 (gHost.hc, 0x30) & 0x0f) != 0x0f) {
 diff --git a/SmmuTakeover.h b/SmmuTakeover.h
-index c30f5a9..4dd9f3a 100644
+index c30f5a9..781f6b1 100644
 --- a/SmmuTakeover.h
 +++ b/SmmuTakeover.h
 @@ -1,5 +1,10 @@
@@ -498,7 +498,7 @@ index c30f5a9..4dd9f3a 100644
  struct UfsSmmuPlan {
    unsigned slot = 0xffffffffU, bank = 0, pages = 0;
    uint32_t smr = 0, s2cr = 0;
-@@ -37,10 +42,14 @@ static UfsSmmuPlan planUfsSmmuBank(uint16_t stream, uint64_t dma, uint64_t bytes
+@@ -37,17 +42,18 @@ static UfsSmmuPlan planUfsSmmuBank(uint16_t stream, uint64_t dma, uint64_t bytes
    unsigned banks = idr1 & 255;
    p.pages = 1U << (((idr1 >> 28) & 7) + 1);
    if ((idr1 >> 31) || !count || p.pages > 128 || banks < 2 || banks > 128 ||
@@ -506,14 +506,39 @@ index c30f5a9..4dd9f3a 100644
 +      (p.pages + banks) * 4096 > kUfsSmmuMapBytes) {
      p.error = "unsupported SMMU geometry"; return p;
    }
-+#if defined(NATIVE_UFS_SM8750) && NATIVE_UFS_SM8750
-+  if (count > 128) {p.error = "unsupported SMMU stream count"; return p;}
-+#else
-   if (count > 128) count = 128; // Firmware's reliably accessible groups only.
-+#endif
+-  if (count > 128) count = 128; // Firmware's reliably accessible groups only.
++  // Qualcomm qcom_smmu_cfg_probe: extra groups have non-architectural behavior.
++  if (count > 128) count = 128;
    if (bankFromTop >= banks - 1) {p.error = "no free context bank"; return p;}
    p.bank = banks - 1 - bankFromTop;
    unsigned matches = 0;
+   for (unsigned i = 0; i < count; ++i) {
+     uint32_t smr = read(0x800 + 4 * i);
+     if (!(smr & 0x80000000U)) {
+-      if (!p.reuse) p.slot = i;
++      if (!matches) p.slot = i;
+       continue;
+     }
+     uint32_t s2cr = read(0xc00 + 4 * i);
+@@ -56,11 +62,16 @@ static UfsSmmuPlan planUfsSmmuBank(uint16_t stream, uint64_t dma, uint64_t bytes
+     bool ourBank = ((s2cr >> 16) & 3) == 0 && (s2cr & 255) == p.bank;
+     if (match) {
+       ++matches;
+-      if (matches > 1 || mask || !ourBank) {
++      bool usable = ourBank;
++#if defined(NATIVE_UFS_SM8750) && NATIVE_UFS_SM8750
++      // PKX110 firmware leaves SID 0x60 on bank 0; redirect only its exact entry.
++      usable = usable || (stream == 0x60 && s2cr == 0);
++#endif
++      if (matches > 1 || mask || !usable) {
+         p.slot = i; p.smr = smr; p.s2cr = s2cr;
+         p.error = "conflicting UFS stream mapping"; return p;
+       }
+-      p.reuse = true; p.slot = i;
++      p.reuse = ourBank; p.slot = i;
+     } else if (ourBank) {
+       p.slot = i; p.smr = smr; p.s2cr = s2cr;
+       p.error = "reserved context bank already used"; return p;
 diff --git a/tests/LunDiscovery.cpp b/tests/LunDiscovery.cpp
 new file mode 100644
 index 0000000..9d6ad90
@@ -670,7 +695,7 @@ index 0000000..0277d7c
 +  puts("PASS: SM8750 clock offsets and power/clock admission");
 +}
 diff --git a/tests/SmmuTakeover.cpp b/tests/SmmuTakeover.cpp
-index bc94443..048f1cc 100644
+index bc94443..9f48aee 100644
 --- a/tests/SmmuTakeover.cpp
 +++ b/tests/SmmuTakeover.cpp
 @@ -8,7 +8,7 @@
@@ -682,7 +707,26 @@ index bc94443..048f1cc 100644
    auto reset=[&] {r.fill(0); r[0x20/4]=0x40000080; r[0x24/4]=0x60000046; r[0x28/4]=0x5111;};
    auto plan=[&] {return planUfsSmmu(0x60,0x8cb5e9000ULL,0x22000,[&](unsigned at){return r.at(at/4);});};
    reset(); auto p=plan(); assert(!p.error && !p.reuse && p.slot==127 && p.bank==69);
-@@ -85,6 +85,25 @@ int main()
+@@ -36,13 +36,16 @@ int main()
+   // The reported DMA range fits every 36-bit IDR2 limit, but the previous
+   // CBA2R=0 setup faults on its first byte (ARM IHI0062D.c table 3-1).
+   reset(); p=plan(); assert(!p.error && p.pages==128);
+-  auto read=[&](unsigned at){return r.at(at/4);};
++  auto read=[&](unsigned at){
++    assert(!(at>=0xa00 && at<0xc00) && !(at>=0xe00 && at<0x1000));
++    return r.at(at/4);
++  };
+   std::vector<std::pair<unsigned,uint32_t>> writes;
+   unsigned drop=0xffffffffU;
+   auto write=[&](unsigned at,uint32_t value) {
+     writes.emplace_back(at,value);
+     if(at!=drop) r.at(at/4)=value;
+-    if(at==0x800+4*p.slot) {
++    if(at==0x800+4*p.slot || at==0xc00+4*p.slot) {
+       assert(read(0x1800+4*p.bank)==1);
+       assert(read(0x1000+4*p.bank)==0x10000);
+       assert(read((p.pages+p.bank)*4096)==0);
+@@ -85,6 +88,58 @@ int main()
    // Reused context with an unexpected VMID/attribute must not be repaired.
    reset(); p=plan(); drop=0xffffffffU; assert(!configure());
    r[(0x1800+4*p.bank)/4]=0x10001; p=plan(); assert(p.error);
@@ -701,7 +745,40 @@ index bc94443..048f1cc 100644
 +  p=plan(); assert(!p.error && p.bank==81);
 +  reset(); r[0x24/4]=0x60000080; p=plan(); assert(!p.error && p.bank==127);
 +  reset(); r[0x24/4]=0x60000081; p=plan(); assert(p.error);
-+  reset(); r[0x20/4]=0x40000081; p=plan(); assert(p.error); // Never ignore unscanned streams.
++  // Run-15 register probe: 132 advertised groups, exact UFS entry on bank 0.
++  // Other streams and bank-0 contents below are synthetic preservation checks.
++  auto firmware=[&] {
++    reset(); r[0x20/4]=0x4c017e84; r[0x24/4]=0x60000053;
++    r[0x800/4]=0x80000060; r[0xc00/4]=0;
++    r[0x804/4]=0x80000061; r[0xc04/4]=0;
++    r[128*4096/4]=1; r[(128*4096+0x20)/4]=0x12345000;
++    drop=0xffffffffU; writes.clear();
++  };
++  for(bool topOccupied : {false,true}) {
++    firmware();
++    if(topOccupied) {r[0x808/4]=0x80000062; r[0xc08/4]=82;}
++    p=planUfsSmmu(0x60,0xbfdc3000,0x22000,read);
++    assert(!p.error && !p.reuse && p.slot==0 && p.bank==(topOccupied?81U:82U));
++    auto before=r;
++    assert(!configure() && writes.size()==5);
++    for(auto entry : writes) {
++      unsigned at=entry.first;
++      assert(at==(p.pages+p.bank)*4096 || at==0x1800+4*p.bank ||
++             at==0x1000+4*p.bank || at==0xc00 || at==0x800);
++      before.at(at/4)=r.at(at/4);
++    }
++    assert(before==r && read(0xc00)==p.bank);
++  }
++  firmware(); p=planUfsSmmu(0x60,0xbfdc3000,0x22000,read); drop=0xc00;
++  assert(configure() && read(0xc00)==0 && read(0x800)==0x80000060);
++  for(unsigned conflict : {0U,1U,2U}) {
++    firmware();
++    if(conflict==0) r[0x800/4]|=0x10000; // Masked UFS entry.
++    if(conflict==1) r[0x804/4]=0x80000060; // Duplicate UFS entry.
++    if(conflict==2) r[0xc00/4]=0x400000; // Unexpected privilege attribute.
++    p=planUfsSmmu(0x60,0xbfdc3000,0x22000,read);
++    assert(p.error && configure() && writes.empty());
++  }
 +#else
 +  assert(p.error); // Preserve the older platform's mapped extent.
 +#endif
