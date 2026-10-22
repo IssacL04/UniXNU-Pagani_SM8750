@@ -1,13 +1,56 @@
 #!/usr/bin/env python3
 """Exercise the patched production UFS code without accessing a device."""
 import argparse
+import ast
+from collections import Counter
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
 from unittest.mock import patch
+
+
+def check_arm64_asm(device, tree, work):
+    """Compile the actual multi-instruction templates with Apple's assembler syntax."""
+    functions, expected = [], Counter()
+    sources = (tree / 'drivers/ArmCpu/ArmCpu.cpp', tree / 'drivers/NativeUfs/NativeUfs.cpp',
+               device / 'drivers/BootProgress/BootProgress.c')
+
+    def instruction(text):
+        op, *args = text.lower().split(None, 1)
+        arg = args[0] if args else ''
+        if op == 'mrs':
+            arg = arg.split(',')[-1].strip()
+        elif op == 'msr':
+            arg = arg.split(',')[0].strip()
+        return op + ' ' + arg
+
+    for source in sources:
+        for match in re.finditer(r'(__asm__ volatile\s*\(("(?:\\.|[^"\\])*")[^;]*\);)', source.read_text()):
+            statement, template = match.groups()
+            template = ast.literal_eval(template)
+            assert ';' not in template, f'Apple assembler treats semicolon as a comment: {source}'
+            if '\n' not in template:
+                continue
+            operands = sorted(set(re.findall(r'"[=+&]*r"\s*\(\s*(\w+)\s*\)', statement)))
+            declarations = ''.join(f'unsigned long long {name}=input;' for name in operands)
+            stores = ''.join(f'out[{i}]={name};' for i, name in enumerate(operands))
+            functions.append(f'extern "C" void test{len(functions)}(unsigned long long input, '
+                             f'unsigned long long *out){{{declarations}{statement}{stores}}}')
+            expected.update(instruction(line.strip()) for line in template.splitlines() if line.strip())
+    assert len(functions) >= 20, 'Missing production assembly templates'
+    source, binary = work / 'asm.cpp', work / 'asm.o'
+    source.write_text('\n'.join(functions))
+    subprocess.run([os.environ.get('CLANG', 'clang++'), '--target=arm64-apple-darwin',
+                    '-O2', '-c', str(source), '-o', str(binary)], check=True, timeout=60)
+    decoded = subprocess.check_output([os.environ.get('LLVM_OBJDUMP', 'llvm-objdump'),
+                                      '--no-show-raw-insn', '-d', str(binary)], text=True)
+    actual = Counter(instruction(line) for line in re.findall(r'\t((?:mrs|msr|isb|dsb)\b[^\n]*)', decoded))
+    assert actual == expected, (expected - actual, actual - expected)
+    print(f'PASS: {len(functions)} production ARM64 asm blocks retain every system instruction in Mach-O')
 
 
 def main():
@@ -50,6 +93,7 @@ def main():
     source = tree / 'drivers/NativeUfs/tests'
     env = dict(os.environ, ASAN_OPTIONS='detect_leaks=0')
     with tempfile.TemporaryDirectory(prefix='stage6-') as directory:
+        check_arm64_asm(device, tree, Path(directory))
         for name in ('Sm8750', 'LunDiscovery', 'RootCommands', 'RootDiagnostics', 'RootLayout', 'SmmuTakeover', 'RootWindowRead', 'TransferPoll'):
             binary = Path(directory) / name
             command = [os.environ.get('CXX', 'c++'), '-std=c++17', '-Wall', '-Wextra', '-Werror',

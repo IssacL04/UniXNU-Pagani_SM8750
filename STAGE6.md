@@ -1,6 +1,6 @@
 # Stage 6：一加 13T 存储与根卷
 
-更新：2026-10-23。第 16 次真机照片确认 SMMU 配置与读回检查通过，UFS 条目已指向 bank 82；当前停在首条 `NOP OUT` 命令超时。仅轮询两次，现有日志还不能区分计时/调度问题和 DMA 请求未完成。已补计时预算、实际耗时及失败时 DMA 状态快照，主机验证通过，准备新构建。8.74 GiB 的 iPadOS 根镜像和签名策略已生成并通过本地校验，尚未写入手机。XNU 根卷挂载及 `launchd` 启动仍未完成。
+更新：2026-10-23。第 17 次真机仍停在首条 `NOP OUT`：200 ms 预算实际经过约 496 ms，仅轮询两次，DMA OCS 仍为 0xf。已定位 `IODelay(2)` 可进入线程等待，及 Apple 汇编器将分号后的指令当作注释的问题；本地修正及测试通过，准备第 18 次构建。8.74 GiB 的 iPadOS 根镜像和签名策略已生成并通过本地校验，尚未写入手机。XNU 根卷挂载及 `launchd` 启动仍未完成。
 
 最终目标是在一加 13T 上启动 iPadOS 用户态和界面。当前源码 XNU 仅用于打通硬件路径；本阶段以 iPadOS 根卷挂载及其 `launchd` 启动为验收条件，图形界面仍需后续用户态、显示与输入适配。
 
@@ -49,7 +49,7 @@ DeviceTree、两份 trust cache 和原始 KernelCache 也已从同一恢复包�
 
 ## 当前断点与下一步
 
-1. run-16 照片已确认 SMMU 检查通过、NOP OUT 超时。手机已恢复 Fastboot；准备包含 `WAIT ticks=实际/预算`、计数器频率/控制位及 DMA 快照的新内核，继续模式 10，区分超时与传输停点。
+1. 第 17 次照片已确认 NOP 超时与 DMA 未更新。修复短轮询和 ARM64 内联汇编后，准备第 18 次构建；检查完整内核指令、封装镜像并临时启动，再看 WAIT、QUEUE 和 CMD 读数。
 2. 继续核对 SMMU 接管、LUN、GPT 和 `unixnu` 首块。预期首末 LBA 与上表一致，空分区 manifest 状态为 1；目前尚无 XNU 成功读取存储块的真机证据。
 3. IPSW、原始 KernelCache、OS/SystemOS 根镜像、实际卷 UUID 和签名策略已准备；仍需完成 Apple APFS/IOStorageFamily 预链接及平台 provider 集成。当前源码探测内核不发布根卷，不能仅追加 `native-ufs-root=1` 启动系统。
 4. 只读 GPT/首块探测通过后，再将根镜像部署到 `unixnu`，用模式 11 读取窗口，随后切换具备完整根卷支持的内核。根卷挂载和 `launchd` 启动均通过才算 Stage 6 完成。
@@ -137,6 +137,10 @@ run-16 照片显示 `UFS ROOT FAILURE: NOP OUT`、`result=e00002d6`、`CMD n=1`�
 
 同版 [XNU rtclock.c](https://github.com/apple-oss-distributions/xnu/blob/d8b80295118ef25ac3a784134bcf95cd8e88109f/osfmk/arm/rtclock.c) 的短延时底层使用 WFE。它是否造成当前轮询间隔异常仍需新增读数确认，本轮未修改计时器、SMMU 路由或 UPIU 描述符。
 
+[第 17 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39856037282)以 `5828caf` 构建成功，全部云端检查通过。产物位于 `out/oneplus13t/actions/run-17/`，内核为 21,520,624 字节；云端/本地哈希、FAT 内嵌内核及实际参数核对通过，新增 WAIT 字符串存在。分池输入仍为 1,266/1,119 条，ADT 与 run-16 仅随机种子不同。
+
+完整镜像 `out/oneplus13t/boot/stage6-run-17-timeout/boot.img` 为 15,216,640 字节，封装解包比对通过，已临时启动；Sending 和 Booting 均返回 OKAY。日志为 `out/oneplus13t/logs/stage6-run-17-timeout-fastboot.log`。随后照片确认 NOP 仍超时，详见下节。
+
 当前未刷写任何手机分区，未启用 Data 持久化或诊断日志落盘。已实测的 run-9 回退镜像仍位于 `out/oneplus13t/boot/xnu-source-run-9-root-panic/boot.img`。
 
 ## 恢复检查
@@ -150,3 +154,14 @@ python3 scripts/test-stage6.py --captured sysinfo/stage6-20261022
 ```
 
 云端没有原机采集文件，使用 `python3 scripts/test-stage6.py --tree "$UNIXNU_TREE" --openssl-prefix "$(brew --prefix openssl@3)"`。构建日志位于 `out/oneplus13t/logs/`。发生额度中断时，从本节及“当前断点与下一步”续接；无需重新分区。
+
+
+## 第十七次真机结果与轮询、汇编修正
+
+屏幕显示 `WAIT ticks=91411e/3a9802 hz=124f800`：计数器为 19.2 MHz，预算约 200 ms，实际约 495.802 ms，仅两次轮询。失效快照为 `DMA ocs=f rsp=00000000`，doorbell 为 1，未见控制器写回完成。SMMU 配置读回继续通过，global fault 为 0→0，context FSR 为 0x400→0x400；这些结果不能证明 DMA 已经正确到达控制器。
+
+照片中的 `cntkctl=e00002d6` 无效。对 run-17 完整内核反汇编后确认，`mrs CNTFRQ; mrs CNTKCTL` 只生成第一条指令，第二个输出寄存器残留超时错误码。相同的 Apple Mach-O 汇编分号规则还影响 ArmCpu 的计数器读取、SGI 写入和屏障，以及 BootProgress 的中断屏蔽。现统一使用换行分隔；同时修正未启用的 SGI 自测中输入、输出操作数序号写反的问题。
+
+按当前固定 XNU 源码，CPU 注册没有提供 powergate latency 时，`ml_delay_should_spin` 返回 false，`IODelay(2)` 在可等待上下文中会走线程等待路径。SM8750 UFS 的两微秒轮询改为 `mach_absolute_time` 加 deadline 的忙等，保留 200 ms 命令预算及失败隔离；系统其他延时与事件流配置不变。尚不能据此认定 NOP 故障已修复。
+
+`out/oneplus13t/logs/stage6-run-18-tests.log` 记录八项存储路径 ASan/UBSan 测试和真实 GPT 检查通过。新增检查提取生产代码的 21 段多指令汇编，按 ARM64 Mach-O 编译并反汇编，核对每一条系统寄存器指令和屏障；超时故障测试确认轮询不调用线程延时且仍拒绝重用 DMA。隔离准备、源码内核检查和 BootProgress 主机检查亦通过。下一步完成云端构建与真机验证。

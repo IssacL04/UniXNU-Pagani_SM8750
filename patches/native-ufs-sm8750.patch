@@ -70,7 +70,7 @@ index 0000000..0278ab4
 +  return true;
 +}
 diff --git a/NativeUfs.cpp b/NativeUfs.cpp
-index bdf3df5..3332db1 100644
+index bdf3df5..e987120 100644
 --- a/NativeUfs.cpp
 +++ b/NativeUfs.cpp
 @@ -3,7 +3,9 @@
@@ -155,7 +155,7 @@ index bdf3df5..3332db1 100644
    gRootDiagnostic.ocs = ocs;
    if (result != kIOReturnSuccess && gRootDiagnosticEnabled) {
 +    uint64_t frequency, control;
-+    __asm__ volatile ("mrs %0, cntfrq_el0; mrs %1, cntkctl_el1" : "=r" (frequency), "=r" (control));
++    __asm__ volatile ("mrs %0, cntfrq_el0\n\tmrs %1, cntkctl_el1" : "=r" (frequency), "=r" (control));
 +    gRootDiagnostic.counterHz = static_cast<uint32_t> (frequency);
 +    gRootDiagnostic.counterControl = static_cast<uint32_t> (control);
      // Read only the already mapped HC's status/registers used by this driver.
@@ -352,10 +352,32 @@ index bdf3df5..3332db1 100644
  {
    fCmdDesc.reset ();
 diff --git a/RootCommands.h b/RootCommands.h
-index 996304d..30cb7ba 100644
+index 996304d..b573588 100644
 --- a/RootCommands.h
 +++ b/RootCommands.h
-@@ -55,6 +55,8 @@ static IOReturn hostSubmit (uint32_t direction, uint32_t dataBytes, uint32_t tim
+@@ -10,7 +10,20 @@ struct HardwareTransferPort {
+     return *reinterpret_cast<volatile uint32_t *> (gHost.virt + 8) & 0xff;
+   }
+   bool expired () { return mach_absolute_time () >= deadline; }
+-  void delay () { IODelay (2); }
++  void delay () {
++#if defined(NATIVE_UFS_SM8750) && NATIVE_UFS_SM8750
++    // IODelay can block a thread when the CPU has no powergate latency estimate.
++    uint64_t until;
++    clock_interval_to_deadline (2, kMicrosecondScale, &until);
++    while (mach_absolute_time () < until) {
++#if defined(__aarch64__)
++      __asm__ volatile ("yield");
++#endif
++    }
++#else
++    IODelay (2);
++#endif
++  }
+ };
+ 
+ static void putBe32 (uint8_t *at, uint32_t value)
+@@ -55,6 +68,8 @@ static IOReturn hostSubmit (uint32_t direction, uint32_t dataBytes, uint32_t tim
    gRootDiagnostic.protocol = 0;
    gRootDiagnostic.residual = 0;
    gRootDiagnostic.sense = 0;
@@ -364,7 +386,7 @@ index 996304d..30cb7ba 100644
    uint8_t *utrd = gHost.virt;
    uint64_t ucdPhys = gHost.phys + kUcdOffset;
    uint32_t *words = reinterpret_cast<uint32_t *> (utrd);
-@@ -78,15 +80,23 @@ static IOReturn hostSubmit (uint32_t direction, uint32_t dataBytes, uint32_t tim
+@@ -78,15 +93,23 @@ static IOReturn hostSubmit (uint32_t direction, uint32_t dataBytes, uint32_t tim
    cacheCivac (gHost.virt, kDataOffset + dataBytes);
    hostWrite (0x20, 1);  // Acknowledge completion only; preserve error evidence.
    HardwareTransferPort port;
@@ -388,7 +410,7 @@ index 996304d..30cb7ba 100644
      // No cancel/reset/retry: the controller may still own the buffer, even
      // with DB=0. Keep it allocated and prohibit all subsequent CPU writes.
      gHost.poisoned = true;
-@@ -166,6 +176,11 @@ static IOReturn hostScsiDir (uint8_t lun, const uint8_t *cdb, unsigned cdbLength
+@@ -166,6 +189,11 @@ static IOReturn hostScsiDir (uint8_t lun, const uint8_t *cdb, unsigned cdbLength
    *scsiStatus = 0xffff;
    if (!cdb || !cdbLength || cdbLength > 16 || dataBytes > kDataMax || direction > 2 ||
        (dataBytes & 3) || (dataBytes ? !direction : direction)) return kIOReturnBadArgument;
@@ -400,7 +422,7 @@ index 996304d..30cb7ba 100644
    if (!hostClearUcd ()) return kIOReturnNotReady;
    uint8_t *ucd = gHost.virt + kUcdOffset;
    ucd[0] = 0x01;                      // COMMAND UPIU
-@@ -265,6 +280,9 @@ static uint64_t gStoreFirst = 0, gStoreBlocks = 0, gLogFirst = 0, gLogBlocks = 0
+@@ -265,6 +293,9 @@ static uint64_t gStoreFirst = 0, gStoreBlocks = 0, gLogFirst = 0, gLogBlocks = 0
  
  static bool hostLogOpen (uint64_t first, uint64_t blocks)
  {
@@ -410,7 +432,7 @@ index 996304d..30cb7ba 100644
    if (gLogOpen || !blocks || first > 0xffffffffULL || blocks > 0xffffffffULL - first) return false;
    if (gStoreOpen && first < gStoreFirst + gStoreBlocks && gStoreFirst < first + blocks) return false;
    gLogFirst = first;
-@@ -281,6 +299,9 @@ static bool hostInWindow (uint64_t lba, uint32_t blocks)
+@@ -281,6 +312,9 @@ static bool hostInWindow (uint64_t lba, uint32_t blocks)
  
  static bool hostStoreOpen (uint64_t first, uint64_t blocks)
  {
@@ -645,10 +667,10 @@ index 0000000..9d6ad90
 +  puts("PASS: LUN discovery, unit-attention retry, missing LUN, sector mismatch, poisoned transport");
 +}
 diff --git a/tests/RootCommands.cpp b/tests/RootCommands.cpp
-index b5c0a7d..ab02a86 100644
+index b5c0a7d..c41c55c 100644
 --- a/tests/RootCommands.cpp
 +++ b/tests/RootCommands.cpp
-@@ -5,10 +5,10 @@
+@@ -5,12 +5,12 @@
  #include <algorithm>
  #include <string>
  enum class Fault { None, Empty, Type, Tag, Lun, Query, Residual, Underflow,
@@ -659,8 +681,11 @@ index b5c0a7d..ab02a86 100644
 -static std::array<uint32_t,64> registers;
 +static std::array<uint32_t,256> registers;
  static uint64_t now;
- static unsigned writes, releases;
+-static unsigned writes, releases;
++static unsigned writes, releases, sleeps;
  static bool released;
+ 
+ static uint64_t io(unsigned op,uint64_t address,uint64_t value,void *bytes)
 @@ -32,6 +32,7 @@ static uint64_t io(unsigned op,uint64_t address,uint64_t value,void *bytes)
        *reinterpret_cast<uint32_t *>(device.data()+8)=0;
        if (fault==Fault::Empty) return 0;
@@ -669,13 +694,35 @@ index b5c0a7d..ab02a86 100644
        if (cmd[0]==1) putBe32(rsp+12,0);
        if (cmd[0]==0x16) putBe32(rsp+20,0x11);
        if (fault==Fault::Type) rsp[0]=0x3f;
-@@ -107,6 +108,26 @@ int main()
+@@ -54,13 +55,13 @@ static uint64_t io(unsigned op,uint64_t address,uint64_t value,void *bytes)
+     if (op==2) { ++releases; memcpy(at,bytes,value); released=true; }
+     else memcpy(bytes,at,value);
+   }
+-  if (op==4) return now;
+-  if (op==5) now+=value;
++  if (op==4) return now++;
++  if (op==5) { ++sleeps; now+=value; }
+   return 0;
+ }
+ static void reset(Fault f=Fault::None)
+ {
+-  fault=f; device.fill(0); registers.fill(0); now=0; writes=releases=0; released=false;
++  fault=f; device.fill(0); registers.fill(0); now=0; writes=releases=sleeps=0; released=false;
+   registers[0x34/4]=1; registers[0x30/4]=15; registers[0x60/4]=1;
+   ufs_test_reset(io,0x8cb5e9000);
+ }
+@@ -107,6 +108,31 @@ int main()
    assert(ufs_test_scsi(0,cdb,6,true,kDataMax+4,&scsi)==kIOReturnBadArgument);
    assert(ufs_test_scsi(0,cdb,6,false,4096,&scsi)==kIOReturnBadArgument); // No writes to media.
    assert(writes==0 && releases==0);
 +  for(Fault f : {Fault::Timeout,Fault::StuckWithReply}) {
 +    reset(f); assert(ufs_test_nop()==kIOReturnTimeout);
-+    assert(gRootDiagnostic.waitTicks==200000 && gRootDiagnostic.elapsedTicks==200000);
++    assert(gRootDiagnostic.waitTicks>=200000 && gRootDiagnostic.waitTicks<=200010);
++    assert(gRootDiagnostic.elapsedTicks>=200000 && gRootDiagnostic.elapsedTicks<=200010);
++    assert(gRootDiagnostic.polls>2);
++#if defined(NATIVE_UFS_SM8750) && NATIVE_UFS_SM8750
++    assert(sleeps==0);
++#endif
 +    assert(gRootDiagnostic.dmaOcs==(f==Fault::Timeout?15U:0U));
 +    assert(gRootDiagnostic.dmaResponse==(f==Fault::Timeout?0U:0x20000001U));
 +    assertQuarantined(); // A DMA reply while DB=1 must remain a timeout.

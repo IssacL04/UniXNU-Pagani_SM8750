@@ -53,7 +53,7 @@ static uint64_t irq_save(void)
 {
     uint64_t flags = 0;
 #ifndef BOOT_PROGRESS_TEST
-    __asm__ volatile("mrs %0, daif; msr daifset, #15" : "=r"(flags) :: "memory");
+    __asm__ volatile("mrs %0, daif\n\tmsr daifset, #15" : "=r"(flags) :: "memory");
 #endif
     return flags;
 }
