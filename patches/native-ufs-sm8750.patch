@@ -484,25 +484,28 @@ index 996304d..a91c605 100644
    if (gLogOpen && first < gLogFirst + gLogBlocks && gLogFirst < first + blocks) return false;
    gStoreFirst = first;
 diff --git a/RootDiagnostics.h b/RootDiagnostics.h
-index f8188dc..f1bddd8 100644
+index f8188dc..e1ecc5e 100644
 --- a/RootDiagnostics.h
 +++ b/RootDiagnostics.h
-@@ -18,6 +18,9 @@ struct UfsRootDiagnostics {
+@@ -18,6 +18,11 @@ struct UfsRootDiagnostics {
    uint32_t smmuId2 = 0, cba2r = 0, uic[5] = {};
    uint32_t smmuId1 = 0, smmuSlot = 0xffffffff;
    uint32_t publicationPhase = 0, publicationWindow = 0xffffffff;
 +  uint64_t waitTicks = 0, elapsedTicks = 0;
 +  uint32_t counterHz = 0, counterControl = 0, dmaOcs = 0xff, dmaResponse = 0;
 +  uint32_t ie = 0, iacrBefore = 0, iacr = 0, memcfg = 0, tlbStatus = 0xffffffff;
++  uint32_t txBefore = 0xffffffff, txAfter = 0xffffffff, linkCommand = 0;
++  uint32_t linkResult = 0xffffffff, linkStatus = 0, linkAhit = 0;
  };
  
  static inline int formatUfsRootDiagnostics(char *buffer, size_t capacity,
-@@ -31,9 +34,11 @@ static inline int formatUfsRootDiagnostics(char *buffer, size_t capacity,
+@@ -31,9 +36,12 @@ static inline int formatUfsRootDiagnostics(char *buffer, size_t capacity,
      "CMD n=%u type=%02x op=%02x lun=%02x ocs=%02x rsp=%08x scsi=%04x power=%02x\n"
      "PROTOCOL reject=%u residual=%u sense=%06x SMMU slot=%u id1=%x\n"
      "QUEUE rsr=%x ahit=%x polls=%u dbSeen=%x isSeen=%x isBefore=%x contiguous=%llx\n"
 +    "WAIT ticks=%llx/%llx hz=%x cntkctl=%x DMA ocs=%x rsp=%08x\n"
 +    "PATH ie=%x iacr=%x->%x memcfg=%x tlb=%x\n"
++    "LINK tx=%x->%x cmd=%x rc=%x is=%x ahitBefore=%x\n"
      "FAULT global=%x->%x syn=%x cb=%x->%x syn=%x far=%llx id2=%x cba2r=%x\n"
      "UIC pa=%08x dl=%08x net=%08x tr=%08x dme=%08x\n"
 -    "GPT/read lba=%llx userdata=%llx..%llx magic=%08x %08x manifest=%u\n"
@@ -510,13 +513,14 @@ index f8188dc..f1bddd8 100644
      "WINDOWS found=%u prepared=%u published=%u bytes=%llx policies=%llu verify=%08x\n"
      "IO reads=%llu failures=%llu pubPhase=%u window=%u\n",
      title, reason, d.stage, d.result, d.cap, d.version, d.hcs, d.hce, d.doorbell, d.interrupt,
-@@ -41,6 +46,9 @@ static inline int formatUfsRootDiagnostics(char *buffer, size_t capacity,
+@@ -41,6 +49,10 @@ static inline int formatUfsRootDiagnostics(char *buffer, size_t capacity,
      d.command, d.type, d.opcode, d.lun, d.ocs, d.response, d.scsi, d.power,
      d.protocol, d.residual, d.sense, d.smmuSlot, d.smmuId1,
      d.runStop, d.ahit, d.polls, d.dbSeen, d.isSeen, d.isBefore, (unsigned long long)d.contiguous,
 +    (unsigned long long)d.elapsedTicks, (unsigned long long)d.waitTicks,
 +    d.counterHz, d.counterControl, d.dmaOcs, d.dmaResponse,
 +    d.ie, d.iacrBefore, d.iacr, d.memcfg, d.tlbStatus,
++    d.txBefore, d.txAfter, d.linkCommand, d.linkResult, d.linkStatus, d.linkAhit,
      d.gfsrBefore, d.gfsr, d.gsyn, d.fsrBefore, d.fsr, d.fsyn, (unsigned long long)d.far,
      d.smmuId2, d.cba2r, d.uic[0], d.uic[1], d.uic[2], d.uic[3], d.uic[4],
      (unsigned long long)d.lba, (unsigned long long)d.first, (unsigned long long)d.last,
@@ -599,26 +603,113 @@ index 4a596c8..a5402c4 100644
    }
    layout->magic0 = le32 (gScratch);
 diff --git a/RootQueue.h b/RootQueue.h
-index 989b956..09e58ed 100644
+index 989b956..57f5e41 100644
 --- a/RootQueue.h
 +++ b/RootQueue.h
-@@ -13,6 +13,11 @@ static bool hostWaitRegister (unsigned offset, uint32_t mask, uint32_t value)
+@@ -1,18 +1,30 @@
+ // SPDX-License-Identifier: BSD-2-Clause-Patent
+ // Root queue takeover; shared with the host fault-injection harness.
+-static bool hostWaitRegister (unsigned offset, uint32_t mask, uint32_t value)
++static bool hostWaitRegister (unsigned offset, uint32_t mask, uint32_t value, unsigned timeoutMs = 100)
+ {
+   uint64_t deadline;
+-  clock_interval_to_deadline (100, kMillisecondScale, &deadline);
++  clock_interval_to_deadline (timeoutMs, kMillisecondScale, &deadline);
+   do {
+     if ((read32 (gHost.hc, offset) & mask) == value) return true;
++#if defined(NATIVE_UFS_SM8750) && NATIVE_UFS_SM8750
++    // Early boot has no scheduler wakeup guarantee for IODelay.
++#if defined(__aarch64__)
++    __asm__ volatile ("yield");
++#endif
++#else
+     IODelay (10);
++#endif
+   } while (mach_absolute_time () < deadline);
+   return false;
+ }
  
  static bool hostStopQueue (const char **why)
  {
 +  // A legacy UTRL cannot take over an active UFS 4.x MCQ engine.
-+  if ((read32 (gHost.hc, 0x00) & 0x40000000U) && (read32 (gHost.hc, 0x300) & 2)) {
++  if ((read32 (gHost.hc, 0x00) & 0x40000000U) && (read32 (gHost.hc, 0x300) & 1)) {
 +    *why = "MCQ active; legacy takeover refused";
 +    return false;
 +  }
    // Confirm the firmware has no active transfer/task before changing its
    // request list or the storage stream's SMMU routing.
    if (!(read32 (gHost.hc, 0x34) & 1) || (read32 (gHost.hc, 0x30) & 0x0f) != 0x0f) {
-@@ -42,6 +47,17 @@ static bool hostStopQueue (const char **why)
+@@ -40,8 +52,83 @@ static bool hostStopQueue (const char **why)
+   return true;
+ }
  
++#if defined(NATIVE_UFS_SM8750) && NATIVE_UFS_SM8750
++static bool hostLinkCommand (uint32_t command, uint32_t argument, const char **why)
++{
++  gRootDiagnostic.linkCommand = command;
++  gRootDiagnostic.linkResult = 0xffffffff;
++  gRootDiagnostic.linkStatus = read32 (gHost.hc, 0x20);
++  if (!hostWaitRegister (0x30, 8, 8)) {
++    recordTransport (kIOReturnTimeout, 15);
++    *why = "UIC command not ready";
++    return false;
++  }
++  const uint32_t completion = command == 0x18 ? 0x420 : 0x400;
++  hostWrite (0x20, completion); // Clear stale completion, preserving error bits.
++  hostWrite (0x94, argument);
++  hostWrite (0x98, 0);
++  hostWrite (0x9c, 0);
++  hostWrite (0x90, command);
++  bool done = hostWaitRegister (0x20, 0x400, 0x400);
++  gRootDiagnostic.linkResult = read32 (gHost.hc, 0x98) & 0xff;
++  // UHXS may arrive after UCCS; allow the link transition its own bounded wait.
++  if (done && !gRootDiagnostic.linkResult && command == 0x18 &&
++      !(read32 (gHost.hc, 0x20) & (kUfsFatalStatus | 4))) {
++    done = hostWaitRegister (0x20, 0x20, 0x20, 500);
++  }
++  gRootDiagnostic.linkStatus = read32 (gHost.hc, 0x20);
++  if (!done || gRootDiagnostic.linkResult || (gRootDiagnostic.linkStatus & (kUfsFatalStatus | 4)) ||
++      (command == 0x18 && ((read32 (gHost.hc, 0x30) >> 8) & 7) != 1)) {
++    recordTransport (done ? kIOReturnIOError : kIOReturnTimeout, 15);
++    *why = "UIC link command failed";
++    return false;
++  }
++  hostWrite (0x20, completion);
++  return true;
++}
++
++static bool hostWakeLink (const char **why)
++{
++  gRootDiagnostic.stage = "link state";
++  // Keep the link awake between the state query and the first transfer.
++  gRootDiagnostic.linkAhit = read32 (gHost.hc, 0x18);
++  if (gRootDiagnostic.linkAhit) hostWrite (0x18, 0);
++  if (read32 (gHost.hc, 0x18)) {
++    recordTransport (kIOReturnIOError, 15);
++    *why = "auto hibernation disable";
++    return false;
++  }
++  // Local MPHY_TX_FSM_STATE, TX lane 0 (same selector as ufs-qcom).
++  if (!hostLinkCommand (0x01, 0x00410000, why)) return false;
++  gRootDiagnostic.txBefore = gRootDiagnostic.txAfter = read32 (gHost.hc, 0x9c);
++  if (gRootDiagnostic.txBefore != 1) return true;
++  gRootDiagnostic.stage = "Hibern8 exit";
++  gRootDiagnostic.txAfter = 0xffffffff;
++  if (!hostLinkCommand (0x18, 0, why) || !hostLinkCommand (0x01, 0x00410000, why)) return false;
++  gRootDiagnostic.txAfter = read32 (gHost.hc, 0x9c);
++  if (gRootDiagnostic.txAfter == 1) {
++    recordTransport (kIOReturnNotReady, 15);
++    *why = "link remains in Hibern8";
++    return false;
++  }
++  return true;
++}
++#endif
++
  static bool hostStartQueue (const char **why)
  {
 +#if defined(NATIVE_UFS_SM8750) && NATIVE_UFS_SM8750
++  if (!hostWakeLink (why)) return false;
 +  // Single-slot polling must not inherit firmware's completion aggregation policy.
 +  gRootDiagnostic.iacrBefore = read32 (gHost.hc, 0x4c);
 +  hostWrite (0x4c, 0);
@@ -748,15 +839,16 @@ index 0000000..9d6ad90
 +  puts("PASS: LUN discovery, unit-attention retry, missing LUN, sector mismatch, poisoned transport");
 +}
 diff --git a/tests/RootCommands.cpp b/tests/RootCommands.cpp
-index b5c0a7d..6e6276a 100644
+index b5c0a7d..398e7d1 100644
 --- a/tests/RootCommands.cpp
 +++ b/tests/RootCommands.cpp
-@@ -5,12 +5,12 @@
+@@ -5,24 +5,56 @@
  #include <algorithm>
  #include <string>
  enum class Fault { None, Empty, Type, Tag, Lun, Query, Residual, Underflow,
 -  Oversize, SenseLength, CheckCondition, Timeout, Fatal, Stop, Start, HighBase };
-+  Oversize, SenseLength, CheckCondition, Timeout, StuckWithReply, Fatal, Stop, Start, HighBase, Aggregation };
++  Oversize, SenseLength, CheckCondition, Timeout, StuckWithReply, Fatal, Stop, Start, HighBase, Aggregation,
++  UicTimeout, UicResult, UicFatal, ExitTimeout, ExitDelayed, ExitStatus, StillHibern8, AutoHibernate };
  static Fault fault;
  static std::array<uint8_t,kDmaBytes> device;
 -static std::array<uint32_t,64> registers;
@@ -765,15 +857,44 @@ index b5c0a7d..6e6276a 100644
 -static unsigned writes, releases;
 +static unsigned writes, releases, sleeps;
  static bool released;
++static uint32_t txState;
++static unsigned getCommands, exitCommands;
++static uint64_t exitAt;
  
  static uint64_t io(unsigned op,uint64_t address,uint64_t value,void *bytes)
-@@ -20,9 +20,14 @@ static uint64_t io(unsigned op,uint64_t address,uint64_t value,void *bytes)
+ {
+-  if (op==0) return registers.at(address/4);
++  if (op==0) {
++    if (address==0x20 && exitAt && now>=exitAt) { registers[0x20/4]|=0x20; exitAt=0; }
++    return registers.at(address/4);
++  }
+   if (op==1) {
      ++writes;
      if (address==0x20) registers[address/4]&=~uint32_t(value);
      else if (!(address==0x60 && ((fault==Fault::Stop && !value) || (fault==Fault::Start && value))) &&
 -             !(address==0x54 && fault==Fault::HighBase)) registers.at(address/4)=uint32_t(value);
 +             !(address==0x54 && fault==Fault::HighBase) &&
++             !(address==0x18 && fault==Fault::AutoHibernate) &&
 +             !(address==0x4c && fault==Fault::Aggregation)) registers.at(address/4)=uint32_t(value);
++    if (address==0x90) {
++      assert(registers[0x60/4]==0 && registers[0x58/4]==0 && releases==0);
++      assert(!(registers[0x20/4]&0x400)); // Stale completion was acknowledged.
++      if (value==1) {
++        ++getCommands;
++        assert(registers[0x94/4]==0x00410000);
++        if (fault==Fault::UicTimeout) return 0;
++        registers[0x9c/4]=txState;
++        registers[0x98/4]=fault==Fault::UicResult?1:0;
++        registers[0x20/4]|=fault==Fault::UicFatal?0x20400:0x400;
++      } else {
++        assert(value==0x18 && txState==1 && !(registers[0x20/4]&0x20));
++        ++exitCommands;
++        registers[0x20/4]|=(fault==Fault::ExitTimeout || fault==Fault::ExitDelayed)?0x400:0x420;
++        if (fault==Fault::ExitDelayed) exitAt=now+250000;
++        registers[0x30/4]=(fault==Fault::ExitStatus?0x20f:0x10f);
++        if (fault!=Fault::StillHibern8) txState=5;
++      }
++    }
      if (address==0x58) {
        assert(released); released=false;
 +#if defined(NATIVE_UFS_SM8750) && NATIVE_UFS_SM8750
@@ -783,7 +904,7 @@ index b5c0a7d..6e6276a 100644
        if (fault==Fault::Fatal) { registers[0x20/4]=0x20000; return 0; }
        registers[0x58/4]=0;
        if (fault==Fault::Timeout) return 0;
-@@ -32,6 +37,7 @@ static uint64_t io(unsigned op,uint64_t address,uint64_t value,void *bytes)
+@@ -32,6 +64,7 @@ static uint64_t io(unsigned op,uint64_t address,uint64_t value,void *bytes)
        *reinterpret_cast<uint32_t *>(device.data()+8)=0;
        if (fault==Fault::Empty) return 0;
        memcpy(rsp,cmd,32); rsp[0]=cmd[0]+0x20; rsp[1]=0;
@@ -791,7 +912,7 @@ index b5c0a7d..6e6276a 100644
        if (cmd[0]==1) putBe32(rsp+12,0);
        if (cmd[0]==0x16) putBe32(rsp+20,0x11);
        if (fault==Fault::Type) rsp[0]=0x3f;
-@@ -54,13 +60,13 @@ static uint64_t io(unsigned op,uint64_t address,uint64_t value,void *bytes)
+@@ -54,13 +87,14 @@ static uint64_t io(unsigned op,uint64_t address,uint64_t value,void *bytes)
      if (op==2) { ++releases; memcpy(at,bytes,value); released=true; }
      else memcpy(bytes,at,value);
    }
@@ -805,10 +926,11 @@ index b5c0a7d..6e6276a 100644
  {
 -  fault=f; device.fill(0); registers.fill(0); now=0; writes=releases=0; released=false;
 +  fault=f; device.fill(0); registers.fill(0); now=0; writes=releases=sleeps=0; released=false;
++  txState=5; getCommands=exitCommands=0; exitAt=0;
    registers[0x34/4]=1; registers[0x30/4]=15; registers[0x60/4]=1;
    ufs_test_reset(io,0x8cb5e9000);
  }
-@@ -107,6 +113,31 @@ int main()
+@@ -107,6 +141,33 @@ int main()
    assert(ufs_test_scsi(0,cdb,6,true,kDataMax+4,&scsi)==kIOReturnBadArgument);
    assert(ufs_test_scsi(0,cdb,6,false,4096,&scsi)==kIOReturnBadArgument); // No writes to media.
    assert(writes==0 && releases==0);
@@ -833,18 +955,42 @@ index b5c0a7d..6e6276a 100644
 +  assert(hostScsiDir(0,cdb,10,0,0,200000,&scsi)==kIOReturnBadArgument);
 +  assert(writes==0 && releases==0);
 +#endif
-+  reset(); registers[0]=0x40000000; registers[0x300/4]=2;
++  reset(); registers[0]=0x40000000; registers[0x300/4]=1;
 +  assert(!ufs_test_stop_queue() && writes==0);
++  reset(); registers[0]=0x40000000; registers[0x300/4]=2; // ESI alone is not MCQ mode.
++  assert(ufs_test_stop_queue());
 +  reset(); registers[0]=0x40000000; registers[0x300/4]=0;
 +  assert(ufs_test_stop_queue());
    for (unsigned offset: {0x58U,0x78U}) {
      reset(); registers[offset/4]=1;
      assert(!ufs_test_stop_queue() && writes==0);
-@@ -120,5 +151,14 @@ int main()
+@@ -120,5 +181,36 @@ int main()
    reset(Fault::HighBase); assert(ufs_test_stop_queue()); assert(!ufs_test_start_queue());
    reset(); assert(ufs_test_stop_queue() && ufs_test_start_queue());
    assert(registers[0x50/4]==0xcb5e9000 && registers[0x54/4]==8);
 +#if defined(NATIVE_UFS_SM8750) && NATIVE_UFS_SM8750
++  assert(getCommands==1 && exitCommands==0 && gRootDiagnostic.txBefore==5);
++  reset(); txState=1; registers[0x20/4]=0x420; registers[0x18/4]=0x1501;
++  assert(ufs_test_stop_queue() && ufs_test_start_queue());
++  assert(getCommands==2 && exitCommands==1 && sleeps==0);
++  assert(gRootDiagnostic.txBefore==1 && gRootDiagnostic.txAfter==5);
++  assert(gRootDiagnostic.linkAhit==0x1501 && registers[0x18/4]==0);
++  assert(ufs_test_nop()==0);
++  reset(Fault::ExitDelayed); txState=1;
++  assert(ufs_test_stop_queue() && ufs_test_start_queue() && now>=250000 && sleeps==0);
++  assert(exitCommands==1 && gRootDiagnostic.txAfter==5);
++  for (Fault f: {Fault::UicTimeout,Fault::UicResult,Fault::UicFatal,Fault::ExitTimeout,
++                Fault::ExitStatus,Fault::StillHibern8,Fault::AutoHibernate}) {
++    reset(f); txState=1; registers[0x20/4]=0x420; registers[0x18/4]=0x1501;
++    assert(ufs_test_stop_queue() && !ufs_test_start_queue());
++    assert(registers[0x50/4]==0 && registers[0x60/4]==0 && releases==0 && sleeps==0);
++    assert(gRootDiagnostic.result!=0);
++    if (f==Fault::UicTimeout || f==Fault::ExitTimeout) assert(now>=100000);
++    if (f==Fault::ExitTimeout) assert(now>=500000 && now<500100);
++    if (f==Fault::UicFatal) assert(registers[0x20/4]&0x20000);
++  }
++  reset(); assert(ufs_test_stop_queue()); registers[0x30/4]&=~8U;
++  assert(!ufs_test_start_queue() && getCommands==0 && exitCommands==0 && releases==0);
 +  reset(); registers[0x4c/4]=0x81001f20;
 +  assert(ufs_test_stop_queue() && ufs_test_start_queue());
 +  assert(gRootDiagnostic.iacrBefore==0x81001f20 && gRootDiagnostic.iacr==0);
@@ -855,11 +1001,24 @@ index b5c0a7d..6e6276a 100644
 +#endif
    puts("PASS: actual command/queue path; malformed DMA responses, bounds, short reads, sense, quarantine, queue refusal and full-width DMA");
  }
+diff --git a/tests/RootCommandsBridge.cpp b/tests/RootCommandsBridge.cpp
+index abfa239..46606ac 100644
+--- a/tests/RootCommandsBridge.cpp
++++ b/tests/RootCommandsBridge.cpp
+@@ -34,7 +34,7 @@ static void clock_interval_to_deadline(uint32_t interval, unsigned scale, uint64
+   *deadline=callback(4,0,0,nullptr)+uint64_t(interval)*scale;
+ }
+ static uint64_t mach_absolute_time() { return callback(4,0,0,nullptr); }
+-static void IODelay(uint32_t us) { callback(5,0,us,nullptr); }
++[[maybe_unused]] static void IODelay(uint32_t us) { callback(5,0,us,nullptr); }
+ static void IOLockLock(void *) {}
+ static void IOLockUnlock(void *) {}
+ static IOReturn recordTransport(IOReturn result,uint32_t ocs) {
 diff --git a/tests/RootDiagnostics.cpp b/tests/RootDiagnostics.cpp
-index 126624a..5975144 100644
+index 126624a..a53679c 100644
 --- a/tests/RootDiagnostics.cpp
 +++ b/tests/RootDiagnostics.cpp
-@@ -27,6 +27,12 @@ int main(int argc, char **)
+@@ -27,6 +27,13 @@ int main(int argc, char **)
    d.sense = 0x062900;
    d.publicationPhase = 5;
    d.publicationWindow = 1;
@@ -869,15 +1028,17 @@ index 126624a..5975144 100644
 +  d.dmaOcs = 15;
 +  d.iacrBefore = 0x81001f20;
 +  d.tlbStatus = 0;
++  d.txBefore = 1; d.txAfter = 2; d.linkCommand = 1; d.linkResult = 0; d.linkStatus = 0x400;
    char full[2500];
    int length = formatUfsRootDiagnostics(full, sizeof(full), d, "transport timeout fixture");
    assert(length > 0 && length < 2000 && size_t(length) == strlen(full));
-@@ -39,6 +45,8 @@ int main(int argc, char **)
+@@ -39,6 +46,9 @@ int main(int argc, char **)
    assert(strstr(full, "dme=80000001"));
    assert(strstr(full, "reject=6 residual=4096 sense=062900"));
    assert(strstr(full, "pubPhase=5 window=1"));
 +  assert(strstr(full, "WAIT ticks=100000002/3a9800 hz=124f800 cntkctl=0 DMA ocs=f rsp=00000000"));
 +  assert(strstr(full, "PATH ie=0 iacr=81001f20->0 memcfg=0 tlb=0"));
++  assert(strstr(full, "LINK tx=1->2 cmd=1 rc=0 is=400 ahitBefore=0"));
    char passive[2500];
    formatUfsRootDiagnostics(passive,sizeof(passive),d,"cached values; not a new HW fault sample","UFS CACHED SNAPSHOT");
    assert(strstr(passive,"UFS CACHED SNAPSHOT:") == passive && !strstr(passive,"UFS ROOT FAILURE"));
