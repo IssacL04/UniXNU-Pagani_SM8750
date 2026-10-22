@@ -3339,10 +3339,9 @@ index 6885f51..88016c3 100644
      log(f'userdata: {image}')
 diff --git a/patches/xnu/zzzzzz-vm-bootstrap-progress.patch b/patches/xnu/zzzzzz-vm-bootstrap-progress.patch
 new file mode 100644
-index 0000000..3716094
 --- /dev/null
 +++ b/patches/xnu/zzzzzz-vm-bootstrap-progress.patch
-@@ -0,0 +1,132 @@
+@@ -0,0 +1,204 @@
 +--- a/osfmk/vm/vm_init.c
 ++++ b/osfmk/vm/vm_init.c
 +@@ -1,3 +1,4 @@
@@ -3432,7 +3431,22 @@ index 0000000..3716094
 + 	map_addr = round_page(addr);
 + 	while (map_addr < addr + size) {
 + #if defined(__x86_64__)
-+@@ -1360,6 +1374,7 @@
++@@ -1331,6 +1345,14 @@
++ #endif
++ 		pmap_flags = flags ? flags : VM_WIMG_USE_DEFAULT;
++ 
+++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
+++		if (might_free) {
+++			kprintf("VM map: page=%u va=%llx pa=%llx\n",
+++			    (unsigned int)((map_addr - round_page(addr)) >> PAGE_SHIFT),
+++			    (unsigned long long)map_addr, (unsigned long long)phys_page << PAGE_SHIFT);
+++		}
+++#endif
+++
++ 		kr = pmap_enter(kernel_pmap, map_addr, phys_page,
++ 		    VM_PROT_READ | VM_PROT_WRITE, VM_PROT_NONE,
++ 		    pmap_flags, FALSE, mapping_type);
++@@ -1360,6 +1382,7 @@
 + #if KASAN
 + 	kasan_notify_address(round_page(addr), size);
 + #endif
@@ -3440,7 +3454,7 @@ index 0000000..3716094
 + 	return (void *) addr;
 + }
 + 
-+@@ -1454,6 +1469,10 @@
++@@ -1454,6 +1477,10 @@
 + 	npages = (uint_t)(mem_sz / (PAGE_SIZE + sizeof(*vm_pages)));    /* scaled to include the vm_page_ts */
 + 
 + 
@@ -3451,7 +3465,7 @@ index 0000000..3716094
 + 	vm_pages = (vm_page_t) pmap_steal_freeable_memory(npages * sizeof *vm_pages);
 + 
 + 	/*
-+@@ -1537,6 +1556,7 @@
++@@ -1537,6 +1564,7 @@
 + 	/*
 + 	 * Initialize and release the page frames.
 + 	 */
@@ -3459,7 +3473,7 @@ index 0000000..3716094
 + 	kernel_debug_string_early("page_frame_init");
 + 
 + 	vm_page_array_beginning_addr = &vm_pages[0];
-+@@ -1590,6 +1610,7 @@
++@@ -1590,6 +1618,7 @@
 + 			vm_page_release_startup(&vm_pages[i]);
 + 		}
 + 	}
@@ -3467,7 +3481,7 @@ index 0000000..3716094
 + 	vm_page_pages = vm_pages_count; /* used to report to user space */
 + 
 + 	if (!vm_himemory_mode) {
-+@@ -1600,6 +1621,7 @@
++@@ -1600,6 +1629,7 @@
 + 		} while (i != 0);
 + 	}
 + 
@@ -3475,3 +3489,60 @@ index 0000000..3716094
 + 	absolutetime_to_nanoseconds(mach_absolute_time(), &now_ns);
 + 	printf("pmap_startup() init/release time: %lld microsec\n", (now_ns - start_ns) / NSEC_PER_USEC);
 + 	printf("pmap_startup() delayed init/release of %d pages\n", vm_delayed_count);
++--- a/osfmk/arm/pmap/pmap.c
+++++ b/osfmk/arm/pmap/pmap.c
++@@ -3601,6 +3601,11 @@
++ 		/*
++ 		 *  Allocate a VM page for the level x page table entries.
++ 		 */
+++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
+++		if (!pmap_initialized) {
+++			kprintf("VM tt page allocation: level=%u\n", level);
+++		}
+++#endif
++ 		while (pmap_pages_alloc_zeroed(&pa, PAGE_SIZE, ((options & PMAP_TT_ALLOCATE_NOWAIT)? PMAP_PAGES_ALLOCATE_NOWAIT : 0)) != KERN_SUCCESS) {
++ 			if (options & PMAP_OPTIONS_NOWAIT) {
++ 				return KERN_RESOURCE_SHORTAGE;
++@@ -3608,6 +3613,11 @@
++ 			VM_PAGE_WAIT();
++ 		}
++ 
+++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
+++		if (!pmap_initialized) {
+++			kprintf("VM tt page allocated: pa=%llx; allocating PTD\n", (unsigned long long)pa);
+++		}
+++#endif
++ 		/* Allocate a new Page Table Descriptor for the newly allocated page table. */
++ 		while ((ptdp = ptd_alloc(pmap)) == NULL) {
++ 			if (options & PMAP_OPTIONS_NOWAIT) {
++@@ -3618,6 +3628,11 @@
++ 			VM_PAGE_WAIT();
++ 		}
++ 
+++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
+++		if (!pmap_initialized) {
+++			kprintf("VM tt PTD allocated\n");
+++		}
+++#endif
++ 		if (level < pt_attr_leaf_level(pmap_get_pt_attr(pmap))) {
++ 			OSAddAtomic64(1, &alloc_ttepages_count);
++ 			OSAddAtomic(1, (pmap == kernel_pmap ? &inuse_kernel_ttepages_count : &inuse_user_ttepages_count));
++@@ -6093,7 +6108,18 @@
++ 		/* Must unlock to expand the pmap. */
++ 		pmap_unlock(pmap, lock_mode);
++ 
+++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
+++		if (!pmap_initialized) {
+++			kprintf("VM expand: va=%llx pa=%llx\n",
+++			    (unsigned long long)v, (unsigned long long)pa);
+++		}
+++#endif
++ 		kr = pmap_expand(pmap, v, options, pt_attr_leaf_level(pt_attr));
+++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
+++		if (!pmap_initialized) {
+++			kprintf("VM expand returned: kr=%d\n", kr);
+++		}
+++#endif
++ 
++ 		if (kr != KERN_SUCCESS) {
++ 			return kr;
