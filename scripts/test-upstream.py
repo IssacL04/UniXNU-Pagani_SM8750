@@ -17,11 +17,18 @@ class UpstreamTest(unittest.TestCase):
             source, device = root / 'source', root / 'device'
             source.mkdir()
             (device / 'patches').mkdir(parents=True)
-            def git(*args):
-                return subprocess.check_output(['git', *args], cwd=source, text=True)
+            def git(*args, repo=source):
+                return subprocess.check_output(['git', *args], cwd=repo, text=True)
             git('init', '-q')
             (source / 'input').write_text('upstream\n')
-            git('add', 'input')
+            ufs_source = root / 'ufs-source'
+            ufs_source.mkdir()
+            git('init', '-q', repo=ufs_source)
+            (ufs_source / 'fixture').write_text('ufs\n')
+            git('add', '.', repo=ufs_source)
+            git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'UFS fixture', repo=ufs_source)
+            git('-c', 'protocol.file.allow=always', 'submodule', 'add', str(ufs_source), 'drivers/NativeUfs')
+            git('add', '.')
             git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'Fixture')
             (device / 'upstream.rev').write_text(git('rev-parse', 'HEAD'))
             (source / 'input').write_text('board\n')
@@ -35,10 +42,19 @@ class UpstreamTest(unittest.TestCase):
             (prepared / 'input').write_text('local work\n')
             self.assertEqual(prepare(device, source), prepared)
             self.assertEqual((prepared / 'input').read_text(), 'local work\n')
+            (source / 'drivers/NativeUfs/fixture').write_text('sm8750\n')
+            ufs_patch = device / 'patches/native-ufs-sm8750.patch'
+            ufs_patch.write_text(git('diff', repo=source / 'drivers/NativeUfs'))
+            git('restore', 'fixture', repo=source / 'drivers/NativeUfs')
+            with_ufs = prepare(device, source)
+            self.assertNotEqual(with_ufs, prepared)
+            self.assertEqual((with_ufs / 'drivers/NativeUfs/fixture').read_text(), 'sm8750\n')
+            self.assertEqual((source / 'drivers/NativeUfs/fixture').read_text(), 'ufs\n')
+            self.assertEqual((prepared / 'input').read_text(), 'local work\n')
             patch.write_text('invalid patch\n')
             with self.assertRaises(subprocess.CalledProcessError):
                 prepare(device, source)
-            self.assertEqual(list((device / '.cache').iterdir()), [prepared])
+            self.assertEqual(set((device / '.cache').iterdir()), {prepared, with_ufs})
             self.assertEqual((source / 'input').read_text(), 'upstream\n')
 
     def test_board_enables_upstream_archive_builders(self):

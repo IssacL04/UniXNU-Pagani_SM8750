@@ -17,7 +17,8 @@ def prepare(device=DEVICE, source=None):
     if not re.fullmatch('[0-9a-f]{40}', revision):
         raise ValueError('upstream.rev must contain a full Git commit ID')
     patch = device / 'patches/unixnu-source-kernel.patch'
-    fingerprint = hashlib.sha256(patch.read_bytes()).hexdigest()
+    ufs_patch = device / 'patches/native-ufs-sm8750.patch'
+    fingerprint = hashlib.sha256(patch.read_bytes() + (ufs_patch.read_bytes() if ufs_patch.is_file() else b'')).hexdigest()
     cache = device / '.cache'
     target = cache / f'upstream-{revision[:12]}-{fingerprint[:12]}'
     if target.is_dir():
@@ -48,6 +49,9 @@ def prepare(device=DEVICE, source=None):
             git('-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive', cwd=tree)
         git('apply', '--check', patch, cwd=tree)
         git('apply', patch, cwd=tree)
+        if ufs_patch.is_file():
+            git('apply', '--check', ufs_patch, cwd=tree / 'drivers/NativeUfs')
+            git('apply', ufs_patch, cwd=tree / 'drivers/NativeUfs')
         tree.rename(target)
     return target
 

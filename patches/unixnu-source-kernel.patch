@@ -3257,3 +3257,83 @@ index 0000000..4438159
 +
 +if __name__ == '__main__':
 +    unittest.main()
+diff --git a/docs/porting/bring-up.md b/docs/porting/bring-up.md
+index 5fb76a6..c6b9151 100644
+--- a/docs/porting/bring-up.md
++++ b/docs/porting/bring-up.md
+@@ -81,11 +81,12 @@ A missing platform provider produces a panic that names the provider. Add the dr
+ 
+ ## Stage 6: Storage and root
+ 
+-Goal: the block driver publishes the userdata partition, the volumes appear, and XNU mounts the root.
++Goal: the block driver finds the configured GPT partition, the volumes appear, and XNU mounts the root. On OnePlus 13T the target is the dedicated `unixnu` partition; the reference sheng layout uses `userdata`. The kernel boot image remains separate.
+ 
+ Checks:
+ 
+ - The storage driver logs the link speed and the command queue.
++- Verify the LUN, logical block size and exact GPT name read-only before deployment. Never fall back from a missing `unixnu` partition to Android `userdata`.
+ - The partition scheme publishes `OS` and `SystemOS`.
+ - The root volume UUID matches `root_match_volume_uuid`.
+ - The kernel mounts the root and starts `launchd`.
+diff --git a/docs/zh/porting/bring-up.md b/docs/zh/porting/bring-up.md
+index 741665d..af88601 100644
+--- a/docs/zh/porting/bring-up.md
++++ b/docs/zh/porting/bring-up.md
+@@ -79,11 +79,12 @@ fastboot boot out/<board>/boot/boot.img
+ 
+ ## 阶段 6：存储与根卷
+ 
+-目标：块驱动发布 userdata 分区，卷出现，XNU 挂载根卷。
++目标：块驱动找到配置指定的 GPT 分区，卷出现，XNU 挂载根卷。一加 13T 使用独立的 `unixnu` 分区；参考设备 sheng 使用 `userdata`。内核启动镜像继续与根卷分开。
+ 
+ 检查：
+ 
+ - 存储驱动打印链路速度和命令队列。
++- 部署前先只读核对 LUN、逻辑块大小和 GPT 分区名；找不到 `unixnu` 时停止，不能回退到 Android `userdata`。
+ - 分区方案发布 `OS` 和 `SystemOS`。
+ - 根卷 UUID 匹配 `root_match_volume_uuid`。
+ - 内核挂载根卷并启动 `launchd`。
+diff --git a/scripts/unixnu/userdata.py b/scripts/unixnu/userdata.py
+index 6885f51..88016c3 100644
+--- a/scripts/unixnu/userdata.py
++++ b/scripts/unixnu/userdata.py
+@@ -34,6 +34,13 @@ def paths(ctx):
+     return out, out / 'userdata-root.img', out / 'userdata-root.json'
+ 
+ 
++def target_partition(spec):
++    name = spec.get('partition', 'userdata')
++    if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_]{1,35}', name):
++        raise Error('userdata.partition must be an exact GPT name of 1 to 35 ASCII letters, digits or underscores')
++    return name
++
++
+ def image_size(dmg):
+     info = subprocess.run(['hdiutil', 'imageinfo', '-plist', str(dmg)], capture_output=True, check=True).stdout
+     return plistlib.loads(info)['Size Information']['Total Bytes']
+@@ -55,6 +62,7 @@ def build(ctx, dry_run=False):
+     spec = ctx.board.get('userdata')
+     if not spec:
+         raise Error('board.toml has no [userdata]')
++    partition = target_partition(spec)
+     tool('hdiutil', 'the disk images are attached with macOS hdiutil')
+     source = Ipsw(ctx)
+     capacity = (spec['last_lba'] - spec['first_lba'] + 1) * spec.get('lba_bytes', 4096)
+@@ -62,7 +70,7 @@ def build(ctx, dry_run=False):
+         for window in spec['windows']:
+             name, size, _ = source.info(window['component'])
+             log(f'userdata: {window["name"]} would be extracted from {name} ({size >> 20} MiB)')
+-        log('userdata: dry run, nothing extracted or written')
++        log(f'userdata: target partition {partition}, dry run, nothing extracted or written')
+         return None
+     sources = [(window['name'], source.extract(window['component'])) for window in spec['windows']]
+     layout, cursor = [], MIB
+@@ -111,7 +119,7 @@ def build(ctx, dry_run=False):
+         target.write(header)
+     data = {'image_bytes': total, 'image_sha256': sha256_file(image), 'manifest_sha256': hashlib.sha256(bytes(header)).hexdigest(),
+             'windows': [{'name': n, 'offset': o, 'size': s, 'sha256': d.hex()} for n, o, s, d in entries],
+-            'userdata_bytes': capacity, 'flash_command': f'fastboot flash userdata {image}',
++            'userdata_bytes': capacity, 'partition': partition, 'flash_command': f'fastboot flash {partition} {image}',
+             'source': 'remote' if source.remote else 'local', 'hardware_tested': False}
+     report.write_text(json.dumps(data, indent=2) + '\n')
+     log(f'userdata: {image}')

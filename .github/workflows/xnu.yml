@@ -45,11 +45,15 @@ jobs:
 
       - name: Install host tools and check the SDK
         run: |
-          brew install cmake ninja unifdef llvm mtools
+          brew install cmake ninja unifdef llvm mtools openssl@3
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-path
           df -h .
+
+      - name: Check the read-only SM8750 storage path
+        run: |
+          python3 scripts/test-stage6.py --tree "$UNIXNU_TREE" --openssl-prefix "$(brew --prefix openssl@3)"
 
       - name: Fetch the kernel sources
         run: |

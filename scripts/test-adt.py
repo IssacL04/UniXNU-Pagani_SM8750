@@ -75,6 +75,11 @@ class AdtTest(unittest.TestCase):
         reg = struct.unpack('<4Q', nodes['/device-tree/arm-io/intc']['reg'])
         self.assertEqual((bus[1] + reg[0] - bus[0], bus[1] + reg[2] - bus[0]), (adt.GIC_BASE, adt.GICR_BASE))
         self.assertLessEqual(reg[2] + reg[3], bus[2])
+        # NativeUfs starts from the root personality; no synthetic UFS nub is needed.
+        self.assertEqual(cells('/soc/ufshc@1d84000', 'reg')[:2], [0x1d84000, 0x3000])
+        smmu = cells('/soc/apps-smmu@15000000', 'phandle')[0]
+        self.assertEqual(cells('/soc/ufshc@1d84000', 'iommus'), [smmu, 0x60, 0])
+        self.assertEqual(cells('/soc/apps-smmu@15000000', 'reg'), [0x15000000, 0x100000])
 
 
 if __name__ == '__main__':
