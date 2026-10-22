@@ -1,6 +1,6 @@
 # Stage 6：一加 13T 存储与根卷
 
-更新：2026-10-23。第 11 次内核曾在真机读到 UFS 控制器寄存器；后续启动稳定停在早期 VM 初始化。第 12 次照片已将停点缩小到 `vm_pages` 页描述符数组的映射循环，哈希桶、锁数组与 `vm_tag_init` 均已通过。第 13 次照片确认停在第 306 页的三级页表分配。已修复早期诊断帧缓冲未计入页表预建范围的问题，本地回归通过，待新内核真机验证。8.74 GiB 的 iPadOS 根镜像和签名策略已生成并通过本地校验，尚未写入手机。XNU 根卷挂载及 `launchd` 启动仍未完成。
+更新：2026-10-23。第 14 次真机日志确认页表修复生效，内核已进入 BSD 根设备查找；当前停点为 `UFS ROOT FAILURE: unsupported SMMU geometry`。已按实测寄存器和原机设备树修正 SMMU 映射范围，本地回归通过，待新镜像验证。8.74 GiB 的 iPadOS 根镜像和签名策略已生成并通过本地校验，尚未写入手机。XNU 根卷挂载及 `launchd` 启动仍未完成。
 
 最终目标是在一加 13T 上启动 iPadOS 用户态和界面。当前源码 XNU 仅用于打通硬件路径；本阶段以 iPadOS 根卷挂载及其 `launchd` 启动为验收条件，图形界面仍需后续用户态、显示与输入适配。
 
@@ -96,7 +96,19 @@ DeviceTree、两份 trust cache 和原始 KernelCache 也已从同一恢复包�
 
 调用关系核对发现：`early_boot_progress_vm_ready` 先用 `ml_io_map_wcomb` 映射帧缓冲，随后 `PE_create_console` 经 `initialize_screen` 再映射一次。13T 的每份映射为 `round_page(0xa50 * 0x1300) = 0xc3f000` 字节（约 12.25 MiB）；`arm_vm_init` 原本只为一份帧缓冲预建 L3 页表。根据数组起点、两份帧缓冲和前两份哈希表的大小，可重建本次动态 VA 起点 `0xfffffff021600000`，原预建范围恰好结束于实测停点 `0xfffffff023000000`。这是源码与屏幕地址一致的根因解释，修复效果仍需真机验证。
 
-新增 `zzzzzzz-early-framebuffer-page-tables.patch`，仅在启用 `XNU_EARLY_BOOT_PROGRESS` 时为第二份帧缓冲预建页表，不改动 VM 分配器或 256 MiB 物理内存窗口。现有源码测试增加一项检查，直接编译补丁中的计算语句，覆盖本次第 306 页边界、四种 2 MiB 地址偏移、诊断开关和空帧缓冲；八项测试通过。全套有序补丁对固定版本 `arm_vm_init.c` 的应用检查通过。等待下一次云端构建及临时启动。
+新增 `zzzzzzz-early-framebuffer-page-tables.patch`，仅在启用 `XNU_EARLY_BOOT_PROGRESS` 时为第二份帧缓冲预建页表，不改动 VM 分配器或 256 MiB 物理内存窗口。现有源码测试增加一项检查，直接编译补丁中的计算语句，覆盖本次第 306 页边界、四种 2 MiB 地址偏移、诊断开关和空帧缓冲；八项测试通过。全套有序补丁对固定版本 `arm_vm_init.c` 的应用检查通过。第 14 次云端构建及临时启动已完成，屏幕结果待确认。
+
+[第 14 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39846520174)以提交 `55ad302` 成功构建，源码回归、只读存储和 panic 参数检查全部通过。产物位于 `out/oneplus13t/actions/run-14/`；内核为 21,504,448 字节，SHA-256 为 `9c783e1367007e8c738c20d25a5635b414f8f3108b45bb08067dca480edca6f3`。云端/本地哈希、FAT 内嵌内核、模式 10 和详细日志参数核对通过，分池输入仍为 1,266/1,119 条，ADT 与 run-13 仅随机种子不同。
+
+完整镜像为 `out/oneplus13t/boot/stage6-run-14-page-tables/boot.img`（15,216,640 字节），封装与解包验证通过。对用户恢复到 Fastboot 的同一设备执行了 `fastboot boot`，Sending 和 Booting 均返回 OKAY，日志为 `out/oneplus13t/logs/stage6-run-14-page-tables-fastboot.log`。随后用户照片确认内核越过 VM 初始化并进入 BSD/UFS 路径，早期页表修复已获真机验证。
+
+第 14 次照片的 panic 正文为 `UFS ROOT FAILURE: unsupported SMMU geometry`，阶段为 `SMMU planning`，结果 `e00002d8`。实测 `IDR1=0x60000053`、`IDR2=0x5111`；控制器仍为 `CAP=0xd5c7031f`、`VER=0x400`、`HCS=0x10f`、`HCE=1`，DMA 区已分配且连续长度为 `0x22000`。命令计数和块读取计数均为零，尚未发出 SCSI 读取或读取 GPT。
+
+按固定版本 Linux SMMU 驱动中的 IDR1 字段定义，`0x60000053` 表示 4 KiB 寄存器页、128 页全局区域和 83 个 context bank，访问全部 context bank 需要 `0xd3000` 字节；NativeUfs 的旧平台范围为 `0xd0000`，因此在任何 SMMU 配置写入前被边界检查拒绝。原机 `sysinfo/live.dtb` 的 `/soc/apps-smmu@15000000/reg` 为 `0x15000000 0x100000`，与 [Linux SM8750 设备树](https://github.com/torvalds/linux/blob/master/arch/arm64/boot/dts/qcom/sm8750.dtsi)一致。
+
+修复将 SM8750 的映射范围、规划器和只读 context-bank 探测统一为该 1 MiB 区域；旧平台保持原范围。保留地址宽度、页大小、占用、读回和写入顺序检查；SM8750 超过当前完整扫描能力的 stream 数量会明确拒绝，避免只扫描部分条目后占用其他设备的 context bank。现有 SMMU 测试新增实测 IDR1/DMA、最高 context bank、占用回退、映射边界及拒绝后零写入检查。七项 Stage 6 生产路径测试（含采集 GPT）、旧平台 SMMU 测试、八项源码测试和原机资源检查均通过，ASan/UBSan 未报错。
+
+已删除定位 VM 卡点时加入的每页 VA/PA 打印，`startup_debug` 改为 `0`，保留 VM 阶段边界及 panic 页。全套有序补丁应用检查通过；后续启动应减少初始化地址刷屏。等待下一轮云端构建和临时启动。
 
 当前未刷写任何手机分区，未启用 Data 持久化或诊断日志落盘。已实测的 run-9 回退镜像仍位于 `out/oneplus13t/boot/xnu-source-run-9-root-panic/boot.img`。
 

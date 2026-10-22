@@ -39,7 +39,7 @@ title = "OnePlus 13T Stage 6: VM and UFS trace (read only)"
 dram_size = "0x10000000"
 timeout = 10
 # The source-only kernel needs 33 slots at the default 260-zone budget; 240 needs 30.
-kernel_args = ["-v", "serial=0", "debug=0x14e", "cpus=1", "-enable_kprintf_spam", "kt_fixed_zones=240", "native-ufs-probe=10", "native-ufs-diagnostics=1", "startup_debug=1"]
+kernel_args = ["-v", "serial=0", "debug=0x14e", "cpus=1", "-enable_kprintf_spam", "kt_fixed_zones=240", "native-ufs-probe=10", "native-ufs-diagnostics=1", "startup_debug=0"]
 
 [payload.adt]
 tool = "scripts/make-oneplus13t-adt.py"
