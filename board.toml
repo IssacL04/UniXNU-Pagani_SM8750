@@ -4,6 +4,21 @@ soc = "SM8750"
 description = "OnePlus 13T PKX110: Stage 6 read-only UFS bring-up"
 kit = "oneplus13t"
 
+# iPadOS root-image source; hardware identity remains the OnePlus 13T.
+[ipsw]
+url = "https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw"
+product = "iPad7,1"
+version = "17.7.11"
+build = "21H461"
+device_class = "j120ap"
+chip_id = 0x8011
+board_id = 12
+fetch = ["KernelCache", "DeviceTree", "StaticTrustCache", "Cryptex1,SystemTrustCache"]
+
+[ipsw.sha256]
+"044-76040-038.dmg" = "3f99b859c9728379110b66657c7b15285bcb1925ad8b5726542e2cdcf8b1028d"
+"044-76034-038.dmg" = "b4908cde41d23e6bc05e6af51a2c9eeb00cf0f863a6a18b1600c96a3fd70414f"
+
 [kernel]
 defconfig = "oneplus13t_defconfig"
 # First reach the platform expert without importing Apple's device drivers.
@@ -20,11 +35,11 @@ archives = [
 volume = "UNIXNU13T"
 size_mib = 64
 loader = "firmware"
-title = "OnePlus 13T Stage 6: UFS registers (read only)"
+title = "OnePlus 13T Stage 6: VM and UFS trace (read only)"
 dram_size = "0x10000000"
 timeout = 10
 # The source-only kernel needs 33 slots at the default 260-zone budget; 240 needs 30.
-kernel_args = ["-v", "serial=0", "debug=0x14e", "cpus=1", "-enable_kprintf_spam", "kt_fixed_zones=240", "native-ufs-probe=2", "native-ufs-diagnostics=1"]
+kernel_args = ["-v", "serial=0", "debug=0x14e", "cpus=1", "-enable_kprintf_spam", "kt_fixed_zones=240", "native-ufs-probe=10", "native-ufs-diagnostics=1", "startup_debug=1"]
 
 [payload.adt]
 tool = "scripts/make-oneplus13t-adt.py"

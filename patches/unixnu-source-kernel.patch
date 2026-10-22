@@ -3337,3 +3337,141 @@ index 6885f51..88016c3 100644
              'source': 'remote' if source.remote else 'local', 'hardware_tested': False}
      report.write_text(json.dumps(data, indent=2) + '\n')
      log(f'userdata: {image}')
+diff --git a/patches/xnu/zzzzzz-vm-bootstrap-progress.patch b/patches/xnu/zzzzzz-vm-bootstrap-progress.patch
+new file mode 100644
+index 0000000..3716094
+--- /dev/null
++++ b/patches/xnu/zzzzzz-vm-bootstrap-progress.patch
+@@ -0,0 +1,132 @@
++--- a/osfmk/vm/vm_init.c
+++++ b/osfmk/vm/vm_init.c
++@@ -1,3 +1,4 @@
+++#include <kern/boot_progress.h>
++ /*
++  * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
++  *
++@@ -90,6 +91,7 @@
++ static inline void
++ vm_mem_bootstrap_log(const char *message)
++ {
+++	boot_progress_stage(message);
++ //	kprintf("vm_mem_bootstrap: %s\n", message);
++ 	kernel_debug_string_early(message);
++ }
++--- a/osfmk/vm/vm_resident.c
+++++ b/osfmk/vm/vm_resident.c
++@@ -1,3 +1,4 @@
+++#include <kern/boot_progress.h>
++ /*
++  * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
++  *
++@@ -1080,6 +1081,7 @@
++ 	 *	Steal memory for the map and zone subsystems.
++ 	 */
++ 	kernel_startup_initialize_upto(STARTUP_SUB_PMAP_STEAL);
+++	boot_progress_stage("VM hash sizing");
++ 
++ 	/*
++ 	 *	Allocate (and initialize) the virtual-to-physical
++@@ -1093,6 +1095,9 @@
++ 
++ 	if (vm_page_bucket_count == 0) {
++ 		unsigned int npages = pmap_free_pages();
+++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
+++		kprintf("VM available pages=%u\n", npages);
+++#endif
++ 
++ 		vm_page_bucket_count = 1;
++ 		while (vm_page_bucket_count < npages) {
++@@ -1152,11 +1157,13 @@
++ #endif /* VM_PAGE_FAKE_BUCKETS */
++ #endif /* VM_PAGE_BUCKETS_CHECK */
++ 
+++	boot_progress_stage("vm_page_buckets");
++ 	kernel_debug_string_early("vm_page_buckets");
++ 	vm_page_buckets = (vm_page_bucket_t *)
++ 	    pmap_steal_memory(vm_page_bucket_count *
++ 	    sizeof(vm_page_bucket_t), 0);
++ 
+++	boot_progress_stage("vm_page_bucket_locks");
++ 	kernel_debug_string_early("vm_page_bucket_locks");
++ 	vm_page_bucket_locks = (lck_spin_t *)
++ 	    pmap_steal_memory(vm_page_bucket_lock_count *
++@@ -1176,6 +1183,7 @@
++ 		lck_spin_init(&vm_page_bucket_locks[i], &vm_page_lck_grp_bucket, &vm_page_lck_attr);
++ 	}
++ 
+++	boot_progress_stage("vm_tag_init");
++ 	vm_tag_init();
++ 
++ #if VM_PAGE_BUCKETS_CHECK
++@@ -1190,6 +1198,7 @@
++ 	 *	to get the alignment right.
++ 	 */
++ 
+++	boot_progress_stage("pmap_startup");
++ 	kernel_debug_string_early("pmap_startup");
++ 	pmap_startup(&virtual_space_start, &virtual_space_end);
++ 	virtual_space_start = round_page(virtual_space_start);
++@@ -1219,6 +1228,7 @@
++ 	printf("vm_page_bootstrap: %d free pages, %d wired pages, (up to %d of which are delayed free)\n",
++ 	    vm_page_free_count, vm_page_wire_count, vm_delayed_count);
++ 
+++	boot_progress_stage("vm_page_bootstrap complete");
++ 	kernel_debug_string_early("vm_page_bootstrap complete");
++ }
++ 
++@@ -1296,6 +1306,10 @@
++ 	/*
++ 	 * Allocate and map physical pages to back the new virtual space.
++ 	 */
+++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
+++	kprintf("VM steal: va=%llx bytes=%llx free=%u\n",
+++	    (unsigned long long)addr, (unsigned long long)size, pmap_free_pages());
+++#endif
++ 	map_addr = round_page(addr);
++ 	while (map_addr < addr + size) {
++ #if defined(__x86_64__)
++@@ -1360,6 +1374,7 @@
++ #if KASAN
++ 	kasan_notify_address(round_page(addr), size);
++ #endif
+++	boot_progress_stage("VM steal mapped");
++ 	return (void *) addr;
++ }
++ 
++@@ -1454,6 +1469,10 @@
++ 	npages = (uint_t)(mem_sz / (PAGE_SIZE + sizeof(*vm_pages)));    /* scaled to include the vm_page_ts */
++ 
++ 
+++	boot_progress_stage("VM page array allocation");
+++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
+++	kprintf("VM page array: span=%llx pages=%u\n", (unsigned long long)mem_sz, npages);
+++#endif
++ 	vm_pages = (vm_page_t) pmap_steal_freeable_memory(npages * sizeof *vm_pages);
++ 
++ 	/*
++@@ -1537,6 +1556,7 @@
++ 	/*
++ 	 * Initialize and release the page frames.
++ 	 */
+++	boot_progress_stage("page_frame_init");
++ 	kernel_debug_string_early("page_frame_init");
++ 
++ 	vm_page_array_beginning_addr = &vm_pages[0];
++@@ -1590,6 +1610,7 @@
++ 			vm_page_release_startup(&vm_pages[i]);
++ 		}
++ 	}
+++	boot_progress_stage("VM frame release");
++ 	vm_page_pages = vm_pages_count; /* used to report to user space */
++ 
++ 	if (!vm_himemory_mode) {
++@@ -1600,6 +1621,7 @@
++ 		} while (i != 0);
++ 	}
++ 
+++	boot_progress_stage("VM frame release done");
++ 	absolutetime_to_nanoseconds(mach_absolute_time(), &now_ns);
++ 	printf("pmap_startup() init/release time: %lld microsec\n", (now_ns - start_ns) / NSEC_PER_USEC);
++ 	printf("pmap_startup() delayed init/release of %d pages\n", vm_delayed_count);

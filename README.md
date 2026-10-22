@@ -4,7 +4,7 @@
 
 ## XNU 内核适配与 macOS Actions
 
-Stage 6 正在接入只读 UFS 探测，当前配置以独立的 64 GiB `unixnu` 分区承载后续根卷。实测分区边界、补丁、验证结果和续接步骤见 [STAGE6.md](STAGE6.md)。当前默认探测镜像会显示 UFS 寄存器后停住；完整根卷挂载和 `launchd` 尚未完成。下文 run-9/run-10 记录保留早期启动基线。
+最终目标是在 13T 上启动 iPadOS 用户态与界面；根卷来源已配置为上游移植路线固定的 iPadOS 17.7.11（21H461），目标为独立的 64 GiB `unixnu` 分区。Stage 6 的第 11 次内核已在真机读到 UFS 4.0 控制器寄存器，后续启动停在早期 VM 初始化；详细日志确认 phase 5 已返回，原始镜像对照复测也停住。当前增加 VM 分配检查点以定位根因。实测分区边界、补丁、验证结果和续接步骤见 [STAGE6.md](STAGE6.md)。当前源码内核用于硬件探测，iPadOS 根卷挂载、`launchd` 与界面尚未完成。下文 run-9/run-10 记录保留早期启动基线。
 
 当前提供源码内核的早期启动配置和 UEFI 负载通路。第 6 次镜像已实机显示 `S1` 至 `S6`；第 7 次越过控制台异常；第 8 次越过 `zalloc`；第 9 次实机确认进入 BSD 根设备查找，等待 60 秒后主动 panic。完整 panic 页保留了 `poll=0x3c`、`timer=0x1a3` 和超时路径。单核中断与线程已运行，当前没有可用根设备或用户态，长期稳定性仍待验证。
 
@@ -14,7 +14,7 @@ Stage 6 正在接入只读 UFS 探测，当前配置以独立的 64 GiB `unixnu`
 | Apple 设备树 | `scripts/make-oneplus13t-adt.py`，主机测试对照实际 `sysinfo/live.dtb` 通过 | Linux 或 macOS |
 | XNU 与源码 corecrypto、pthread、ArmDTPlatform、ArmCpu、早期诊断库 | 第 9 次 Actions 构建通过，加入根设备检查点与完整 panic 页，保留此前修复 | GitHub Actions macOS runner |
 | FAT payload 与 Android boot.img | 第 9 次 Actions 已生成 payload；本地已生成 `xnu-source-run-9-root-panic/boot.img` 并通过解包比对 | macOS Actions 与当前 Linux |
-| kernelcache 预链接、userdata、iOS 用户态 | 未配置，后续接入 | 预链接输入提取与 userdata 工具使用 macOS |
+| kernelcache 预链接、iPadOS 根卷与用户态 | IPSW 来源和分区已配置；预链接、根卷生成与启动待接入 | 预链接输入提取与 userdata 工具使用 macOS |
 
 2026-10-21 的[第 1 次构建](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39613407803)在最终链接时缺少 `_native_legacy_display_probe`：上游 `offline-component-load-probes.patch` 的一处调用漏了 `XNU_NATIVE_LEGACY_DISPLAY` 条件，关闭显示驱动的 13T 配置仍引用该符号。提交 `e352179` 补上条件并增加预处理回归测试，覆盖未定义、关闭和开启三种情况。[第 2 次构建](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39614832285)已成功完成内核与 payload 构建，artifact 为 `oneplus13t-xnu-2`。
 
@@ -319,7 +319,7 @@ cd /home/enc3l/Project/UniXNU_SM8750/UniXNU-Pagani_SM8750
 
 必需的 Mu 子模块与 BaseTools 已在工作副本中准备。BaseTools 首次编译需要 uuid 开发头文件，本轮从发行版包解压到 `.cache/host-deps/sysroot/`，没有安装系统软件。重新从干净环境构建时需要准备等效依赖；编译 BaseTools 时可设置本地 `CPATH` 和 `LIBRARY_PATH`。
 
-当前板级配置包含源码 XNU 和 payload，尚未配置 IPSW、Data 或 userdata。Linux 运行 `firmware`、`package`、`payload`、`bootimg`；内核使用上文的 macOS workflow。不要运行完整 `build all`。
+当前板级配置包含源码 XNU 和 payload，已配置 iPadOS IPSW 来源与 `unixnu` 根卷布局；Data 与完整预链接内核尚未配置。Linux 运行 `firmware`、`package`、`payload`、`bootimg`；内核使用上文的 macOS workflow。不要运行完整 `build all`。
 
 ## 已通过的离线检查
 
