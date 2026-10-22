@@ -1,6 +1,6 @@
 # Stage 6：一加 13T 存储与根卷
 
-更新：2026-10-23。第 14 次真机日志确认页表修复生效；第 15 次通过 SMMU 几何检查后，停在新增的 `unsupported SMMU stream count` 限制。模式 7 已读到 IDR0=0x4c017e84（132 组），UFS 的精确 SID 0x60 位于条目 0、指向 bank 0。已按高通规则限制到 128 个标准组，并允许将该 UFS 条目重定向至经过占用检查的空闲 bank；本地验证通过，待新内核真机验证。8.74 GiB 的 iPadOS 根镜像和签名策略已生成并通过本地校验，尚未写入手机。XNU 根卷挂载及 `launchd` 启动仍未完成。
+更新：2026-10-23。第 16 次真机照片确认 SMMU 配置与读回检查通过，UFS 条目已指向 bank 82；当前停在首条 `NOP OUT` 命令超时。仅轮询两次，现有日志还不能区分计时/调度问题和 DMA 请求未完成。已补计时预算、实际耗时及失败时 DMA 状态快照，主机验证通过，准备新构建。8.74 GiB 的 iPadOS 根镜像和签名策略已生成并通过本地校验，尚未写入手机。XNU 根卷挂载及 `launchd` 启动仍未完成。
 
 最终目标是在一加 13T 上启动 iPadOS 用户态和界面。当前源码 XNU 仅用于打通硬件路径；本阶段以 iPadOS 根卷挂载及其 `launchd` 启动为验收条件，图形界面仍需后续用户态、显示与输入适配。
 
@@ -49,7 +49,7 @@ DeviceTree、两份 trust cache 和原始 KernelCache 也已从同一恢复包�
 
 ## 当前断点与下一步
 
-1. 用户已恢复 Fastboot。准备构建包含标准组数量修正和 UFS 条目重定向的新内核，继续模式 10；启动前核对实际 payload、内核、参数与 boot 封装。
+1. run-16 照片已确认 SMMU 检查通过、NOP OUT 超时。手机已恢复 Fastboot；准备包含 `WAIT ticks=实际/预算`、计数器频率/控制位及 DMA 快照的新内核，继续模式 10，区分超时与传输停点。
 2. 继续核对 SMMU 接管、LUN、GPT 和 `unixnu` 首块。预期首末 LBA 与上表一致，空分区 manifest 状态为 1；目前尚无 XNU 成功读取存储块的真机证据。
 3. IPSW、原始 KernelCache、OS/SystemOS 根镜像、实际卷 UUID 和签名策略已准备；仍需完成 Apple APFS/IOStorageFamily 预链接及平台 provider 集成。当前源码探测内核不发布根卷，不能仅追加 `native-ufs-root=1` 启动系统。
 4. 只读 GPT/首块探测通过后，再将根镜像部署到 `unixnu`，用模式 11 读取窗口，随后切换具备完整根卷支持的内核。根卷挂载和 `launchd` 启动均通过才算 Stage 6 完成。
@@ -125,7 +125,17 @@ DeviceTree、两份 trust cache 和原始 KernelCache 也已从同一恢复包�
 
 模式 7 照片显示 `sCR0=002f0406`、`IDR0=4c017e84`、`IDR1=60000053`、`gfsr=0`。原始组数为 132，诊断扫描前 128 组，其中 7 个有效条目均为 TRANSLATE；UFS SID `0x60` 匹配条目 0，`SMR=80000060`、`S2CR=00000000`。这是只读诊断的预期 panic，尚无 UFS 命令或存储块读取结果。
 
-修复恢复高通驱动的 128 组上限，不访问额外四组。对 SM8750，仅允许实测的精确 SID `0x60`、`S2CR=0` 条目从 bank 0 转向空闲的顶部 bank；其他属性、掩码匹配和重复 SID 继续拒绝。接管前仍要求 UFS 队列空闲并停止；先完成新 bank 配置及读回，再修改 UFS 的 S2CR。原 bank 0 及其他 stream 不写入。主机测试使用实测 ID 和 UFS 条目，另用合成的其他 stream/旧 bank 内容验证保留、回退、写入顺序、读回失败和 MMIO 边界；旧平台回归也通过。完整存储回归结果记录在 `out/oneplus13t/logs/stage6-run-16-tests.log`。硬件效果待新构建验证。
+修复恢复高通驱动的 128 组上限，不访问额外四组。对 SM8750，仅允许实测的精确 SID `0x60`、`S2CR=0` 条目从 bank 0 转向空闲的顶部 bank；其他属性、掩码匹配和重复 SID 继续拒绝。接管前仍要求 UFS 队列空闲并停止；先完成新 bank 配置及读回，再修改 UFS 的 S2CR。原 bank 0 及其他 stream 不写入。主机测试使用实测 ID 和 UFS 条目，另用合成的其他 stream/旧 bank 内容验证保留、回退、写入顺序、读回失败和 MMIO 边界；旧平台回归也通过。完整存储回归结果记录在 `out/oneplus13t/logs/stage6-run-16-tests.log`。硬件效果待屏幕日志确认。
+
+[第 16 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39853616767)以 `ccce59f` 构建成功并通过全部检查。产物位于 `out/oneplus13t/actions/run-16/`，实际内核为 21,504,240 字节，云端/本地哈希、FAT 内核和模式 10 参数一致；旧的 stream-count 拒绝字符串已移除。分池输入仍为 1,266/1,119 条，ADT 与 run-15 仅随机种子不同。
+
+完整镜像为 `out/oneplus13t/boot/stage6-run-16-smmu-stream/boot.img`（15,216,640 字节），boot v4、64 MiB 内嵌负载及解包比对通过。已对同一设备执行临时启动，Sending 和 Booting 均返回 OKAY；日志为 `out/oneplus13t/logs/stage6-run-16-smmu-stream-fastboot.log`。随后照片确认的 SMMU 与 UFS 结果见下文。
+
+run-16 照片显示 `UFS ROOT FAILURE: NOP OUT`、`result=e00002d6`、`CMD n=1`、`db=1`、`ocs=0f`、`polls=2`、`dbSeen=1`、`isSeen=0`。SMMU 为 slot 0、`SMR=80000060`、`S2CR=52`（bank 82）、`CBAR=10000`、`SCTLR=0`、`CBA2R=1`，说明规划、配置和读回检查已通过。全局故障为 `0->0`，context-bank 状态为 `400->400`；该值没有变化，不能作为本次新增转换故障的证据。尚未执行 SCSI/GPT 读取。
+
+下一版只补故障证据：保存等待预算与实际经过的绝对计数器 ticks，失败时读取 CNTFRQ/CNTKCTL；对专用 DMA 区域执行 invalidate-only 后读取原始 OCS 与响应头。快照可能仍被控制器修改，不能据此将命令认定为完成，超时后的隔离和禁止重用继续生效。现有测试新增“DMA 已有回复但 doorbell 仍为 1”的故障，确认仍返回超时且不重用缓冲区；八项存储路径测试及诊断文本边界检查通过，最大字段加八项媒体信息为 2,089 字节，低于 2,500 字节容量。日志为 `out/oneplus13t/logs/stage6-run-17-tests.log`。
+
+同版 [XNU rtclock.c](https://github.com/apple-oss-distributions/xnu/blob/d8b80295118ef25ac3a784134bcf95cd8e88109f/osfmk/arm/rtclock.c) 的短延时底层使用 WFE。它是否造成当前轮询间隔异常仍需新增读数确认，本轮未修改计时器、SMMU 路由或 UPIU 描述符。
 
 当前未刷写任何手机分区，未启用 Data 持久化或诊断日志落盘。已实测的 run-9 回退镜像仍位于 `out/oneplus13t/boot/xnu-source-run-9-root-panic/boot.img`。
 

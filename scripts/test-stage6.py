@@ -50,7 +50,7 @@ def main():
     source = tree / 'drivers/NativeUfs/tests'
     env = dict(os.environ, ASAN_OPTIONS='detect_leaks=0')
     with tempfile.TemporaryDirectory(prefix='stage6-') as directory:
-        for name in ('Sm8750', 'LunDiscovery', 'RootCommands', 'RootLayout', 'SmmuTakeover', 'RootWindowRead', 'TransferPoll'):
+        for name in ('Sm8750', 'LunDiscovery', 'RootCommands', 'RootDiagnostics', 'RootLayout', 'SmmuTakeover', 'RootWindowRead', 'TransferPoll'):
             binary = Path(directory) / name
             command = [os.environ.get('CXX', 'c++'), '-std=c++17', '-Wall', '-Wextra', '-Werror',
                        '-fsanitize=address,undefined', '-g', '-DNATIVE_UFS_SM8750=1', '-DNATIVE_UFS_READ_ONLY=1',
