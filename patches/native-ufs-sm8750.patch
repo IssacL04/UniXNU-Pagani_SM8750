@@ -70,7 +70,7 @@ index 0000000..0278ab4
 +  return true;
 +}
 diff --git a/NativeUfs.cpp b/NativeUfs.cpp
-index bdf3df5..e987120 100644
+index bdf3df5..74b697d 100644
 --- a/NativeUfs.cpp
 +++ b/NativeUfs.cpp
 @@ -3,7 +3,9 @@
@@ -132,7 +132,28 @@ index bdf3df5..e987120 100644
    if (!smmu) {
      panic ("NATIVE_UFS smmu: map failed");
    }
-@@ -755,14 +764,15 @@ void NativeUfs::inspectSmmu (void)
+@@ -304,6 +313,20 @@ static void smmuBypassStream (uint16_t stream, OSSharedPtr<IOMemoryMap> &keep, u
+       write32 (smmu, offset, value);
+       __asm__ volatile ("dsb sy" ::: "memory");
+     });
++#if defined(NATIVE_UFS_SM8750) && NATIVE_UFS_SM8750
++  if (!failure) {
++    gRootDiagnostic.stage = "SMMU TLB sync";
++    uint64_t deadline;
++    clock_interval_to_deadline (100, kMillisecondScale, &deadline);
++    if (!syncUfsSmmu (
++        [smmu](unsigned offset) { return read32 (smmu, offset); },
++        [smmu](unsigned offset, uint32_t value) {
++          write32 (smmu, offset, value);
++          __asm__ volatile ("dsb sy" ::: "memory");
++        }, [&]() { return mach_absolute_time () >= deadline; }, gRootDiagnostic.tlbStatus))
++      failure = "SMMU TLB sync timeout";
++  }
++#endif
+   uint32_t smr = read32 (smmu, 0x800 + 4 * index), s2cr = read32 (smmu, 0xc00 + 4 * index);
+   uint32_t cbar = read32 (smmu, 0x1000 + 4 * bank), sctlr = read32 (cb, 0x0);
+   gRootDiagnostic.smr = smr; gRootDiagnostic.s2cr = s2cr;
+@@ -755,14 +778,15 @@ void NativeUfs::inspectSmmu (void)
  void NativeUfs::inspectContextBanks (void)
  {
    OSSharedPtr<IOMemoryMap> map;
@@ -150,7 +171,7 @@ index bdf3df5..e987120 100644
      panic ("NATIVE_UFS cb: unexpected geometry idr1=%08x", idr1);
    }
    unsigned cbarZero = 0, sctlrZero = 0, mSet = 0, bothZero = 0;
-@@ -823,6 +833,10 @@ static IOReturn recordTransport (IOReturn result, uint32_t ocs)
+@@ -823,6 +847,10 @@ static IOReturn recordTransport (IOReturn result, uint32_t ocs)
    gRootDiagnostic.result = static_cast<uint32_t> (result);
    gRootDiagnostic.ocs = ocs;
    if (result != kIOReturnSuccess && gRootDiagnosticEnabled) {
@@ -161,7 +182,17 @@ index bdf3df5..e987120 100644
      // Read only the already mapped HC's status/registers used by this driver.
      gRootDiagnostic.hcs = read32 (gHost.hc, 0x30);
      gRootDiagnostic.hce = read32 (gHost.hc, 0x34);
-@@ -877,6 +891,10 @@ static void hostWrite (unsigned offset, uint32_t value)
+@@ -832,6 +860,9 @@ static IOReturn recordTransport (IOReturn result, uint32_t ocs)
+                           (uint64_t (read32 (gHost.hc, 0x54)) << 32);
+     gRootDiagnostic.runStop = read32 (gHost.hc, 0x60);
+     gRootDiagnostic.ahit = read32 (gHost.hc, 0x18);
++    gRootDiagnostic.ie = read32 (gHost.hc, 0x24);
++    gRootDiagnostic.iacr = read32 (gHost.hc, 0x4c);
++    if (gRootDiagnostic.cap & 0x40000000U) gRootDiagnostic.memcfg = read32 (gHost.hc, 0x300);
+     for (unsigned i = 0; i < 5; ++i) gRootDiagnostic.uic[i] = read32 (gHost.hc, 0x38 + 4 * i);
+     if (gHost.smmu && gHost.cb) {
+       gRootDiagnostic.gfsr = read32 (gHost.smmu, 0x48);
+@@ -877,6 +908,10 @@ static void hostWrite (unsigned offset, uint32_t value)
  #include "RootQueue.h"
  
  #include "RootCommands.h"
@@ -172,7 +203,7 @@ index bdf3df5..e987120 100644
  
  // Bring the live controller up for reading: map, SMMU pass-through for the UFS stream, take over
  // the request list, wake the device from UFS-PowerDown and wait for LUN 0 to be ready.
-@@ -891,6 +909,16 @@ static bool hostBringUp (const char **why)
+@@ -891,6 +926,16 @@ static bool hostBringUp (const char **why)
      return true;
    }
    gRootDiagnostic.stage = "controller map";
@@ -189,7 +220,7 @@ index bdf3df5..e987120 100644
    gHost.hc = mapPhys (UFS_HC_BASE, UFS_HC_SIZE, gHost.hcMap);
    if (!gHost.hc) {
      *why = "controller map";
-@@ -970,6 +998,17 @@ static bool hostBringUp (const char **why)
+@@ -970,6 +1015,17 @@ static bool hostBringUp (const char **why)
      uint8_t tur[6] = { 0, 0, 0, 0, 0, 0 };
      uint32_t scsi = 0;
      if (hostScsi (0, tur, 6, false, 0, 200000, &scsi) == kIOReturnSuccess) {
@@ -207,7 +238,7 @@ index bdf3df5..e987120 100644
        gHost.ready = true;
        return true;
      }
-@@ -994,6 +1033,7 @@ static uint32_t be32w (const uint8_t *at)
+@@ -994,6 +1050,7 @@ static uint32_t be32w (const uint8_t *at)
  
  }
  
@@ -215,7 +246,7 @@ index bdf3df5..e987120 100644
  // ---- Persistent Data store window (sheng-data-persist) ----------------------------------------------------------
  // The only part of this driver that ever writes. The consumer (NativeRamBlock's overlay) asks for a window of the given
  // size at the END of the userdata partition. Mode 1 (boot argument sheng-data-persist=1) only reads: it proves the window and
-@@ -1232,7 +1272,7 @@ public:
+@@ -1232,7 +1289,7 @@ public:
    char *getVendorString () override { return const_cast<char *> ("Native"); }
    char *getProductString () override { return label; }
    char *getRevisionString () override { return const_cast<char *> ("1.0"); }
@@ -224,7 +255,7 @@ index bdf3df5..e987120 100644
    IOReturn reportBlockSize (UInt64 *value) override { *value = 512; return kIOReturnSuccess; }
    IOReturn reportEjectability (bool *value) override { *value = false; return kIOReturnSuccess; }
    IOReturn reportMaxValidBlock (UInt64 *value) override { *value = bytes / 512 - 1; return kIOReturnSuccess; }
-@@ -1727,6 +1767,15 @@ static void mediaReportThread (void *, wait_result_t)
+@@ -1727,6 +1784,15 @@ static void mediaReportThread (void *, wait_result_t)
    panic ("%s", gMediaReport);
  }
  
@@ -240,7 +271,7 @@ index bdf3df5..e987120 100644
  bool NativeUfs::start (IOService *provider)
  {
    unsigned probe = 0, rootMode = 0;
-@@ -1738,6 +1787,14 @@ bool NativeUfs::start (IOService *provider)
+@@ -1738,6 +1804,14 @@ bool NativeUfs::start (IOService *provider)
    if ((!probe && !rootMode) || !OSDynamicCast (IOPlatformExpertDevice, provider)) {
      return false;
    }
@@ -255,7 +286,7 @@ index bdf3df5..e987120 100644
    unsigned diagnostic = 0;
    PE_parse_boot_argn ("native-ufs-diagnostics", &diagnostic, sizeof (diagnostic));
    gRootDiagnosticEnabled = diagnostic == 1;
-@@ -1759,19 +1816,18 @@ bool NativeUfs::start (IOService *provider)
+@@ -1759,19 +1833,18 @@ bool NativeUfs::start (IOService *provider)
    if (probe == 10) {
      // Read-only check before anything is flashed: LUN 0 GPT -> "userdata" -> its first block.
      const char *why = "";
@@ -282,7 +313,7 @@ index bdf3df5..e987120 100644
    }
    if (probe == 11) {
      // After the root image is flashed: manifest, then each window's own GPT (sector 1 of the
-@@ -1781,7 +1837,7 @@ bool NativeUfs::start (IOService *provider)
+@@ -1781,7 +1854,7 @@ bool NativeUfs::start (IOService *provider)
        panic ("NATIVE_UFS root windows: bring-up failed: %s", why);
      }
      RootLayout *layout = static_cast<RootLayout *> (IOMalloc (sizeof (RootLayout)));
@@ -291,7 +322,7 @@ index bdf3df5..e987120 100644
        panic ("NATIVE_UFS root windows: %s", why);
      }
      uint32_t sig[4][2] = {};
-@@ -1795,17 +1851,18 @@ bool NativeUfs::start (IOService *provider)
+@@ -1795,17 +1868,18 @@ bool NativeUfs::start (IOService *provider)
        }
      }
      panic ("NATIVE_UFS root windows\n"
@@ -312,7 +343,7 @@ index bdf3df5..e987120 100644
    if (probe == 14) {
      // Immediate memory snapshot at root-device start, before the userspace that triggers jetsam.
      panic ("NATIVE_UFS early memory snapshot\n"
-@@ -1843,9 +1900,11 @@ bool NativeUfs::start (IOService *provider)
+@@ -1843,9 +1917,11 @@ bool NativeUfs::start (IOService *provider)
    if (rootMode && !probe) {
      return startRoot (provider);
    }
@@ -324,7 +355,7 @@ index bdf3df5..e987120 100644
  // Boot the root image's windows as block devices. Soft-fails (logs, publishes nothing).
  bool NativeUfs::startRoot (IOService *provider)
  {
-@@ -1858,7 +1917,7 @@ bool NativeUfs::startRoot (IOService *provider)
+@@ -1858,7 +1934,7 @@ bool NativeUfs::startRoot (IOService *provider)
    }
    native_ufs_root_step = 2;
    RootLayout *layout = static_cast<RootLayout *> (IOMalloc (sizeof (RootLayout)));
@@ -333,7 +364,7 @@ index bdf3df5..e987120 100644
      rootDiagnosticFailure (layout ? why : "root layout allocation failed");
      IOLog ("NativeUfs: root layout failed: %s\n", why);
      if (layout) IOFree (layout, sizeof (RootLayout));
-@@ -1867,7 +1926,7 @@ bool NativeUfs::startRoot (IOService *provider)
+@@ -1867,7 +1943,7 @@ bool NativeUfs::startRoot (IOService *provider)
    native_ufs_root_step = 3;
    if (layout->manifestStatus != 0) {
      rootDiagnosticFailure ("root manifest rejected");
@@ -342,7 +373,7 @@ index bdf3df5..e987120 100644
             layout->manifestStatus, layout->magic0, layout->magic1);
      IOFree (layout, sizeof (RootLayout));
      return false;
-@@ -1957,6 +2016,8 @@ bool NativeUfs::startRoot (IOService *provider)
+@@ -1957,6 +2033,8 @@ bool NativeUfs::startRoot (IOService *provider)
    return true;
  }
  
@@ -352,7 +383,7 @@ index bdf3df5..e987120 100644
  {
    fCmdDesc.reset ();
 diff --git a/RootCommands.h b/RootCommands.h
-index 996304d..b573588 100644
+index 996304d..a91c605 100644
 --- a/RootCommands.h
 +++ b/RootCommands.h
 @@ -10,7 +10,20 @@ struct HardwareTransferPort {
@@ -386,7 +417,17 @@ index 996304d..b573588 100644
    uint8_t *utrd = gHost.virt;
    uint64_t ucdPhys = gHost.phys + kUcdOffset;
    uint32_t *words = reinterpret_cast<uint32_t *> (utrd);
-@@ -78,15 +93,23 @@ static IOReturn hostSubmit (uint32_t direction, uint32_t dataBytes, uint32_t tim
+@@ -62,6 +77,9 @@ static IOReturn hostSubmit (uint32_t direction, uint32_t dataBytes, uint32_t tim
+     words[index] = 0;
+   }
+   words[0] = 0x10000000U | (direction << 25);
++#if defined(NATIVE_UFS_SM8750) && NATIVE_UFS_SM8750
++  words[0] |= 1U << 24; // Interrupt command: bypass aggregation, with HC interrupts still masked.
++#endif
+   words[2] = 0x0fU;
+   words[4] = static_cast<uint32_t> (ucdPhys);
+   words[5] = static_cast<uint32_t> (ucdPhys >> 32);
+@@ -78,15 +96,23 @@ static IOReturn hostSubmit (uint32_t direction, uint32_t dataBytes, uint32_t tim
    cacheCivac (gHost.virt, kDataOffset + dataBytes);
    hostWrite (0x20, 1);  // Acknowledge completion only; preserve error evidence.
    HardwareTransferPort port;
@@ -410,7 +451,7 @@ index 996304d..b573588 100644
      // No cancel/reset/retry: the controller may still own the buffer, even
      // with DB=0. Keep it allocated and prohibit all subsequent CPU writes.
      gHost.poisoned = true;
-@@ -166,6 +189,11 @@ static IOReturn hostScsiDir (uint8_t lun, const uint8_t *cdb, unsigned cdbLength
+@@ -166,6 +192,11 @@ static IOReturn hostScsiDir (uint8_t lun, const uint8_t *cdb, unsigned cdbLength
    *scsiStatus = 0xffff;
    if (!cdb || !cdbLength || cdbLength > 16 || dataBytes > kDataMax || direction > 2 ||
        (dataBytes & 3) || (dataBytes ? !direction : direction)) return kIOReturnBadArgument;
@@ -422,7 +463,7 @@ index 996304d..b573588 100644
    if (!hostClearUcd ()) return kIOReturnNotReady;
    uint8_t *ucd = gHost.virt + kUcdOffset;
    ucd[0] = 0x01;                      // COMMAND UPIU
-@@ -265,6 +293,9 @@ static uint64_t gStoreFirst = 0, gStoreBlocks = 0, gLogFirst = 0, gLogBlocks = 0
+@@ -265,6 +296,9 @@ static uint64_t gStoreFirst = 0, gStoreBlocks = 0, gLogFirst = 0, gLogBlocks = 0
  
  static bool hostLogOpen (uint64_t first, uint64_t blocks)
  {
@@ -432,7 +473,7 @@ index 996304d..b573588 100644
    if (gLogOpen || !blocks || first > 0xffffffffULL || blocks > 0xffffffffULL - first) return false;
    if (gStoreOpen && first < gStoreFirst + gStoreBlocks && gStoreFirst < first + blocks) return false;
    gLogFirst = first;
-@@ -281,6 +312,9 @@ static bool hostInWindow (uint64_t lba, uint32_t blocks)
+@@ -281,6 +315,9 @@ static bool hostInWindow (uint64_t lba, uint32_t blocks)
  
  static bool hostStoreOpen (uint64_t first, uint64_t blocks)
  {
@@ -443,23 +484,25 @@ index 996304d..b573588 100644
    if (gLogOpen && first < gLogFirst + gLogBlocks && gLogFirst < first + blocks) return false;
    gStoreFirst = first;
 diff --git a/RootDiagnostics.h b/RootDiagnostics.h
-index f8188dc..07d00b8 100644
+index f8188dc..f1bddd8 100644
 --- a/RootDiagnostics.h
 +++ b/RootDiagnostics.h
-@@ -18,6 +18,8 @@ struct UfsRootDiagnostics {
+@@ -18,6 +18,9 @@ struct UfsRootDiagnostics {
    uint32_t smmuId2 = 0, cba2r = 0, uic[5] = {};
    uint32_t smmuId1 = 0, smmuSlot = 0xffffffff;
    uint32_t publicationPhase = 0, publicationWindow = 0xffffffff;
 +  uint64_t waitTicks = 0, elapsedTicks = 0;
 +  uint32_t counterHz = 0, counterControl = 0, dmaOcs = 0xff, dmaResponse = 0;
++  uint32_t ie = 0, iacrBefore = 0, iacr = 0, memcfg = 0, tlbStatus = 0xffffffff;
  };
  
  static inline int formatUfsRootDiagnostics(char *buffer, size_t capacity,
-@@ -31,9 +33,10 @@ static inline int formatUfsRootDiagnostics(char *buffer, size_t capacity,
+@@ -31,9 +34,11 @@ static inline int formatUfsRootDiagnostics(char *buffer, size_t capacity,
      "CMD n=%u type=%02x op=%02x lun=%02x ocs=%02x rsp=%08x scsi=%04x power=%02x\n"
      "PROTOCOL reject=%u residual=%u sense=%06x SMMU slot=%u id1=%x\n"
      "QUEUE rsr=%x ahit=%x polls=%u dbSeen=%x isSeen=%x isBefore=%x contiguous=%llx\n"
 +    "WAIT ticks=%llx/%llx hz=%x cntkctl=%x DMA ocs=%x rsp=%08x\n"
++    "PATH ie=%x iacr=%x->%x memcfg=%x tlb=%x\n"
      "FAULT global=%x->%x syn=%x cb=%x->%x syn=%x far=%llx id2=%x cba2r=%x\n"
      "UIC pa=%08x dl=%08x net=%08x tr=%08x dme=%08x\n"
 -    "GPT/read lba=%llx userdata=%llx..%llx magic=%08x %08x manifest=%u\n"
@@ -467,12 +510,13 @@ index f8188dc..07d00b8 100644
      "WINDOWS found=%u prepared=%u published=%u bytes=%llx policies=%llu verify=%08x\n"
      "IO reads=%llu failures=%llu pubPhase=%u window=%u\n",
      title, reason, d.stage, d.result, d.cap, d.version, d.hcs, d.hce, d.doorbell, d.interrupt,
-@@ -41,6 +44,8 @@ static inline int formatUfsRootDiagnostics(char *buffer, size_t capacity,
+@@ -41,6 +46,9 @@ static inline int formatUfsRootDiagnostics(char *buffer, size_t capacity,
      d.command, d.type, d.opcode, d.lun, d.ocs, d.response, d.scsi, d.power,
      d.protocol, d.residual, d.sense, d.smmuSlot, d.smmuId1,
      d.runStop, d.ahit, d.polls, d.dbSeen, d.isSeen, d.isBefore, (unsigned long long)d.contiguous,
 +    (unsigned long long)d.elapsedTicks, (unsigned long long)d.waitTicks,
 +    d.counterHz, d.counterControl, d.dmaOcs, d.dmaResponse,
++    d.ie, d.iacrBefore, d.iacr, d.memcfg, d.tlbStatus,
      d.gfsrBefore, d.gfsr, d.gsyn, d.fsrBefore, d.fsr, d.fsyn, (unsigned long long)d.far,
      d.smmuId2, d.cba2r, d.uic[0], d.uic[1], d.uic[2], d.uic[3], d.uic[4],
      (unsigned long long)d.lba, (unsigned long long)d.first, (unsigned long long)d.last,
@@ -555,7 +599,7 @@ index 4a596c8..a5402c4 100644
    }
    layout->magic0 = le32 (gScratch);
 diff --git a/RootQueue.h b/RootQueue.h
-index 989b956..3ed9aae 100644
+index 989b956..09e58ed 100644
 --- a/RootQueue.h
 +++ b/RootQueue.h
 @@ -13,6 +13,11 @@ static bool hostWaitRegister (unsigned offset, uint32_t mask, uint32_t value)
@@ -570,8 +614,26 @@ index 989b956..3ed9aae 100644
    // Confirm the firmware has no active transfer/task before changing its
    // request list or the storage stream's SMMU routing.
    if (!(read32 (gHost.hc, 0x34) & 1) || (read32 (gHost.hc, 0x30) & 0x0f) != 0x0f) {
+@@ -42,6 +47,17 @@ static bool hostStopQueue (const char **why)
+ 
+ static bool hostStartQueue (const char **why)
+ {
++#if defined(NATIVE_UFS_SM8750) && NATIVE_UFS_SM8750
++  // Single-slot polling must not inherit firmware's completion aggregation policy.
++  gRootDiagnostic.iacrBefore = read32 (gHost.hc, 0x4c);
++  hostWrite (0x4c, 0);
++  gRootDiagnostic.iacr = read32 (gHost.hc, 0x4c);
++  if (gRootDiagnostic.iacr & 0x80000000U) {
++    recordTransport (kIOReturnIOError, 15);
++    *why = "interrupt aggregation disable";
++    return false;
++  }
++#endif
+   hostWrite (0x50, static_cast<uint32_t> (gHost.phys));
+   hostWrite (0x54, static_cast<uint32_t> (gHost.phys >> 32));
+   if (read32 (gHost.hc, 0x50) != uint32_t (gHost.phys) ||
 diff --git a/SmmuTakeover.h b/SmmuTakeover.h
-index c30f5a9..781f6b1 100644
+index c30f5a9..27b9fa4 100644
 --- a/SmmuTakeover.h
 +++ b/SmmuTakeover.h
 @@ -1,5 +1,10 @@
@@ -626,6 +688,25 @@ index c30f5a9..781f6b1 100644
      } else if (ourBank) {
        p.slot = i; p.smr = smr; p.s2cr = s2cr;
        p.error = "reserved context bank already used"; return p;
+@@ -125,3 +136,18 @@ static const char *configureUfsSmmu(const UfsSmmuPlan &p, uint16_t stream, Read
+     return "SMMU stream mapping readback";
+   return nullptr;
+ }
++
++// Complete firmware-era non-secure TLB invalidation before restarting UFS.
++// Write callbacks include the MMIO barrier; the caller supplies a bounded deadline.
++template <class Read, class Write, class Expired>
++static bool syncUfsSmmu(Read read, Write write, Expired expired, uint32_t &status)
++{
++  // Qualcomm's trapped MMIO handling requires a non-WZR value (Linux QCOM_DUMMY_VAL).
++  write(0x68, 0xffffffffU); // TLBIALLNSNH: preserve stream mappings and page tables.
++  write(0x70, 0xffffffffU); // sTLBGSYNC
++  do {
++    status = read(0x74); // sTLBGSTATUS.GSACTIVE
++    if (!(status & 1)) return true;
++  } while (!expired());
++  return false;
++}
 diff --git a/tests/LunDiscovery.cpp b/tests/LunDiscovery.cpp
 new file mode 100644
 index 0000000..9d6ad90
@@ -667,7 +748,7 @@ index 0000000..9d6ad90
 +  puts("PASS: LUN discovery, unit-attention retry, missing LUN, sector mismatch, poisoned transport");
 +}
 diff --git a/tests/RootCommands.cpp b/tests/RootCommands.cpp
-index b5c0a7d..c41c55c 100644
+index b5c0a7d..6e6276a 100644
 --- a/tests/RootCommands.cpp
 +++ b/tests/RootCommands.cpp
 @@ -5,12 +5,12 @@
@@ -675,7 +756,7 @@ index b5c0a7d..c41c55c 100644
  #include <string>
  enum class Fault { None, Empty, Type, Tag, Lun, Query, Residual, Underflow,
 -  Oversize, SenseLength, CheckCondition, Timeout, Fatal, Stop, Start, HighBase };
-+  Oversize, SenseLength, CheckCondition, Timeout, StuckWithReply, Fatal, Stop, Start, HighBase };
++  Oversize, SenseLength, CheckCondition, Timeout, StuckWithReply, Fatal, Stop, Start, HighBase, Aggregation };
  static Fault fault;
  static std::array<uint8_t,kDmaBytes> device;
 -static std::array<uint32_t,64> registers;
@@ -686,7 +767,23 @@ index b5c0a7d..c41c55c 100644
  static bool released;
  
  static uint64_t io(unsigned op,uint64_t address,uint64_t value,void *bytes)
-@@ -32,6 +32,7 @@ static uint64_t io(unsigned op,uint64_t address,uint64_t value,void *bytes)
+@@ -20,9 +20,14 @@ static uint64_t io(unsigned op,uint64_t address,uint64_t value,void *bytes)
+     ++writes;
+     if (address==0x20) registers[address/4]&=~uint32_t(value);
+     else if (!(address==0x60 && ((fault==Fault::Stop && !value) || (fault==Fault::Start && value))) &&
+-             !(address==0x54 && fault==Fault::HighBase)) registers.at(address/4)=uint32_t(value);
++             !(address==0x54 && fault==Fault::HighBase) &&
++             !(address==0x4c && fault==Fault::Aggregation)) registers.at(address/4)=uint32_t(value);
+     if (address==0x58) {
+       assert(released); released=false;
++#if defined(NATIVE_UFS_SM8750) && NATIVE_UFS_SM8750
++      assert(*reinterpret_cast<uint32_t *>(device.data()) & (1U<<24));
++      assert(registers[0x24/4]==0); // Descriptor I bit does not enable CPU interrupts.
++#endif
+       if (fault==Fault::Fatal) { registers[0x20/4]=0x20000; return 0; }
+       registers[0x58/4]=0;
+       if (fault==Fault::Timeout) return 0;
+@@ -32,6 +37,7 @@ static uint64_t io(unsigned op,uint64_t address,uint64_t value,void *bytes)
        *reinterpret_cast<uint32_t *>(device.data()+8)=0;
        if (fault==Fault::Empty) return 0;
        memcpy(rsp,cmd,32); rsp[0]=cmd[0]+0x20; rsp[1]=0;
@@ -694,7 +791,7 @@ index b5c0a7d..c41c55c 100644
        if (cmd[0]==1) putBe32(rsp+12,0);
        if (cmd[0]==0x16) putBe32(rsp+20,0x11);
        if (fault==Fault::Type) rsp[0]=0x3f;
-@@ -54,13 +55,13 @@ static uint64_t io(unsigned op,uint64_t address,uint64_t value,void *bytes)
+@@ -54,13 +60,13 @@ static uint64_t io(unsigned op,uint64_t address,uint64_t value,void *bytes)
      if (op==2) { ++releases; memcpy(at,bytes,value); released=true; }
      else memcpy(bytes,at,value);
    }
@@ -711,7 +808,7 @@ index b5c0a7d..c41c55c 100644
    registers[0x34/4]=1; registers[0x30/4]=15; registers[0x60/4]=1;
    ufs_test_reset(io,0x8cb5e9000);
  }
-@@ -107,6 +108,31 @@ int main()
+@@ -107,6 +113,31 @@ int main()
    assert(ufs_test_scsi(0,cdb,6,true,kDataMax+4,&scsi)==kIOReturnBadArgument);
    assert(ufs_test_scsi(0,cdb,6,false,4096,&scsi)==kIOReturnBadArgument); // No writes to media.
    assert(writes==0 && releases==0);
@@ -743,11 +840,26 @@ index b5c0a7d..c41c55c 100644
    for (unsigned offset: {0x58U,0x78U}) {
      reset(); registers[offset/4]=1;
      assert(!ufs_test_stop_queue() && writes==0);
+@@ -120,5 +151,14 @@ int main()
+   reset(Fault::HighBase); assert(ufs_test_stop_queue()); assert(!ufs_test_start_queue());
+   reset(); assert(ufs_test_stop_queue() && ufs_test_start_queue());
+   assert(registers[0x50/4]==0xcb5e9000 && registers[0x54/4]==8);
++#if defined(NATIVE_UFS_SM8750) && NATIVE_UFS_SM8750
++  reset(); registers[0x4c/4]=0x81001f20;
++  assert(ufs_test_stop_queue() && ufs_test_start_queue());
++  assert(gRootDiagnostic.iacrBefore==0x81001f20 && gRootDiagnostic.iacr==0);
++  assert(registers[0x4c/4]==0 && ufs_test_nop()==0);
++  reset(Fault::Aggregation); registers[0x4c/4]=0x81001f20;
++  assert(ufs_test_stop_queue() && !ufs_test_start_queue());
++  assert(registers[0x50/4]==0 && registers[0x60/4]==0 && releases==0);
++#endif
+   puts("PASS: actual command/queue path; malformed DMA responses, bounds, short reads, sense, quarantine, queue refusal and full-width DMA");
+ }
 diff --git a/tests/RootDiagnostics.cpp b/tests/RootDiagnostics.cpp
-index 126624a..ebb7619 100644
+index 126624a..5975144 100644
 --- a/tests/RootDiagnostics.cpp
 +++ b/tests/RootDiagnostics.cpp
-@@ -27,6 +27,10 @@ int main(int argc, char **)
+@@ -27,6 +27,12 @@ int main(int argc, char **)
    d.sense = 0x062900;
    d.publicationPhase = 5;
    d.publicationWindow = 1;
@@ -755,14 +867,17 @@ index 126624a..ebb7619 100644
 +  d.waitTicks = 0x3a9800;
 +  d.counterHz = 19200000;
 +  d.dmaOcs = 15;
++  d.iacrBefore = 0x81001f20;
++  d.tlbStatus = 0;
    char full[2500];
    int length = formatUfsRootDiagnostics(full, sizeof(full), d, "transport timeout fixture");
    assert(length > 0 && length < 2000 && size_t(length) == strlen(full));
-@@ -39,6 +43,7 @@ int main(int argc, char **)
+@@ -39,6 +45,8 @@ int main(int argc, char **)
    assert(strstr(full, "dme=80000001"));
    assert(strstr(full, "reject=6 residual=4096 sense=062900"));
    assert(strstr(full, "pubPhase=5 window=1"));
 +  assert(strstr(full, "WAIT ticks=100000002/3a9800 hz=124f800 cntkctl=0 DMA ocs=f rsp=00000000"));
++  assert(strstr(full, "PATH ie=0 iacr=81001f20->0 memcfg=0 tlb=0"));
    char passive[2500];
    formatUfsRootDiagnostics(passive,sizeof(passive),d,"cached values; not a new HW fault sample","UFS CACHED SNAPSHOT");
    assert(strstr(passive,"UFS CACHED SNAPSHOT:") == passive && !strstr(passive,"UFS ROOT FAILURE"));
@@ -850,7 +965,7 @@ index 0000000..0277d7c
 +  puts("PASS: SM8750 clock offsets and power/clock admission");
 +}
 diff --git a/tests/SmmuTakeover.cpp b/tests/SmmuTakeover.cpp
-index bc94443..9f48aee 100644
+index bc94443..60a3bde 100644
 --- a/tests/SmmuTakeover.cpp
 +++ b/tests/SmmuTakeover.cpp
 @@ -8,7 +8,7 @@
@@ -881,11 +996,26 @@ index bc94443..9f48aee 100644
        assert(read(0x1800+4*p.bank)==1);
        assert(read(0x1000+4*p.bank)==0x10000);
        assert(read((p.pages+p.bank)*4096)==0);
-@@ -85,6 +88,58 @@ int main()
+@@ -85,6 +88,73 @@ int main()
    // Reused context with an unexpected VMID/attribute must not be repaired.
    reset(); p=plan(); drop=0xffffffffU; assert(!configure());
    r[(0x1800+4*p.bank)/4]=0x10001; p=plan(); assert(p.error);
 +  writes.clear(); assert(configure() && writes.empty());
++  // Hardware sync is asynchronous: no success until GSACTIVE clears; stuck hardware is bounded.
++  for(unsigned busyReads : {0U,3U,100U}) {
++    unsigned reads=0, ticks=0;
++    uint32_t status=0xffffffffU;
++    writes.clear();
++    bool done=syncUfsSmmu([&](unsigned at) {
++      assert(at==0x74 && writes.size()==2);
++      assert(writes[0]==std::make_pair(0x68U,0xffffffffU));
++      assert(writes[1]==std::make_pair(0x70U,0xffffffffU));
++      return reads++ < busyReads ? 1U : 0U;
++    }, [&](unsigned at,uint32_t value) {writes.emplace_back(at,value);},
++    [&] {return ++ticks>=5;},status);
++    assert(done==(busyReads<5) && status==(done?0U:1U));
++    assert(reads==(done?busyReads+1:5U));
++  }
 +  // Run-14 PKX110 IDR1: 128 global pages and 83 context banks need 0xd3000 bytes.
 +  reset(); r[0x24/4]=0x60000053;
 +  p=planUfsSmmu(0x60,0xbfdc3000,0x22000,read);
