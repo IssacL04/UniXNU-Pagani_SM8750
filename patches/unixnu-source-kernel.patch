@@ -3546,3 +3546,75 @@ new file mode 100644
 + 
 + 		if (kr != KERN_SUCCESS) {
 + 			return kr;
+diff --git a/patches/xnu/zzzzzzz-early-framebuffer-page-tables.patch b/patches/xnu/zzzzzzz-early-framebuffer-page-tables.patch
+new file mode 100644
+--- /dev/null
++++ b/patches/xnu/zzzzzzz-early-framebuffer-page-tables.patch
+@@ -0,0 +1,19 @@
++--- a/osfmk/arm64/arm_vm_init.c
+++++ b/osfmk/arm64/arm_vm_init.c
++@@ -2263,12 +2263,16 @@
++ 
++ 	mem_segments = (mem_size + 0x0FFFFFFF) >> 28;
++ 
++ 	va_l1 = dynamic_memory_begin;
++ 	va_l1_end = va_l1 + ((2 + (mem_segments * 10)) << 20);
++ 	va_l1_end += round_page(args->Video.v_height * args->Video.v_rowBytes);
+++#if defined(XNU_EARLY_BOOT_PROGRESS) && XNU_EARLY_BOOT_PROGRESS
+++	/* The early observer maps GOP once before initialize_screen maps it again. */
+++	va_l1_end += round_page(args->Video.v_height * args->Video.v_rowBytes);
+++#endif
++ 	va_l1_end = (va_l1_end + 0x00000000007FFFFFULL) & 0xFFFFFFFFFF800000ULL;
++ 
++ 	cpu_l1_tte = cpu_tte + ((va_l1 & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT);
++ 
++ 	while (va_l1 < va_l1_end) {
++ 		va_l2 = va_l1;
+diff --git a/scripts/test-kernel-source.py b/scripts/test-kernel-source.py
+--- a/scripts/test-kernel-source.py
++++ b/scripts/test-kernel-source.py
+@@ -20,6 +20,44 @@
+ 
+ 
+ class SourceKernelTest(unittest.TestCase):
++    def test_early_framebuffer_page_tables_cover_vm_bootstrap(self):
++        path = Path(__file__).resolve().parents[1] / 'patches/xnu/zzzzzzz-early-framebuffer-page-tables.patch'
++        body = '\n'.join(line[1:] for line in path.read_text().splitlines()
++                         if line.startswith((' ', '+')) and not line.startswith('+++'))
++        calculation = body[body.index('\tmem_segments ='):body.index('\tcpu_l1_tte =')]
++        source = r'''
++#include <assert.h>
++#include <stdint.h>
++#define round_page(x) (((x) + 4095ULL) & ~4095ULL)
++static uint64_t limit(uint64_t dynamic_memory_begin, uint64_t height, uint64_t pitch) {
++    struct { struct { uint64_t v_height, v_rowBytes; } Video; } boot = {{height, pitch}}, *args = &boot;
++    uint64_t mem_size = 256ULL << 20, mem_segments, va_l1, va_l1_end;
++''' + calculation + r'''
++    return va_l1_end;
++}
++int main(void) {
++    const uint64_t base = 0xfffffff021600000ULL, fb = round_page(0xa50ULL * 0x1300);
++    const uint64_t array = base + 2 * fb + 0x50000;
++    assert(array == 0xfffffff022ece000ULL);
++    const uint64_t old_end = (base + (12ULL << 20) + fb + 0x7fffff) & ~0x7fffffULL;
++    assert(old_end == array + 306 * 4096); /* Observed run-13 L3 allocation. */
++    for (uint64_t slide = 0; slide < (8ULL << 20); slide += 2ULL << 20) {
++        const uint64_t start = base + slide;
++        const uint64_t fb_count = XNU_EARLY_BOOT_PROGRESS ? 2 : 1;
++        assert(start + fb_count * fb + 0x50000 + round_page(0x2b3bc0) <= limit(start, 0xa50, 0x1300));
++        assert(limit(start, 0, 0) == ((start + (12ULL << 20) + 0x7fffff) & ~0x7fffffULL));
++    }
++    if (!XNU_EARLY_BOOT_PROGRESS) assert(limit(base, 0xa50, 0x1300) == old_end);
++}
++'''
++        for mode in (0, 1):
++            with self.subTest(mode=mode):
++                binary = Path(self.temp.name) / f'page-tables-{mode}'
++                subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror',
++                                f'-DXNU_EARLY_BOOT_PROGRESS={mode}', '-x', 'c', '-', '-o', str(binary)],
++                               input=source, text=True, check=True)
++                subprocess.run([str(binary)], check=True)
++
+     def test_header_fetch_auth_stays_on_github_api(self):
+         read_url = runpy.run_path(str(Path(__file__).with_name('prepare-xnu-source.py')))['read_url']
+         for token in ('test-token', ''):

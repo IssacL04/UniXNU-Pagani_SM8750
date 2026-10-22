@@ -1,6 +1,6 @@
 # Stage 6：一加 13T 存储与根卷
 
-更新：2026-10-23。第 11 次内核曾在真机读到 UFS 控制器寄存器；后续启动稳定停在早期 VM 初始化。第 12 次照片已将停点缩小到 `vm_pages` 页描述符数组的映射循环，哈希桶、锁数组与 `vm_tag_init` 均已通过。正在增加每页地址和页表分配日志，区分具体等待路径。8.74 GiB 的 iPadOS 根镜像已生成并通过本地校验，尚未写入手机。XNU 根卷挂载及 `launchd` 启动仍未完成。
+更新：2026-10-23。第 11 次内核曾在真机读到 UFS 控制器寄存器；后续启动稳定停在早期 VM 初始化。第 12 次照片已将停点缩小到 `vm_pages` 页描述符数组的映射循环，哈希桶、锁数组与 `vm_tag_init` 均已通过。第 13 次照片确认停在第 306 页的三级页表分配。已修复早期诊断帧缓冲未计入页表预建范围的问题，本地回归通过，待新内核真机验证。8.74 GiB 的 iPadOS 根镜像和签名策略已生成并通过本地校验，尚未写入手机。XNU 根卷挂载及 `launchd` 启动仍未完成。
 
 最终目标是在一加 13T 上启动 iPadOS 用户态和界面。当前源码 XNU 仅用于打通硬件路径；本阶段以 iPadOS 根卷挂载及其 `launchd` 启动为验收条件，图形界面仍需后续用户态、显示与输入适配。
 
@@ -11,6 +11,10 @@
 本地使用 Apple LZFSE 和 [dmg2img 的完整 LZFSE 块解码版本](https://github.com/citruz/dmg2img/commit/88295c834532310764f8883ae81328999118aad0) 转换 OS，原始磁盘为 6,077,580,800 字节。六个 UDIF 分段 CRC、主备 GPT 的 header/表 CRC、两份分区项一致性和 APFS 容量全部通过；UDIF ignore 块按格式排除在分段 CRC 之外，转换结果对应范围为零。SystemOS 本身就是原始 APFS，直接保留。通过项目现有 manifest 写入代码封装后，根镜像位于 `out/oneplus13t/unixnu-root/unixnu-root.img`，共 9,382,658,048 字节（8.74 GiB），适合 64 GiB 的 `unixnu` 分区。OS/SystemOS 窗口完整读回 SHA-256、manifest 哈希及生产 NativeUfs 解析器检查通过，解析器输入为真机采集 GPT 加本地镜像。配套 `unixnu-root.json` 记录实际布局、哈希、转换来源及 `hardware_tested=false`；构建日志为 `out/oneplus13t/logs/stage6-root-image-build.log`。本轮未使用 macOS hdiutil，也未验证真机 APFS 挂载。
 
 DeviceTree、两份 trust cache 和原始 KernelCache 也已从同一恢复包提取。`out/ipsw/21H461/kernelcache.decompressed` 为 46,415,872 字节，SHA-256 为 `f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7`，与参考移植固定值一致。输入准备完成仍不代表 kext 预链接完成。
+
+使用 [apfsutil](https://github.com/sgan81/apfs-fuse)（`66b86bd525e8cb90f9012543be89b1f092b75cf3`，本地仅补 `<cstdint>` 头文件）只读解析了两份磁盘文件，未挂载文件系统：OS 为 System 角色、UUID `04769D26-2CA0-4825-B443-E2E5F88300F2`，SystemOS UUID 为 `8846FE78-2910-4297-AF97-D59BB6F8FC16`。日志位于 `stage6-os-apfs-volumes.log` 与 `stage6-systemos-apfs-volumes.log`。
+
+已用现有 VerifiedRoot 工具生成两份本地签名策略，位于 `out/oneplus13t/unixnu-root/policies/{OS,SystemOS}/`。两份策略共用本地生成的 RSA-3072 信任锚，绑定上述实际卷 UUID、镜像大小与完整哈希。现有 C 校验器通过真实 RSA 签名和全部数据块校验：OS 为 1,483,785 块，SystemOS 为 806,400 块；结果与根镜像窗口 SHA-256 一致。私钥仅保存在本地缓存，未上传。配套 `verification.json` 明确记录 `host_only=true`、`boot_root_authenticated=false` 和 `hardware_tested=false`；日志为 `out/oneplus13t/logs/stage6-root-policy-build.log`。签名策略尚未链接进内核。
 
 `kernel.source_only` 暂时保留，用于当前硬件探测。还需接入匹配的 Apple APFS、IOStorageFamily、trust cache、平台 provider、根卷策略和预链接内核；配置 IPSW 不表示这些步骤已经完成。手机硬件配置继续使用 13T 的实际地址与内存范围。
 
@@ -85,6 +89,14 @@ DeviceTree、两份 trust cache 和原始 KernelCache 也已从同一恢复包�
 用户随后提供的照片确认：初始空闲页为 59,800，`vm_page_buckets` 的 `0x40000` 字节映射和锁数组的 `0x10000` 字节映射均返回；`vm_tag_init` 已返回并进入 `pmap_startup`。最后显示 `VM page array allocation`，数组含 59,028 项，申请 `0x2b3bc0` 字节（约 2.70 MiB），起始 VA 为 `0xfffffff03a6ce000`，分配前仍有 59,720 个空闲页；没有出现对应的 `VM steal mapped`。因此当前停点在 `pmap_steal_memory_internal` 的数组映射范围，尚不能区分页表扩展、锁等待或单页映射。
 
 下一轮保持分配逻辑不变，仅在该数组路径记录每一页的 VA/PA，并记录早期 `pmap_expand`、页表页分配和 PTD 分配边界。若页表扩展发生，原始 XNU 会调用依赖 VM 空闲链表的分配器；当前仍在建立 VM 数据结构，这是一条待验证的依赖路径。根因尚未确认，未据此扩大内存窗口或改动分配器。
+
+[第 13 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39843893411)以提交 `b67df75` 成功构建并通过全部检查，产物为 `out/oneplus13t/actions/run-13/`。实际 Mach-O 已包含逐页映射、页表扩展及 PTD 分配日志；云端/本地哈希、FAT 内核和配置均一致。分池输入仍为 1,266/1,119 条，ADT 与 run-12 仅随机种子不同。已生成 `out/oneplus13t/boot/stage6-run-13-vm-pages/boot.img`（15,216,640 字节），封装验证通过，并对已恢复 Fastboot 的设备临时启动，Sending 和 Booting 均返回 OKAY。日志为 `out/oneplus13t/logs/stage6-run-13-vm-pages-fastboot.log`。
+
+用户的新照片确认，第 306 页的 VA 为 `0xfffffff023000000`、PA 为 `0xbfbee000`，随后打印 `VM expand` 和 `VM tt page allocation: level=3`，没有出现分配返回。当前路径需要扩展 L3 页表，而 `pmap_pages_alloc_zeroed` 依赖尚未建立的 VM 空闲页链表。
+
+调用关系核对发现：`early_boot_progress_vm_ready` 先用 `ml_io_map_wcomb` 映射帧缓冲，随后 `PE_create_console` 经 `initialize_screen` 再映射一次。13T 的每份映射为 `round_page(0xa50 * 0x1300) = 0xc3f000` 字节（约 12.25 MiB）；`arm_vm_init` 原本只为一份帧缓冲预建 L3 页表。根据数组起点、两份帧缓冲和前两份哈希表的大小，可重建本次动态 VA 起点 `0xfffffff021600000`，原预建范围恰好结束于实测停点 `0xfffffff023000000`。这是源码与屏幕地址一致的根因解释，修复效果仍需真机验证。
+
+新增 `zzzzzzz-early-framebuffer-page-tables.patch`，仅在启用 `XNU_EARLY_BOOT_PROGRESS` 时为第二份帧缓冲预建页表，不改动 VM 分配器或 256 MiB 物理内存窗口。现有源码测试增加一项检查，直接编译补丁中的计算语句，覆盖本次第 306 页边界、四种 2 MiB 地址偏移、诊断开关和空帧缓冲；八项测试通过。全套有序补丁对固定版本 `arm_vm_init.c` 的应用检查通过。等待下一次云端构建及临时启动。
 
 当前未刷写任何手机分区，未启用 Data 持久化或诊断日志落盘。已实测的 run-9 回退镜像仍位于 `out/oneplus13t/boot/xnu-source-run-9-root-panic/boot.img`。
 
