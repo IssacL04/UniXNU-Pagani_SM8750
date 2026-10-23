@@ -8,6 +8,7 @@ import unittest
 
 disable = runpy.run_path(str(Path(__file__).with_name('prepare-ram-data.py')))[
     'disable_unimplemented_watchdog']
+prepare_userspace = runpy.run_path(str(Path(__file__).with_name('prepare-ram-data.py')))['prepare_userspace']
 
 
 class RamDataPolicyTest(unittest.TestCase):
@@ -46,6 +47,25 @@ class RamDataPolicyTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'original'):
             disable(self.root, self.daemon)
         self.assertFalse((self.root / 'db').exists())
+
+    def test_userspace_keeps_setup_and_unrelated_preferences(self):
+        preferences = self.root / 'mobile/Library/Preferences'
+        preferences.mkdir(parents=True)
+        setup = preferences / 'com.apple.purplebuddy.plist'
+        original = plistlib.dumps({'SetupDone': False})
+        setup.write_bytes(original)
+        springboard = preferences / 'com.apple.springboard.plist'
+        springboard.write_bytes(plistlib.dumps({'ExistingPreference': 7}))
+        cache = preferences / 'com.apple.MobileGestalt.plist'
+        cache.write_bytes(plistlib.dumps({'DeviceClass': 'iPod'}))
+        prepare_userspace(self.root)
+        self.assertEqual(setup.read_bytes(), original)
+        self.assertFalse(cache.exists())
+        values = plistlib.loads(springboard.read_bytes())
+        self.assertEqual(values['ExistingPreference'], 7)
+        self.assertTrue(values['SBDisableAutoDim'] and values['SBDisableIdleSleep'])
+        self.assertEqual(springboard.stat().st_mode & 0o777, 0o600)
+        self.assertTrue((self.root / 'containers/Shared/SystemGroup').is_dir())
 
 
 if __name__ == '__main__':

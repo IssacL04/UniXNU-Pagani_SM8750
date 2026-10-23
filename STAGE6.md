@@ -541,3 +541,13 @@ Data UUID 为 `924B8B8B-321B-45B9-AE49-3862B0AE81F2`，256 MiB 逻辑镜像打�
 DarwinBoot 连续内存请求从 512 MiB 提至 1 GiB；实机 DT 存在足够大的高地址 RAM 区间，加载器仍必须从真实 UEFI 常规内存分配成功后才启动，不覆盖保留区。256 MiB RAM Data 继续采用稀疏页存储。1 GiB 的实际分配与运行尚待本轮实机验证。进程日志增加 PID、名称和退出状态，用来区分正常多进程执行与重启循环。
 
 本地原版显示 ABI 审查、全部九项 ADT 检查、framebuffer 交接及 panic 的 ASan/UBSan 检查通过。复用 NativeKeyStoreEvents 边界测试通过；Linux GCC 测试运行额外预包含 cstdint，并关闭测试桩的缩进告警，驱动源码未改。完整 iOS 编译、预链接和硬件显示结果另行记录，当前不声称桌面可用。
+
+### 本轮新增验收目标：Logo 与实际系统界面
+
+用户要求本轮显示 Apple Logo，开机并至少进入 Setup，可参考官方 MobileGestalt / Skip Setup。已按 [MobileGestalt](https://unixnu.com/guide/mobilegestalt) 补齐 iPad7,1/J120、pad artwork、显示倍率及无机械 Home 键的用户态身份，硬件 compatible 保留 oneplus,pkx110/qcom,sm8750。采用参考移植的开发环境状态字段，不代表手机具有 Apple 的安全硬件。构建为每个全新 RAM Data 候选生成独立平台种子，填充 unique-chip-id/chip-id，供 IOPlatformUUID 生成；它是该候选的合成平台标识，不是 Apple ECID 或手机熔丝值，同一镜像重启不变。
+
+Data 准备会清除三个 MobileGestalt 缓存路径，创建容器目录，并设置防自动息屏偏好；保留原始 SetupDone 等状态。[Skip Setup](https://unixnu.com/guide/skip-setup) 已接入现有可选 payload 工具，本候选默认不跳过。用户确认手机已进入 Fastboot，可在镜像检查通过后临时启动。
+
+AppleLogo 来自固定 IPSW 的 Firmware/all_flash/applelogo@2732~ipad.im4p，原始 SHA-256 为 de55e7b7a4eff459118f8a4ec9af79b017cfdbfec4c5b079346e414c68ff1fba。构建期校验身份、iBootIm checksum、230×284 灰度/透明度与 LZSS 解码长度，生成内核使用的头文件，不将 Apple 图片提交 Git。XNU 入口在实际 GOP 上居中显示原版 Logo，日志仍记入阶段缓冲，panic 可覆盖 Logo；系统呈现后诊断绘制让出 framebuffer。Logo 出现只证明启动显示路径运行，Setup/SpringBoard 必须以实际用户态画面验证。
+
+新增十项 ADT、四项 RAM Data 策略测试通过，Logo/显示交接/panic 的 framebuffer ASan/UBSan 测试通过。原版 Logo 提取图已人工检查。完整 iOS 构建及实机界面仍在推进。

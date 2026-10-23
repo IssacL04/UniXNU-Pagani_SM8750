@@ -19,6 +19,8 @@ def main():
     record = json.loads(recipe.read_text().strip().rstrip(','))
     output = root / 'build/boot-progress'
     output.mkdir(parents=True, exist_ok=True)
+    subprocess.run(['python3', root / 'scripts/prepare-boot-logo.py',
+                    root / '../../ipsw/21H461/applelogo@2732~ipad.im4p', output / 'BootLogo.h'], check=True)
     source = root / 'drivers/BootProgress'
     obj = output / 'BootProgress.o'
     command = compile_command(record, source / 'BootProgress.c', obj)
@@ -34,7 +36,7 @@ def main():
             command.append(value)
     command += ['-DXNU_BOOT_PROGRESS=1', '-DXNU_EARLY_BOOT_PROGRESS=1',
                 '-ffreestanding', '-fno-builtin', '-fno-stack-protector', '-mgeneral-regs-only', '-fno-jump-tables',
-                '-I' + str(root / 'drivers/DarwinBoot/DarwinBootPkg/Driver')]
+                '-I' + str(root / 'drivers/DarwinBoot/DarwinBootPkg/Driver'), '-I' + str(output)]
     subprocess.run(command, cwd=record['directory'], check=True)
     entry = output / 'Entry.o'
     subprocess.run(['xcrun', 'clang', '-target', 'arm64-apple-ios17.0', '-c', source / 'Entry.S', '-o', entry], check=True)

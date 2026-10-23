@@ -27,6 +27,11 @@ static void thread_call_enter_delayed(thread_call_t call, uint64_t deadline) { (
 static void thread_call_enter(thread_call_t call) { assert(call); }
 static thread_call_t thread_call_allocate_with_options(void (*fn)(void *, void *), void *arg, int priority, int options)
 { (void)fn; (void)arg; (void)priority; (void)options; return (void *)1; }
+#define BOOT_LOGO_WIDTH 4
+#define BOOT_LOGO_HEIGHT 4
+#define BOOT_LOGO_X 2
+#define BOOT_LOGO_Y -1
+static const unsigned char boot_logo[] = {0,64,128,255,255,128,64,0,0,64,128,255,255,128,64,0};
 #include "../BootProgress.c"
 volatile int native_owner_cache_stage;
 volatile uint64_t native_ufs_block_reads, native_ufs_block_failures;
@@ -50,8 +55,13 @@ int main(void)
     boot_args args = { .virtBase = 0xfffffff007004000ULL, .physBase = 0xc0004000,
                       .memSize = 0x10000000, .Video = { (uintptr_t)(allocation + GUARD), 1, PITCH * 4, W, H, 32 } };
     early_boot_progress_init(&args);
-    assert(boot_progress_active());
+    assert(boot_progress_active() && logo_visible);
+    unsigned logo_at = GUARD + ((H - BOOT_LOGO_HEIGHT) / 2 + BOOT_LOGO_Y) * PITCH +
+                       (W - BOOT_LOGO_WIDTH) / 2 + BOOT_LOGO_X;
+    assert(allocation[logo_at] == 0xff000000 && allocation[logo_at + 1] == 0xff404040 &&
+           allocation[logo_at + 2] == 0xff808080 && allocation[logo_at + 3] == 0xffffffff);
     for (unsigned i = 0; i < 5000; i++) boot_progress_putc((i % 41) ? 'X' : '\n');
+    assert(allocation[logo_at + 3] == 0xffffffff);
     boot_progress_stage("wrap, CR\rLF\n and invalid bytes \1\377");
     for (unsigned i = 0; i < GUARD; i++) {
         assert(allocation[i] == 0x12345678);

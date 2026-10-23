@@ -15,6 +15,9 @@ _Static_assert(ARM_PGBYTES == 4096 && (T0SZ_BOOT == 25 || T0SZ_BOOT == 26) && CA
                "Early framebuffer map requires the native 4 KiB bootstrap ABI");
 #endif
 #include <DiagFont.h>
+#ifndef BOOT_PROGRESS_TEST
+#include <BootLogo.h>
+#endif
 
 _Static_assert(offsetof(boot_args, Video) == 0x28, "DarwinBoot video ABI");
 _Static_assert(offsetof(boot_args, physBase) == 0x10, "DarwinBoot memory ABI");
@@ -37,7 +40,7 @@ static uintptr_t framebuffer, framebuffer_pa;
 static unsigned width, height, stride, column, row = 4;
 static uint64_t poll_count;
 static thread_call_t poll_call;
-static int display_owned;
+static int display_owned, logo_visible;
 static int busy; // shortcut: single-core observer, add SMP synchronization before enabling more CPUs.
 enum { SCALE = 3, CELL = 6 * SCALE, LINE = 14 * SCALE, LOG_TOP = 4 };
 enum { HISTORY = 8, STAGE_BYTES = 80 };
@@ -118,7 +121,7 @@ static int geometry(uintptr_t base, uint64_t w, uint64_t h, uint64_t pitch, uint
 
 static void clear_line(unsigned y)
 {
-    if (display_owned && !panic_state) return;
+    if ((display_owned || logo_visible) && !panic_state) return;
     if (!framebuffer || y + LINE > height) return;
     for (unsigned dy = 0; dy < LINE; dy++) {
         volatile uint32_t *pixels = (volatile uint32_t *)framebuffer + (y + dy) * stride;
@@ -126,9 +129,29 @@ static void clear_line(unsigned y)
     }
 }
 
+static void render_boot_logo(void)
+{
+    int left = ((int)width - BOOT_LOGO_WIDTH) / 2 + BOOT_LOGO_X;
+    int top = ((int)height - BOOT_LOGO_HEIGHT) / 2 + BOOT_LOGO_Y;
+    if (!framebuffer || left < 0 || top < 0 || left + BOOT_LOGO_WIDTH > (int)width ||
+        top + BOOT_LOGO_HEIGHT > (int)height) return;
+    for (unsigned y = 0; y < height; y++) {
+        volatile uint32_t *line = (volatile uint32_t *)framebuffer + y * stride;
+        for (unsigned x = 0; x < width; x++) line[x] = 0xff000000;
+    }
+    for (unsigned y = 0; y < BOOT_LOGO_HEIGHT; y++) {
+        volatile uint32_t *line = (volatile uint32_t *)framebuffer + (top + y) * stride + left;
+        for (unsigned x = 0; x < BOOT_LOGO_WIDTH; x++) {
+            uint32_t level = boot_logo[y * BOOT_LOGO_WIDTH + x];
+            line[x] = 0xff000000 | level * 0x010101;
+        }
+    }
+    logo_visible = 1;
+}
+
 static void glyph(unsigned char c, unsigned x, unsigned y, uint32_t color)
 {
-    if ((display_owned && !panic_state) || !framebuffer || x + CELL > width || y + LINE > height) return;
+    if (((display_owned || logo_visible) && !panic_state) || !framebuffer || x + CELL > width || y + LINE > height) return;
     if (c < 32 || c > 126) c = '?';
     uint64_t bits = font[c - 32];
     for (unsigned gy = 0; gy < 12; gy++) {
@@ -351,7 +374,7 @@ void early_boot_progress_init(boot_args *args)
     early_boot_phys_base = args->physBase;
     early_boot_virt_base = args->virtBase;
     early_boot_stage = 1;
-    display_owned = 0; panic_state = 0; stage_count = 0; root_sequence = 0; fault_valid = 0;
+    display_owned = 0; logo_visible = 0; panic_state = 0; stage_count = 0; root_sequence = 0; fault_valid = 0;
     boot_progress_panic_text[0] = 0;
     framebuffer = 0; column = 0; row = LOG_TOP; busy = 0;
     framebuffer_pa = 0;
@@ -369,6 +392,7 @@ void early_boot_progress_init(boot_args *args)
     value_raw("RAM VA", args->virtBase);
     value_raw("RAM bytes", args->memSize);
     value_raw("CNTFRQ Hz", frequency());
+    render_boot_logo();
     barrier();
 }
 

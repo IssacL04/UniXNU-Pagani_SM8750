@@ -51,9 +51,13 @@ def empty_nvram_proxy():
             ('nvram-current-bank', bytes(4)), ('nvram-proxy-data', bank)]
 
 
-def make_tree(memory_size, random_seed, root_match_volume_uuid=None, trust_cache=False, packed_data_ramdisk=False):
+def make_tree(memory_size, random_seed, root_match_volume_uuid=None, trust_cache=False, packed_data_ramdisk=False, ipad_identity=False, unique_chip_id=None, chip_id=0x8011):
     if memory_size not in (0x10000000, 0x20000000, 0x40000000) or len(random_seed) != 64:
         raise ValueError('13T probes require 256/512/1024 MiB and a 64-byte random seed')
+    if unique_chip_id is not None and not 0 < unique_chip_id < 1 << 64:
+        raise ValueError('Platform seed must be a nonzero 64-bit value')
+    if ipad_identity and unique_chip_id is None:
+        raise ValueError('iPad userspace requires a platform seed for IOPlatformUUID')
     root_matching = []
     if root_match_volume_uuid is not None:
         volume_uuid = str(uuid.UUID(root_match_volume_uuid)).upper()
@@ -61,9 +65,18 @@ def make_tree(memory_size, random_seed, root_match_volume_uuid=None, trust_cache
                '<key>IOPropertyMatch</key><dict><key>UUID</key><string>' +
                volume_uuid + '</string></dict></dict>\0')
         root_matching = [('root-matching', xml.encode())]
-    return node('device-tree', [('model', b'OnePlus 13T\0'),
+    return node('device-tree', [('model', b'iPad7,1\0' if ipad_identity else b'OnePlus 13T\0'),
+                               *([('target-type', b'J120\0')] if ipad_identity else []),
                                ('compatible', b'oneplus,pkx110\0qcom,sm8750\0')], [
         node('chosen', [('random-seed', random_seed), *empty_nvram_proxy(), *root_matching,
+                        ('osenvironment', b'main\0'),
+                        *([('unique-chip-id', struct.pack('<Q', unique_chip_id)),
+                           ('chip-id', struct.pack('<I', chip_id))] if unique_chip_id is not None else []),
+                        *([('certificate-production-status', bytes(4)),
+                           ('effective-production-status-ap', bytes(4)),
+                           ('certificate-security-mode', struct.pack('<I', 1)),
+                           ('effective-security-mode-sep', struct.pack('<I', 1)),
+                           ('display-scale', struct.pack('<I', 2))] if ipad_identity else []),
                         *([('amfi-only-platform-code', struct.pack('<I', 1))] if trust_cache else []),
                         *([('ephemeral-storage', struct.pack('<I', 1))] if packed_data_ramdisk else []),
                         ('crypto-hash-method', b'sha2-384\0'),
@@ -86,7 +99,18 @@ def make_tree(memory_size, random_seed, root_match_volume_uuid=None, trust_cache
                           ('redistributor-stride', struct.pack('<Q', GICR_STRIDE))])]),
         node('defaults', [('sleep-disabled', struct.pack('<I', 1))]),
         node('options'),
-        node('product', [('product-name', b'OnePlus 13T\0'), ('model', b'PKX110\0')]),
+        *([node('buttons', [('compatible', b'buttons\0'), ('device_type', b'buttons\0'),
+                           ('button-names', b'hold\0voldown\0volup\0'),
+                           ('home-button-type', struct.pack('<I', 2))])] if ipad_identity else []),
+        node('product', [('product-name', b'iPad Pro (12.9-inch) (2nd generation)\0' if ipad_identity else b'OnePlus 13T\0'),
+                         ('model', b'PKX110\0'),
+                         *([('product-description', b'iPad Pro (12.9-inch) (2nd generation)\0'),
+                            ('artwork-device-idiom', b'pad\0'),
+                            ('artwork-device-subtype', struct.pack('<I', 2732)),
+                            ('artwork-scale-factor', struct.pack('<I', 2)),
+                            ('artwork-display-gamut', b'P3\0'),
+                            ('compatible-device-fallback', b'iPad6,7\0'),
+                            ('thin-bezel', struct.pack('<I', 1))] if ipad_identity else [])]),
     ])
 
 
@@ -99,12 +123,15 @@ def main():
     parser.add_argument('--root-match-volume-uuid')
     parser.add_argument('--trust-cache', action='store_true')
     parser.add_argument('--packed-data-ramdisk', action='store_true')
+    parser.add_argument('--ipad-identity', action='store_true')
+    parser.add_argument('--unique-chip-id', type=lambda s: int(s, 16))
+    parser.add_argument('--chip-id', type=lambda s: int(s, 0), default=0x8011)
     args = parser.parse_args()
     if args.cpu_regs != '0' or args.dram_size != args.owned_memory_size:
         parser.error('Initial profile uses cpu0 and only the DarwinBoot-owned RAM window')
     try:
         data = make_tree(args.owned_memory_size, os.urandom(64), args.root_match_volume_uuid,
-                         args.trust_cache, args.packed_data_ramdisk)
+                         args.trust_cache, args.packed_data_ramdisk, args.ipad_identity, args.unique_chip_id, args.chip_id)
     except ValueError as error:
         parser.error(str(error))
     args.output.parent.mkdir(parents=True, exist_ok=True)

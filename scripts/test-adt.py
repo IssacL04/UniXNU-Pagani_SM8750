@@ -60,6 +60,22 @@ class AdtTest(unittest.TestCase):
                 checksum = (checksum & 255) + (checksum >> 8)
             self.assertEqual(header[1], checksum)
 
+    def test_ipad_identity(self):
+        nodes = decode(adt.make_tree(0x40000000, bytes(64), ipad_identity=True, unique_chip_id=0x123456789abcdef))
+        root = nodes['/device-tree']
+        chosen = nodes['/device-tree/chosen']
+        self.assertEqual(root['model'], b'iPad7,1\0')
+        self.assertEqual(root['compatible'], b'oneplus,pkx110\0qcom,sm8750\0')
+        self.assertEqual(chosen['unique-chip-id'], struct.pack('<Q', 0x123456789abcdef))
+        self.assertEqual(chosen['chip-id'], struct.pack('<I', 0x8011))
+        self.assertEqual(chosen['osenvironment'], b'main\0')
+        self.assertEqual(chosen['display-scale'], struct.pack('<I', 2))
+        self.assertEqual(nodes['/device-tree/product']['artwork-device-idiom'], b'pad\0')
+        self.assertEqual(nodes['/device-tree/buttons']['home-button-type'], struct.pack('<I', 2))
+        for seed in (None, 0, -1, 1 << 64):
+            with self.assertRaises(ValueError):
+                adt.make_tree(0x40000000, bytes(64), ipad_identity=True, unique_chip_id=seed)
+
     def test_invalid_window(self):
         for size in (0, 0x10001000, 0x80000000):
             with self.assertRaises(ValueError):

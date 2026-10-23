@@ -17,6 +17,27 @@ import subprocess
 import uuid
 
 
+def prepare_userspace(target):
+    for relative in ('containers/Bundle', 'containers/Data/System',
+                     'containers/Shared/SystemGroup', 'containers/Temp'):
+        (target / relative).mkdir(mode=0o755, parents=True, exist_ok=True)
+    preferences = target / 'mobile/Library/Preferences'
+    preferences.mkdir(mode=0o755, parents=True, exist_ok=True)
+    for relative in (
+        'containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/com.apple.MobileGestalt.plist',
+        'mobile/Library/Preferences/com.apple.MobileGestalt.plist',
+        'mobile/Library/Preferences/com.apple.mobilegestalt.plist',
+    ):
+        (target / relative).unlink(missing_ok=True)
+    path = preferences / 'com.apple.springboard.plist'
+    values = plistlib.loads(path.read_bytes()) if path.exists() else {}
+    values.update(SBDisableAutoDim=True, SBDontDimOrLockOnAC=True, SBDisableIdleSleep=True)
+    path.write_bytes(plistlib.dumps(values, fmt=plistlib.FMT_BINARY))
+    owner = (target / 'mobile').stat()
+    os.chown(path, owner.st_uid, owner.st_gid)
+    path.chmod(0o600)
+
+
 def disable_unimplemented_watchdog(target, daemon):
     job = plistlib.loads(daemon.read_bytes())
     if (job.get('Label') != 'com.apple.watchdogd' or
@@ -115,6 +136,7 @@ def prepare(tree, source, output, config):
                     parent = directory.parent.stat()
                     os.chown(directory, parent.st_uid, parent.st_gid)
             os.chmod(target / 'tmp', 0o1777)
+            prepare_userspace(target)
             disabled_jobs = disable_unimplemented_watchdog(
                 target, original / 'System/Library/LaunchDaemons/com.apple.watchdogd.plist')
     with image.open('rb') as stream:
@@ -126,6 +148,7 @@ def prepare(tree, source, output, config):
     report = dict(volume_uuid=identity, packed=packed, source_regular_files=count,
                   source_regular_bytes=total, guest_mutable=True, persistent=False,
                   bringup_disabled_jobs=disabled_jobs,
+                  mobilegestalt_cache_cleared=True, setup_skipped=False, auto_dim_disabled=True,
                   ownership_preserved=True, os_inputs_modified=False, hardware_tested=False)
     (output / 'seed.json').write_text(json.dumps(report, indent=2) + '\n')
     lines = [line for line in config.read_text().splitlines()
