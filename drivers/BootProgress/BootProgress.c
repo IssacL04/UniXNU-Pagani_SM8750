@@ -37,14 +37,16 @@ uint64_t early_boot_args_pa, early_boot_phys_base, early_boot_virt_base;
 uint64_t early_boot_stage;
 static const uint64_t font[] = GLYPH_FONT;
 static uintptr_t framebuffer, framebuffer_pa;
-static unsigned width, height, stride, column, row = 4;
+static unsigned width, height, stride, column, row = 6;
 static uint64_t poll_count;
 static thread_call_t poll_call;
 static int display_owned, logo_visible;
 static int busy; // shortcut: single-core observer, add SMP synchronization before enabling more CPUs.
-enum { SCALE = 3, CELL = 6 * SCALE, LINE = 14 * SCALE, LOG_TOP = 4 };
+enum { SCALE = 3, CELL = 6 * SCALE, LINE = 14 * SCALE, LOG_TOP = 6 };
 enum { HISTORY = 8, STAGE_BYTES = 80 };
 static char stages[HISTORY][STAGE_BYTES], root_stage[STAGE_BYTES], root_detail[192];
+static char display_stage[STAGE_BYTES], exit_stage[STAGE_BYTES];
+static uint64_t display_value;
 static unsigned stage_count, panic_state, panic_limit, panic_clipped;
 static uint64_t root_sequence, root_value, root_tick, fault_esr, fault_pc, fault_far, fault_psr;
 static int fault_valid;
@@ -53,6 +55,7 @@ extern int vsnprintf(char *, size_t, const char *, va_list);
 extern int snprintf(char *, size_t, const char *, ...);
 static char storage_status[96];
 static char timer_status[96];
+static char display_status[96];
 
 static void barrier(void)
 {
@@ -121,7 +124,7 @@ static int geometry(uintptr_t base, uint64_t w, uint64_t h, uint64_t pitch, uint
 
 static void clear_line(unsigned y)
 {
-    if ((display_owned || logo_visible) && !panic_state) return;
+    if ((display_owned || (logo_visible && y >= LOG_TOP * LINE)) && !panic_state) return;
     if (!framebuffer || y + LINE > height) return;
     for (unsigned dy = 0; dy < LINE; dy++) {
         volatile uint32_t *pixels = (volatile uint32_t *)framebuffer + (y + dy) * stride;
@@ -151,7 +154,7 @@ static void render_boot_logo(void)
 
 static void glyph(unsigned char c, unsigned x, unsigned y, uint32_t color)
 {
-    if (((display_owned || logo_visible) && !panic_state) || !framebuffer || x + CELL > width || y + LINE > height) return;
+    if (((display_owned || (logo_visible && y >= LOG_TOP * LINE)) && !panic_state) || !framebuffer || x + CELL > width || y + LINE > height) return;
     if (c < 32 || c > 126) c = '?';
     uint64_t bits = font[c - 32];
     for (unsigned gy = 0; gy < 12; gy++) {
@@ -225,6 +228,13 @@ int boot_progress_display_handoff(void)
     return ready;
 }
 
+void boot_progress_display_failed(void)
+{
+    uint64_t flags = irq_save();
+    if (!panic_state) display_owned = 0;
+    irq_restore(flags);
+}
+
 int boot_progress_active(void) { return framebuffer != 0; }
 
 void boot_progress_putc(char c)
@@ -240,6 +250,11 @@ void boot_progress_stage(const char *s)
     if (!busy && !panic_state) {
         busy = 1;
         record_stage(s);
+        if (logo_visible) {
+            unsigned saved_row = row, saved_column = column;
+            row = 0; column = 0; clear_line(0); line_raw(s);
+            row = saved_row; column = saved_column;
+        }
         if (column) putc_raw('\n');
         text_raw("[XNU] "); text_raw(s); putc_raw('\n'); barrier();
         busy = 0;
@@ -274,6 +289,17 @@ void boot_progress_root(const char *stage, const char *detail, uint64_t value)
         barrier(); busy = 0;
     }
     irq_restore(flags);
+}
+
+void boot_progress_display_status(const char *detail, uint64_t value)
+{
+    uint64_t flags = irq_save();
+    if (!panic_state && !busy) {
+        copy_line(display_stage, sizeof(display_stage), detail);
+        display_value = value;
+    }
+    irq_restore(flags);
+    boot_progress_root("stage7", detail, value);
 }
 
 static void panic_halt(void)
@@ -375,6 +401,8 @@ void early_boot_progress_init(boot_args *args)
     early_boot_virt_base = args->virtBase;
     early_boot_stage = 1;
     display_owned = 0; logo_visible = 0; panic_state = 0; stage_count = 0; root_sequence = 0; fault_valid = 0;
+    poll_count = 0; display_value = 0;
+    display_stage[0] = 0; exit_stage[0] = 0;
     boot_progress_panic_text[0] = 0;
     framebuffer = 0; column = 0; row = LOG_TOP; busy = 0;
     framebuffer_pa = 0;
@@ -486,10 +514,23 @@ static void poll(void *unused0, void *unused1)
     uint64_t flags = irq_save();
     if (framebuffer && !busy) {
         busy = 1;
+        ++poll_count;
+        if (logo_visible && !display_owned && poll_count >= 30) {
+            logo_visible = 0;
+            for (unsigned y = 0; y + LINE <= height; y += LINE) clear_line(y);
+            row = LOG_TOP; column = 0;
+            text_raw("No system frame after 30s; boot continues\n");
+            unsigned count = stage_count < HISTORY ? stage_count : HISTORY;
+            for (unsigned i = stage_count - count; i < stage_count; i++) {
+                text_raw(stages[i % HISTORY]); putc_raw('\n');
+            }
+            text_raw(root_stage); putc_raw('\n');
+            text_raw(root_detail); putc_raw('\n'); value_raw("root value", root_value);
+        }
         unsigned saved_row = row, saved_column = column;
         row = 1; column = 0; clear_line(LINE);
         snprintf(timer_status, sizeof(timer_status), "poll %016llx timer %016llx",
-                 (unsigned long long)++poll_count, (unsigned long long)armcpu_timer_interrupts);
+                 (unsigned long long)poll_count, (unsigned long long)armcpu_timer_interrupts);
         line_raw(timer_status);
         row = 2; column = 0; clear_line(2 * LINE);
         if (&native_owner_cache_stage && native_owner_cache_stage &&
@@ -504,6 +545,11 @@ static void poll(void *unused0, void *unused1)
                      (unsigned long long)armcpu_gic_boot[1]);
             line_raw(storage_status);
         }
+        row = 4; column = 0; clear_line(4 * LINE);
+        snprintf(display_status, sizeof(display_status), "DISPLAY %.48s %llx", display_stage,
+                 (unsigned long long)display_value);
+        line_raw(display_status);
+        row = 5; column = 0; clear_line(5 * LINE); line_raw(exit_stage);
         row = saved_row; column = saved_column; barrier(); busy = 0;
     }
     irq_restore(flags);
@@ -537,5 +583,8 @@ void boot_progress_exit(int pid, const char *name, int status, unsigned ns, uint
     char line[STAGE_BYTES];
     snprintf(line, sizeof(line), "exit pid=%d %.16s status=%x ns=%u code=%llx", pid,
              name ? name : "?", status, ns, (unsigned long long)code);
+    uint64_t flags = irq_save();
+    if (!panic_state && !busy) copy_line(exit_stage, sizeof(exit_stage), line);
+    irq_restore(flags);
     boot_progress_stage(line);
 }

@@ -48,7 +48,7 @@ static void panic_for_test(const char *format, ...)
 
 int main(void)
 {
-    enum { W = 126, H = 420, PITCH = 132, GUARD = 32 };
+    enum { W = 126, H = 840, PITCH = 132, GUARD = 32 };
     uint32_t *allocation = malloc((PITCH * H + 2 * GUARD) * sizeof(uint32_t));
     assert(allocation);
     for (unsigned i = 0; i < PITCH * H + 2 * GUARD; i++) allocation[i] = 0x12345678;
@@ -157,6 +157,23 @@ int main(void)
     assert(strstr(stages[(stage_count - 1) % HISTORY], "pid=42 launchd load_machfile"));
     boot_progress_exit(43, "backboardd", 1, 2, 3);
     assert(strstr(stages[(stage_count - 1) % HISTORY], "exit pid=43 backboardd"));
+    boot_progress_display_status("GOP display started", 1);
+    for (unsigned i = 0; i < HISTORY + 1; i++) boot_progress_process_stage(44, "launchd", "exec");
+    assert(strstr(exit_stage, "exit pid=43 backboardd"));
+    assert(!strcmp(display_stage, "GOP display started") && display_value == 1);
+    for (unsigned i = 0; i < 29; i++) poll(NULL, NULL);
+    assert(logo_visible && allocation[logo_at + 3] == 0xffffffff);
+    poll(NULL, NULL);
+    assert(!logo_visible && !display_owned && !panic_state && poll_count == 30);
+    assert(!strcmp(display_status, "DISPLAY GOP display started 1"));
+    early_boot_progress_init(&args);
+    assert(logo_visible && poll_count == 0);
+    assert(boot_progress_display_handoff());
+    boot_progress_display_failed();
+    assert(!display_owned);
+    for (unsigned i = 0; i < 30; i++) poll(NULL, NULL);
+    assert(!logo_visible);
+    early_boot_progress_init(&args);
     busy = 1;
     assert(!boot_progress_display_handoff());
     busy = 0;
@@ -166,10 +183,11 @@ int main(void)
     memcpy(snapshot, allocation + GUARD, PITCH * H * sizeof(uint32_t));
     boot_progress_stage("must preserve system frame");
     boot_progress_root("frame ownership", "preserve pixels", 1);
-    poll(NULL, NULL);
+    for (unsigned i = 0; i < 31; i++) poll(NULL, NULL);
     assert(!memcmp(snapshot, allocation + GUARD, PITCH * H * sizeof(uint32_t)));
     free(snapshot);
     panic_for_test("panic after system display handoff");
+    boot_progress_display_failed();
     assert(allocation[GUARD] == 0xffff4040 && !boot_progress_display_handoff());
     early_boot_progress_suspend();
     assert(!boot_progress_active());

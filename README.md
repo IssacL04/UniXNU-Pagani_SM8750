@@ -6,7 +6,7 @@
 
 当前已走通 bring-up 阶段 1–6 的主要启动目标，正在推进阶段 7 用户态。系统输入固定为 iPadOS 17.7.11（21H461）；8.74 GiB 根镜像已写入独立的 64 GiB `unixnu` 分区，XNU 通过只读 UFS 路径挂载 OS/SystemOS，并启动原版 `launchd` 和系统服务。
 
-第 33 次真机加入 256 MiB 临时 RAM Data 后，推进到 `watchdogd[144]`，约 101 秒后发生 SIGTRAP panic；代码分析指向缺少 IOWatchdog 后端。第 34 次在 RAM Data 中停用 `com.apple.watchdogd`，用户观察到内核运行十多分钟并持续装载进程，尚未出现图形界面。第 37 次 Stage 7 候选加入原版 Apple 标志、IOSurface/IOMobileGraphics、CPU 画面呈现与 iPad 用户态身份，XNU 内存窗口扩大至 1 GiB。云端构建与实际镜像检查通过，已执行 Fastboot 临时启动，等待手机画面。稳定用户态、设置界面和交互尚未确认；Data 修改随重启清除，物理 UFS 写入保持关闭。详细记录见 [STAGE6.md](STAGE6.md)。
+第 33 次真机加入 256 MiB 临时 RAM Data 后，推进到 `watchdogd[144]`，约 101 秒后发生 SIGTRAP panic；代码分析指向缺少 IOWatchdog 后端。第 34 次在 RAM Data 中停用 `com.apple.watchdogd`，用户观察到内核运行十多分钟并持续装载进程，尚未出现图形界面。第 37 次 Stage 7 候选加入原版 Apple 标志、IOSurface/IOMobileGraphics、CPU 画面呈现与 iPad 用户态身份，XNU 内存窗口扩大至 1 GiB；真机显示 Logo 后持续停留，未确认进入 Setup。下一候选保留 Logo 上方状态栏，并在等待 30 秒后展开诊断，定位实际停点。Data 修改随重启清除，物理 UFS 写入保持关闭。详细记录见 [STAGE6.md](STAGE6.md)。
 
 | 部分 | 当前状态 | 执行位置 |
 | --- | --- | --- |

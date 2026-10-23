@@ -11,8 +11,9 @@
 #include <mach/kmod.h>
 extern "C" kmod_info_t g_kernel_kmod_info;
 extern "C" kern_return_t OSKextLoadKextWithIdentifier(const char *);
-extern "C" void boot_progress_root(const char *,const char *,uint64_t);
 extern "C" int boot_progress_display_handoff(void);
+extern "C" void boot_progress_display_failed(void);
+extern "C" void boot_progress_display_status(const char *,uint64_t);
 extern "C" void native_legacy_display_static_init(void) __asm__("__GLOBAL__sub_I_NativeLegacyDisplay.cpp");
 extern "C" void native_keyevents_static_init(void) __asm__("__GLOBAL__sub_I_NativeKeyStoreEvents.cpp");
 extern "C" IOService *native_legacy_display_allocate(void),*native_keyevents_allocate(void);
@@ -20,7 +21,7 @@ static IOService *pendingDisplay;
 static bool displayInitialized,ephemeralState;
 static uint64_t frames,clients,aksCalls,aksOpens;
 
-static void progress(const char *detail,uint64_t value) {boot_progress_root("stage7",detail,value);}
+static void progress(const char *detail,uint64_t value) {boot_progress_display_status(detail,value);}
 static bool enabled(const char *name) {
     unsigned value=0;return PE_parse_boot_argn(name,&value,sizeof value) && value==1;
 }
@@ -44,15 +45,21 @@ bool native_legacy_gop_mapping_observed(IOService *,IOMemoryMap *mapping,uint32_
 }
 void native_legacy_registration_observed(IOService *) {progress("display registered",1);}
 void native_legacy_swap_stage(unsigned) {}
-void native_legacy_client_enter(task_t,uint32_t) {}
-void native_legacy_client_observed(IOReturn status,IOUserClient *) {progress("display client",status?status:++clients);}
+void native_legacy_client_enter(task_t,uint32_t type) {progress("display client enter",type);}
+void native_legacy_client_observed(IOReturn status,IOUserClient *) {progress("display client",status?(uint32_t)status:++clients);}
 void native_legacy_pm_observed(unsigned stage,IOReturn status,unsigned long) {if(status)progress("display PM error",((uint64_t)stage<<32)|(uint32_t)status);}
 void native_legacy_frame_observed(unsigned,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t) {}
 void native_legacy_frame_colors_observed(const uint32_t *,const uint64_t *,uint64_t) {}
 void native_legacy_swap_validation_observed(bool accepted,unsigned reason,const void *,const void *) {if(!accepted)progress("display swap rejected",reason);}
 void native_legacy_surface_rejected(uint64_t,uint64_t,uint32_t format,uint32_t,uint64_t,uint64_t,uint64_t) {progress("surface format rejected",format);}
 bool native_legacy_prepare_scanout(void) {return boot_progress_display_handoff()!=0;}
-void native_legacy_transfer_observed(IOReturn status,const void *,uint64_t) {if(status)progress("display copy failed",status);else ++frames;}
+void native_legacy_transfer_observed(IOReturn status,const void *,uint64_t) {
+    if(status) {
+        // A failed first copy must not permanently hide the diagnostic console.
+        if(!frames)boot_progress_display_failed();
+        progress("display copy failed",(uint32_t)status);
+    } else {++frames;progress("system frame copied",frames);}
+}
 void native_legacy_copy_timing_observed(uint64_t,uint64_t) {}
 void native_legacy_retirement_observed(IOService *) {}
 // shortcut: CPU scanout only until the SM8750 GPU and its synchronization are implemented.
@@ -90,22 +97,29 @@ static void startKeyState(void) {
 extern "C" void native_legacy_display_probe(void) {
     if(displayInitialized)return;
     displayInitialized=true;
+    progress("display class registration enter",0);
     if(!registerClass(native_legacy_display_static_init)){progress("display class failed",0);return;}
     PE_Video video={};
-    if(!console(video))return;
+    if(!console(video)){progress("GOP console unavailable",0);return;}
+    progress("display allocation enter",0);
     IOService *display=native_legacy_display_allocate();
+    progress("display init enter",display!=nullptr);
     if(display && display->init())pendingDisplay=display;
     else OSSafeReleaseNULL(display);
     progress("display class initialized",pendingDisplay!=nullptr);
 }
 extern "C" void native_legacy_display_late_probe(void) {
+    progress("key state start enter",0);
     startKeyState();
     // Original HID services can register now; no synthetic input device or events.
-    progress("IOHIDFamily load",OSKextLoadKextWithIdentifier("com.apple.iokit.IOHIDFamily"));
-    progress("IOHIDEventDriver load",OSKextLoadKextWithIdentifier("com.apple.iokit.IOHIDEventDriver"));
+    progress("IOHIDFamily load enter",0);
+    progress("IOHIDFamily load",(uint32_t)OSKextLoadKextWithIdentifier("com.apple.iokit.IOHIDFamily"));
+    progress("IOHIDEventDriver load enter",0);
+    progress("IOHIDEventDriver load",(uint32_t)OSKextLoadKextWithIdentifier("com.apple.iokit.IOHIDEventDriver"));
     IOService *display=pendingDisplay;
     pendingDisplay=nullptr;
-    if(!display)return;
+    if(!display){progress("no initialized display",0);return;}
+    progress("IOSurface load enter",0);
     kern_return_t loaded=OSKextLoadKextWithIdentifier("com.apple.iokit.IOSurface");
     OSDictionary *matching=IOService::nameMatching("IOCoreSurfaceRoot");
     IOService *surface=matching?IOService::waitForMatchingService(matching,5000000000ULL):nullptr;
@@ -130,7 +144,9 @@ extern "C" void native_legacy_display_late_probe(void) {
             nub->setName("gop-display",gIODTPlane);
             dtAttached=nub->attachToParent(dtParent,gIODTPlane);
             SInt32 score=0;
+            progress("GOP display probe enter",dtAttached);
             attached=dtAttached && display->probe(nub,&score)==display && display->attach(nub);
+            progress("GOP display start enter",attached);
             started=attached && display->start(nub);
         }
     }

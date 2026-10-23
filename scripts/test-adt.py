@@ -70,6 +70,7 @@ class AdtTest(unittest.TestCase):
         self.assertEqual(chosen['chip-id'], struct.pack('<I', 0x8011))
         self.assertEqual(chosen['osenvironment'], b'main\0')
         self.assertEqual(chosen['display-scale'], struct.pack('<I', 2))
+        self.assertEqual(chosen['display-rotation'], struct.pack('<I', 0))
         self.assertEqual(nodes['/device-tree/product']['artwork-device-idiom'], b'pad\0')
         self.assertEqual(nodes['/device-tree/buttons']['home-button-type'], struct.pack('<I', 2))
         for seed in (None, 0, -1, 1 << 64):

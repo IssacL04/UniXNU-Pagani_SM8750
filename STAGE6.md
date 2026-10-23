@@ -565,3 +565,11 @@ Data 卷 UUID 为 `DCA82E33-8DB3-4192-A510-B1A9C6903118`，256 MiB 逻辑镜像�
 完整镜像为 `out/oneplus13t/boot/stage7-run-37/boot.img`，87,916,544 字节。封装回验、实际文件哈希、Android v4、160 MiB 内嵌 FAT 和空 Android ramdisk 字段检查通过，UEFI、DTB 与 BootShim 布局保持一致。只读核对设备 `3B15BB01BAT00000`、型号 `sun` 后执行 `fastboot boot`：Sending 2.011 秒、Booting 0.338 秒，均为 OKAY，总计 2.667 秒，退出码 0。日志位于 `out/oneplus13t/logs/stage7-run-37-fastboot.log`。
 
 本轮未刷写分区。当前确认镜像发送和临时启动请求成功，等待手机画面验证 Logo、显示服务和 Setup；触摸、GPU 加速及安全密钥存储尚未实现。Data 修改仍随重启清除。
+
+### 第 37 次真机：持续显示 Logo
+
+用户反馈一直停在 Apple Logo，尚无设置界面。第 37 次在绘制 Logo 后永久屏蔽普通日志，因此现有画面无法区分内核停滞、服务启动失败与进程反复退出；Logo 本身只确认 XNU 早期绘制路径运行。
+
+下一候选保留 Logo 上方的阶段、定时器/内存/UFS、显示服务状态和最后退出进程；观察线程运行 30 次仍未交接显示时，展开最近阶段并继续启动。显示状态和最后一次进程退出独立保存，避免被后续 exec 日志冲掉。还修复首次画面复制失败后诊断仍被关闭的路径：尚无成功帧时释放显示占用；成功帧和 panic 仍受保护。这是源码中确认的条件性缺陷，尚未证明就是本次真机停点。
+
+显示初始化、HID/IOSurface 加载、用户客户端和 GOP start 的入口均记录状态；ADT 补齐与实际未旋转 GOP 一致的 display-rotation=0。framebuffer 的 ASan/UBSan 检查覆盖 30 秒回退、首帧失败恢复、成功交接后的像素保护、持久退出记录及 panic；10 项 ADT 测试通过。此次未根据 Logo 画面推断具体服务故障，也未扩大服务禁用列表。
