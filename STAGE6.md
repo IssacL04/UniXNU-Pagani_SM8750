@@ -1,6 +1,6 @@
 # Stage 6：一加 13T 存储与根卷
 
-更新：2026-10-23。第 17 次真机仍停在首条 `NOP OUT`：200 ms 预算实际经过约 496 ms，仅轮询两次，DMA OCS 仍为 0xf。已定位 `IODelay(2)` 可进入线程等待，及 Apple 汇编器将分号后的指令当作注释的问题；本地修正及测试通过，准备第 18 次构建。8.74 GiB 的 iPadOS 根镜像和签名策略已生成并通过本地校验，尚未写入手机。XNU 根卷挂载及 `launchd` 启动仍未完成。
+更新：2026-10-24。第 33 次 RAM Data 候选已进入更晚的用户态服务阶段，约 101 秒后因 watchdogd[144] 的 SIGTRAP 退出而 panic。原版程序在找不到 IOWatchdog 时主动崩溃，当前内核缺少该后端；具体用户态崩溃 PC 尚未采集。第 34 次已完成云端构建和实际镜像检查，只在临时 RAM Data 中停用 com.apple.watchdogd，保留原版系统文件与 panic 检查；临时启动 Sending/Booting 均为 OKAY，等待新照片。
 
 最终目标是在一加 13T 上启动 iPadOS 用户态和界面。当前源码 XNU 仅用于打通硬件路径；本阶段以 iPadOS 根卷挂载及其 `launchd` 启动为验收条件，图形界面仍需后续用户态、显示与输入适配。
 
@@ -10,13 +10,13 @@
 
 本地使用 Apple LZFSE 和 [dmg2img 的完整 LZFSE 块解码版本](https://github.com/citruz/dmg2img/commit/88295c834532310764f8883ae81328999118aad0) 转换 OS，原始磁盘为 6,077,580,800 字节。六个 UDIF 分段 CRC、主备 GPT 的 header/表 CRC、两份分区项一致性和 APFS 容量全部通过；UDIF ignore 块按格式排除在分段 CRC 之外，转换结果对应范围为零。SystemOS 本身就是原始 APFS，直接保留。通过项目现有 manifest 写入代码封装后，根镜像位于 `out/oneplus13t/unixnu-root/unixnu-root.img`，共 9,382,658,048 字节（8.74 GiB），适合 64 GiB 的 `unixnu` 分区。OS/SystemOS 窗口完整读回 SHA-256、manifest 哈希及生产 NativeUfs 解析器检查通过，解析器输入为真机采集 GPT 加本地镜像。配套 `unixnu-root.json` 记录实际布局、哈希、转换来源及 `hardware_tested=false`；构建日志为 `out/oneplus13t/logs/stage6-root-image-build.log`。本轮未使用 macOS hdiutil，也未验证真机 APFS 挂载。
 
-DeviceTree、两份 trust cache 和原始 KernelCache 也已从同一恢复包提取。`out/ipsw/21H461/kernelcache.decompressed` 为 46,415,872 字节，SHA-256 为 `f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7`，与参考移植固定值一致。输入准备完成仍不代表 kext 预链接完成。
+DeviceTree、两份 trust cache 和原始 KernelCache 也已从同一恢复包提取。`out/ipsw/21H461/kernelcache.decompressed` 为 46,415,872 字节，SHA-256 为 `f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7`，与参考移植固定值一致。该输入已用于第 24 次候选的 kext 预链接，运行时接口兼容性仍待真机验证。
 
 使用 [apfsutil](https://github.com/sgan81/apfs-fuse)（`66b86bd525e8cb90f9012543be89b1f092b75cf3`，本地仅补 `<cstdint>` 头文件）只读解析了两份磁盘文件，未挂载文件系统：OS 为 System 角色、UUID `04769D26-2CA0-4825-B443-E2E5F88300F2`，SystemOS UUID 为 `8846FE78-2910-4297-AF97-D59BB6F8FC16`。日志位于 `stage6-os-apfs-volumes.log` 与 `stage6-systemos-apfs-volumes.log`。
 
-已用现有 VerifiedRoot 工具生成两份本地签名策略，位于 `out/oneplus13t/unixnu-root/policies/{OS,SystemOS}/`。两份策略共用本地生成的 RSA-3072 信任锚，绑定上述实际卷 UUID、镜像大小与完整哈希。现有 C 校验器通过真实 RSA 签名和全部数据块校验：OS 为 1,483,785 块，SystemOS 为 806,400 块；结果与根镜像窗口 SHA-256 一致。私钥仅保存在本地缓存，未上传。配套 `verification.json` 明确记录 `host_only=true`、`boot_root_authenticated=false` 和 `hardware_tested=false`；日志为 `out/oneplus13t/logs/stage6-root-policy-build.log`。签名策略尚未链接进内核。
+已用现有 VerifiedRoot 工具生成两份本地签名策略，位于 `out/oneplus13t/unixnu-root/policies/{OS,SystemOS}/`。两份策略共用本地生成的 RSA-3072 信任锚，绑定上述实际卷 UUID、镜像大小与完整哈希。现有 C 校验器通过真实 RSA 签名和全部数据块校验：OS 为 1,483,785 块，SystemOS 为 806,400 块；结果与根镜像窗口 SHA-256 一致。私钥仅保存在本地缓存，未上传。配套 `verification.json` 明确记录 `host_only=true`、`boot_root_authenticated=false` 和 `hardware_tested=false`；日志为 `out/oneplus13t/logs/stage6-root-policy-build.log`。第 24 次内核嵌入云端独立生成并验证的同一镜像策略；本地策略继续保留，手机上的根镜像无需重刷。
 
-`kernel.source_only` 暂时保留，用于当前硬件探测。还需接入匹配的 Apple APFS、IOStorageFamily、trust cache、平台 provider、根卷策略和预链接内核；配置 IPSW 不表示这些步骤已经完成。手机硬件配置继续使用 13T 的实际地址与内存范围。
+第 24 次内核的模式 12 真机照片已确认只读卷发布与 APFS 卷发现。完整 NativeUfs 类、匹配的 Apple APFS/IOStorageFamily、软件 AES 和逐块签名策略已通过这段实际读取路径。随后 UUID 匹配与第 26 次真机审计又确认了根卷挂载和只读设备认证绑定。第 27 次候选移除已完成的模式 12 和根卷审计停机点，接入 trust cache、受限平台 provider 与 owner root 接受；完整运行结果仍待验证。手机硬件配置继续使用 13T 的实际地址，内存由 DarwinBoot 实际分配。
 
 ## 设备与分区
 
@@ -33,7 +33,7 @@ DeviceTree、两份 trust cache 和原始 KernelCache 也已从同一恢复包�
 | unixnu 首块 | 4096 字节全零；检查时没有挂载 |
 | Android UFS 状态 | UFS 4.0，六个 LUN，HS-G5、双通道、Rate B |
 
-只读采集保存在本地 `sysinfo/stage6-20261022/`：主、备 GPT、`unixnu` 首块、几何信息和 Android UFS 状态。该目录不上传。Android 驱动读取成功证明分区存在；XNU 接管控制器仍需独立真机验证。
+只读采集保存在本地 `sysinfo/stage6-20261022/`：主、备 GPT、`unixnu` 首块、几何信息和 Android UFS 状态。该目录不上传。Android 采集值作为对照；第 20 次候选后续照片已独立确认 XNU 读取到相同分区边界及首块头部零值。
 
 启动内核继续使用 boot 镜像路径。本轮根卷镜像命名为 `unixnu-root.img`，目标分区为 `unixnu`；通用工具默认输出名仍为 `userdata-root.img`。根卷、后续 Data 持久化与诊断落盘都应限定在这个新分区；本阶段关闭持久写入。
 
@@ -49,10 +49,10 @@ DeviceTree、两份 trust cache 和原始 KernelCache 也已从同一恢复包�
 
 ## 当前断点与下一步
 
-1. 第 17 次照片已确认 NOP 超时与 DMA 未更新。修复短轮询和 ARM64 内联汇编后，准备第 18 次构建；检查完整内核指令、封装镜像并临时启动，再看 WAIT、QUEUE 和 CMD 读数。
-2. 继续核对 SMMU 接管、LUN、GPT 和 `unixnu` 首块。预期首末 LBA 与上表一致，空分区 manifest 状态为 1；目前尚无 XNU 成功读取存储块的真机证据。
-3. IPSW、原始 KernelCache、OS/SystemOS 根镜像、实际卷 UUID 和签名策略已准备；仍需完成 Apple APFS/IOStorageFamily 预链接及平台 provider 集成。当前源码探测内核不发布根卷，不能仅追加 `native-ufs-root=1` 启动系统。
-4. 只读 GPT/首块探测通过后，再将根镜像部署到 `unixnu`，用模式 11 读取窗口，随后切换具备完整根卷支持的内核。根卷挂载和 `launchd` 启动均通过才算 Stage 6 完成。
+1. 第 20 次候选已通过只读 GPT/首块检查，先保留这一可复现基线。模式 10 主动停止是设计行为，无需为了消除该 panic 修改传输代码。
+2. 根镜像已通过 Fastboot 写入 `unixnu`，模式 11 真机照片确认 `manifest status=0 windows=2`，两个窗口均为 `read=1`，偏移、大小及 manifest 内哈希字段与本地输入一致。已完成窗口首块读回，尚未进行手机侧全镜像哈希验证。
+3. 第 28 次已通过根卷接受并进入 SystemOS 准备，但未观察到返回。第 30 次进一步定位到 copyout，根认证和 SystemOS 查询成功。第 31 次已越过该停点并启动用户态服务，tzinit PID 17 退出状态为 30；第 33 次已进入 watchdogd PID 144，停于 SIGTRAP；当前断点转为缺少 IOWatchdog 后端。第 34 次已通过 RAM Data 中的单项服务策略完成候选构建和临时启动，等待真机后续状态。
+4. 按 bring-up.md 的目标，根卷挂载与原版 `launchd` 启动已经通过，当前进入阶段 7 用户态排障。下一步确认第 34 次是否越过 watchdogd 停点，并继续处理用户态服务所需的硬件依赖；显示服务、稳定运行与交互仍待验证。
 
 ## 真机寄存器结果与第二轮启动
 
@@ -99,7 +99,7 @@ DeviceTree、两份 trust cache 和原始 KernelCache 也已从同一恢复包�
 
 调用关系核对发现：`early_boot_progress_vm_ready` 先用 `ml_io_map_wcomb` 映射帧缓冲，随后 `PE_create_console` 经 `initialize_screen` 再映射一次。13T 的每份映射为 `round_page(0xa50 * 0x1300) = 0xc3f000` 字节（约 12.25 MiB）；`arm_vm_init` 原本只为一份帧缓冲预建 L3 页表。根据数组起点、两份帧缓冲和前两份哈希表的大小，可重建本次动态 VA 起点 `0xfffffff021600000`，原预建范围恰好结束于实测停点 `0xfffffff023000000`。这是源码与屏幕地址一致的根因解释，修复效果仍需真机验证。
 
-新增 `zzzzzzz-early-framebuffer-page-tables.patch`，仅在启用 `XNU_EARLY_BOOT_PROGRESS` 时为第二份帧缓冲预建页表，不改动 VM 分配器或 256 MiB 物理内存窗口。现有源码测试增加一项检查，直接编译补丁中的计算语句，覆盖本次第 306 页边界、四种 2 MiB 地址偏移、诊断开关和空帧缓冲；八项测试通过。全套有序补丁对固定版本 `arm_vm_init.c` 的应用检查通过。第 14 次云端构建及临时启动已完成，屏幕结果待确认。
+新增 `zzzzzzz-early-framebuffer-page-tables.patch`，仅在启用 `XNU_EARLY_BOOT_PROGRESS` 时为第二份帧缓冲预建页表，不改动 VM 分配器或 256 MiB 物理内存窗口。现有源码测试增加一项检查，直接编译补丁中的计算语句，覆盖本次第 306 页边界、四种 2 MiB 地址偏移、诊断开关和空帧缓冲；八项测试通过。全套有序补丁对固定版本 `arm_vm_init.c` 的应用检查通过。第 14 次云端构建及临时启动照片已定位到 AppleImage4 所需设备树节点缺失，修正版待测试。
 
 [第 14 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39846520174)以提交 `55ad302` 成功构建，源码回归、只读存储和 panic 参数检查全部通过。产物位于 `out/oneplus13t/actions/run-14/`；内核为 21,504,448 字节，SHA-256 为 `9c783e1367007e8c738c20d25a5635b414f8f3108b45bb08067dca480edca6f3`。云端/本地哈希、FAT 内嵌内核、模式 10 和详细日志参数核对通过，分池输入仍为 1,266/1,119 条，ADT 与 run-13 仅随机种子不同。
 
@@ -164,4 +164,368 @@ python3 scripts/test-stage6.py --captured sysinfo/stage6-20261022
 
 按当前固定 XNU 源码，CPU 注册没有提供 powergate latency 时，`ml_delay_should_spin` 返回 false，`IODelay(2)` 在可等待上下文中会走线程等待路径。SM8750 UFS 的两微秒轮询改为 `mach_absolute_time` 加 deadline 的忙等，保留 200 ms 命令预算及失败隔离；系统其他延时与事件流配置不变。尚不能据此认定 NOP 故障已修复。
 
-`out/oneplus13t/logs/stage6-run-18-tests.log` 记录八项存储路径 ASan/UBSan 测试和真实 GPT 检查通过。新增检查提取生产代码的 21 段多指令汇编，按 ARM64 Mach-O 编译并反汇编，核对每一条系统寄存器指令和屏障；超时故障测试确认轮询不调用线程延时且仍拒绝重用 DMA。隔离准备、源码内核检查和 BootProgress 主机检查亦通过。下一步完成云端构建与真机验证。
+`out/oneplus13t/logs/stage6-run-18-tests.log` 记录八项存储路径 ASan/UBSan 测试和真实 GPT 检查通过。新增检查提取生产代码的 21 段多指令汇编，按 ARM64 Mach-O 编译并反汇编，核对每一条系统寄存器指令和屏障；超时故障测试确认轮询不调用线程延时且仍拒绝重用 DMA。隔离准备、源码内核检查和 BootProgress 主机检查亦通过。
+
+
+## 第十八次构建与临时启动
+
+[第 18 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39858691906)以 `a4fec23` 构建成功，全部云端检查通过。产物位于 `out/oneplus13t/actions/run-18/`，内核为 21,520,624 字节；云端/本地哈希、FAT 内嵌内核和参数检查通过，分池记录仍为 1,266/1,119 条，ADT 与 run-17 仅随机种子不同。最终内核反汇编确认 CNTKCTL 读取、计时器/SGI 屏障、SGI 写入、UFS 忙等循环及 panic 中断屏蔽指令均存在；轮询循环位于独立的 `pollUfsTransfer` 函数中。
+
+`out/oneplus13t/boot/stage6-run-18-poll/boot.img` 为 15,216,640 字节，封装及解包比对通过，已临时启动；Sending 和 Booting 均返回 OKAY。日志为 `out/oneplus13t/logs/stage6-run-18-poll-fastboot.log`。本轮没有写入分区；后续屏幕结果见下节。
+
+
+## 第十八次真机结果与计划位置
+
+照片显示 `polls=50816`（格式为十进制），`WAIT ticks=3a9830/3a9800 hz=124f800 cntkctl=34f`。按 19.2 MHz 换算，预算 200 ms、实际约 200.0025 ms；短轮询已恢复正常，CNTKCTL 读取也不再残留错误码。首条命令仍为 `NOP OUT` / `e00002d6`，doorbell=1、OCS=0xf、DMA response=0。SMMU 配置读回通过；global fault 为 0→0、context FSR 为 0x400→0x400，没有这次命令新增故障的证据，但仍不能证明 DMA 正常。`IO reads=0`、媒体窗口均为零，GPT/分区字段尚未填充。
+
+按最初 bring-up 顺序，阶段 1–5 的源码探测内核启动链已走通，并进入 BSD 根设备等待；阶段 6 停在底层存储命令通信，还未到 GPT/`unixnu` 识别、OS/SystemOS 发布和根卷挂载。阶段 7 用户态尚未开始。现有 framebuffer 字符输出用于内核诊断，不代表 iPadOS 图形界面或显示服务已经启动。
+
+## 第十八次之后的候选修复：SMMU 同步与队列聚合
+
+补丁补上两处交接处理，已用于下节的第 19 次构建与临时启动。后续屏幕确认仍在 NOP 超时，尚未确定根因。
+
+SM8750 在 SMMU 配置读回通过后执行 `TLBIALLNSNH` 和 `sTLBGSYNC`，最多忙等 100 ms，确认 `sTLBGSTATUS.GSACTIVE` 清零后才启动 UFS 请求队列。写入值使用 `0xffffffff`，沿用 [Linux SMMU 驱动](https://github.com/torvalds/linux/blob/master/drivers/iommu/arm/arm-smmu/arm-smmu.c) 对高通 trapped-MMIO 的非 WZR 处理。该操作失效非安全域的 TLB 缓存，保留 stream 映射与页表；run-19 的 `tlb=0` 确认同步检查通过，但不能证明 DMA 地址路径正确。同步超时会在发送 NOP 前停止，错误为 `SMMU TLB sync timeout`。
+
+队列启动前关闭固件遗留的 `UTRIACR` 中断聚合并读回检查，UTRD 设置 Interrupt Command 位，保持 HC 的 `IE=0` 和现有轮询完成条件。Linux 的设备管理命令及 EDK2 的 NOP 均设置该位。此前没有记录聚合寄存器，因此这属于候选修复，尚无证据证明聚合导致了 run-18 的卡住。
+
+新 panic 行为 `PATH ie=... iacr=旧值->当前值 memcfg=... tlb=...`。到达 NOP 时预期 `ie=0`、`iacr` bit31 清零、`memcfg` bit0 清零、`tlb` bit0 清零；`tlb=ffffffff` 表示尚未采样。此处更正原先的位号：`MEM_CFG` bit0 选择 MCQ，bit1 用于 ESI 中断。即使这些条件全部满足，也只说明配置与同步检查通过，仍需 `doorbell` 清零及 OCS/UPIU 完成响应才能证明通信成功。若 NOP 仍超时，结合这一行继续区分队列配置与 DMA 路径；保留原来的 DMA 隔离，禁止超时后复用或重试。
+
+本地已通过八项 Stage 6 ASan/UBSan 测试、21 段生产 ARM64 汇编的 Mach-O 检查、补丁隔离准备测试、旧平台的命令与 SMMU 回归，以及最大宽度诊断文本检查。新增用例覆盖同步立即完成、延迟完成、持续忙超时、聚合关闭失败和请求标志。run-18 镜像保持原样。
+
+## 第十九次构建与临时启动
+
+用户授权后，将仅包含本次 UFS 补丁的提交 `8912bfc` 推送至现有 `bringup/stage6-unixnu` 分支。[第 19 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39861947626)已成功完成源码准备、存储回归、完整 XNU/FAT 构建及 panic 参数检查。产物位于 `out/oneplus13t/actions/run-19/`，内核为 21,520,624 字节。云端报告与本地哈希、FAT 内嵌内核逐字节比对和只读模式 10 参数检查通过；ADT 与 run-18 仅随机种子不同。
+
+最终 Mach-O 反汇编确认 SMMU 的 `TLBIALLNSNH`/`sTLBGSYNC` 使用非 WZR 寄存器写入，保留屏障、状态读取和限时轮询；队列聚合关闭操作和 UTRD Interrupt Command 位也已进入最终内核。
+
+完整镜像为 `out/oneplus13t/boot/stage6-run-19-dma-sync/boot.img`（15,220,736 字节）。沿用 run-18 的 UEFI 和原机 DTB，boot v4、64 MiB 内嵌负载及封装解包比对通过，Windows 读取的镜像哈希与本地一致。已对连接的 Fastboot 手机执行临时启动，Sending 和 Booting 均返回 OKAY；日志为 `out/oneplus13t/logs/stage6-run-19-dma-sync-fastboot.log`。未刷写分区。
+
+后续手机照片确认第 19 次构建仍停在 `NOP OUT`：`db=1`、`ocs=0f`、`rsp=0`、`is=0`，未进入 SCSI 或 GPT 读取。新增信息为 `PATH ie=0 iacr=0->0 memcfg=0 tlb=0`：固件原本未开启中断聚合，TLB 同步检查也已通过，本次修改未恢复请求完成。`hcs=10f`、`hce=1`、`rsr=1` 和无新增 SMMU fault 仍不足以证明设备收到 NOP。
+
+## run-19 后的链路状态检查候选
+
+现有接管流程直接启动队列并发送 NOP，没有读取物理链路状态；之后的 SCSI 设备唤醒无法帮助一个尚不能完成 NOP 的链路。当前照片没有 TX 状态，因此固件留下 Hibern8 只是待验证假设。
+
+SM8750 的队列启动前现在读取本地 `MPHY_TX_FSM_STATE`（属性 `0x0041`，TX lane 0），仅当值为 `1` 时发送 `DME_HIBER_EXIT`。实现对照本地 SM8750 OEM 内核的 `ufs_qcom_check_hibern8()`、`ufshcd_uic_pwr_ctrl()` 和 UFSHCI 定义：发送前清除旧完成位，退出时同时等待 `UCCS` 与 `UHXS`，检查 UIC 返回码和 `UPMCRS=PWR_LOCAL`，再读 TX 状态。自动休眠计时器若启用则关闭并读回确认，避免查询后再次休眠。普通寄存器及 UIC 命令完成等待上限为 100 ms，Hibern8 退出事件另等最多 500 ms；SM8750 使用计时器忙等，避免早期 `IODelay` 依赖调度唤醒。
+
+新增 `LINK tx=前值->后值 cmd=命令 rc=返回码 is=完成状态 ahitBefore=原值`，未取得的 TX 状态或返回码用 `ffffffff` 表示。读状态或退出失败会在请求队列启动、发送 NOP 之前停止；未加入链路复位、冷启动或超时后 DMA 重试。另将 MCQ 拒绝条件从 `MEM_CFG` bit1 修正为 bit0；run-19 中该寄存器为零，所以位号错误解释不了这次超时。
+
+本地补丁准备、八项 Stage 6 ASan/UBSan 测试（含已采集 GPT）、21 段 ARM64 汇编检查、旧平台命令回归及最大诊断长度检查通过。新增故障注入覆盖已唤醒链路、Hibern8 退出、旧完成位、UIC 未就绪/超时/错误返回、致命错误、缺少退出事件、错误电源状态、退出后仍在休眠及自动休眠关闭失败。候选后续已通过第 20 次完整 XNU 构建及 GPT/首块真机读取。成功检查页未打印 TX 前后状态，尚不能仅凭这页确定实际执行了 Hibern8 退出分支。
+
+
+## 社区实现对照（2026-10-23）
+
+按用户提供的[社区设备列表](https://unixnu.com/zh/devices/)查询，并检查公开代码。下表中的实机进度来自维护者记录；本项目未独立复测这些设备。
+
+| 设备 / 已检查版本 | 相关证据 | 对当前问题的意义 |
+| --- | --- | --- |
+| 小米 17 Pro / SM8850，`ios-pandora` `d338ef09c93b` | [实机记录](https://github.com/ShueiTsuki/ios-pandora/blob/d338ef09c93ba7e69d03e997478fe3ad3acda309/device/DT_FINDINGS.md)记录 `CAP=d5c7031f`、`VER=400`、`HCS=10f`、`MEM_CFG=0`，Hibern8 中 `DBR=1`、`IS=0`；退出后 TX/RX 变为 5，并收到 SCSI 响应 | 与 run-19 的控制器和超时表现最接近，支持优先验证链路休眠假设 |
+| 一加 10 Pro / SM8450，`UniXNU-negroni` `f812002ae3e6` | [0092 补丁](https://github.com/pawlickerr/UniXNU-negroni/blob/f812002ae3e6b861d23007efdfd9f1c394934ba9/patches/xnu/0092-negroni-ufs-wlun-active.patch)修正设备管理 WLUN `0xd0` 上的 ACTIVE 命令；设备页报告 SpringBoard | 属于 SCSI 已能返回后的设备电源问题；我们已有相同 WLUN/ACTIVE 命令，不能用它解释 NOP 不完成 |
+| 一加 Ace 5 / SM8650，`UniXNU-OnePlus-Ace5` `694b39eb76e4` | [设备页](https://unixnu.com/zh/devices/giulia)报告 Hello/Setup；[读取探针的 SMMU 接管](https://github.com/tycykp/UniXNU-OnePlus-Ace5/blob/694b39eb76e4019c75c89780812c68c12070658e/scripts/ufs-read/GiuliaSmmuTakeover.h)可把精确 SID 改路由到空闲 context，保留旧 context | 该代码处理原 context 不适合接管的情况。不能据此认定它解决了与 run-19 相同的故障；本轮不增加 SMMU 改路由 |
+| 小米平板 7 / SM7675，`UniXNU-uke` `0fde2b1b53b8` | [进度记录](https://github.com/Allenwdk/UniXNU-uke/blob/0fde2b1b53b871e9b33b1b242a7034f56e2c71c4/docs/PROGRESS.md)报告 GPT、根挂载和 launchd；RootCommands/RootQueue/SmmuTakeover 与我们固定的上游基线文件相同 | 主要差异在板级时钟、根卷发布和用户态；未找到对应 NOP 超时的额外修复 |
+| 小米平板 8 Pro、一加平板 2 Pro等 SM8750 条目 | 列表和设备页分别记录 CI 编译或 XNU 入口阶段，未报告原生 UFS 根成功 | 暂未找到同 SoC、已验证能直接套用的存储接管方案 |
+
+`UniXNU/NativeUfs` 查询时的 HEAD 仍为本项目固定的 `af785c1777161a62931425c2faaa536ce0bebd5b`，没有发现新的上游提交可直接更新。列表中的 `jasper2863/UniXNU-giulia` API 返回 404，改查同页列出的 tycykp 仓库。
+
+Pandora 的[0118 补丁](https://github.com/ShueiTsuki/ios-pandora/blob/d338ef09c93ba7e69d03e997478fe3ad3acda309/xnu/patches/0118-pandora-ufs-hibern8-exit.patch)先等 UCCS（100 ms），再等 UHXS（500 ms），检查 `UPMCRS=PWR_LOCAL`。本轮沿用已有条件退出实现，并据此将两个等待分开；增加 250 ms 延迟退出成功及 500 ms 无退出事件失败测试。保留仅在 TX 状态确认为 1 时执行退出、错误时阻止 DMA 队列启动的约束。社区证据增强了假设，但不代替本机测试。
+
+用户已授权后续 GitHub Actions 构建，并明确手机断开、真机测试留待回来后进行。本轮只准备下一次临时启动镜像。
+
+
+## 第二十次构建与后续实机结果
+
+仅包含 UFS 补丁的提交 `df66c896446f1870d44e0839841701eeb10a4050` 已推送到现有 `bringup/stage6-unixnu` 分支。[第 20 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39864645069)全部成功，包含源码准备、板级检查、存储回归、完整 XNU/FAT 构建和 panic 参数检查。产物下载至 `out/oneplus13t/actions/run-20/`。
+
+内核 `kernel/kernel.macho` 为 21,520,800 字节，SHA-256 为 `c03805398ca83f376b39ef136d75d122b37b1bc0298937b7993a5ac213d267db`。本地哈希与云端报告一致，FAT 内嵌内核逐字节相同；启动参数仍为 `native-ufs-probe=10 native-ufs-diagnostics=1 startup_debug=0`，ADT 与 run-19 仅随机种子不同。最终 Mach-O 反汇编确认 `DME_GET 0x0041`、TX=1 条件判断、`DME_HIBER_EXIT 0x18`、UCCS/UHXS 分段等待及 `UPMCRS` 检查均已进入内核。
+
+待测镜像为 `out/oneplus13t/boot/stage6-run-20-hibern8/boot.img`，15,220,736 字节，SHA-256 为 `409987aecee5058d5fdf7fcc975b17c7435493b52727626f848fe3a98b2b7460`。boot v4、64 MiB 内嵌负载和封装解包比对通过；UEFI、原机 DTB 与 run-19 相同。`boot.json` 保持 `hardware_tested=false`。用户已拔掉手机，本轮没有调用 Fastboot，也没有刷写分区。
+
+下次回到 Fastboot 后，使用此镜像临时启动。若出现 panic，优先记录新的 `LINK` 行与原 `CMD/QUEUE/PATH` 行：`tx=1->5` 表示采样到 Hibern8 并退出至 HS burst；若随后仍为 NOP 超时，则继续检查 DMA 路径。`tx=5->5` 表示查询时链路已在 HS burst，本次未执行退出。`cmd=18` 且失败时结合 `rc`、`is` 和 `hcs` 判断命令、退出事件或电源结果，不能仅凭某个状态值认定存储已恢复。是否真正读取 GPT 仍以完成响应和后续读取阶段为准。
+
+
+### 第 20 次候选的只读检查通过
+
+用户后续提供的照片显示 `NATIVE_UFS root check`，触发点为 `NativeUfs.cpp:1847`。对照该构建源码，这是模式 10 在 `hostBringUp()` 与 `findRootLayout()` 成功之后主动执行的诊断 panic。它表明 NOP、后续设备命令、LUN 容量读取、GPT 及分区首块读取均已通过本次检查；没有走之前的 `UFS ROOT FAILURE: NOP OUT` 分支。
+
+照片中的 `partition=unixnu first=2ad8f00 last=3ad8eff` 对应十进制 LBA 44,928,768 至 61,705,983，共 16,777,216 个 4096 字节块，即 64 GiB，与板级配置及 Android 采集一致。LUN 0 末 LBA 为 `3ad8fff`；LUN 1–5 的末 LBA 分别为 `7ff`、`7ff`、`bff`、`9afff`、`1fbff`，六个 LUN 块大小均为 4096。
+
+`block0 magic 00000000 00000000`、`ext4magic=0000`、`ext4blocks=0` 表示打印出的头部字段为零，不能据此断言整个分区全零。`manifest status=1 windows=0` 的源码含义是未找到 `SHNGROOT` 标识，符合本流程尚未部署根镜像的状态。当前内核带 `NATIVE_UFS_PROBE_ONLY=1`，完成上述探测后不会发布 IOMedia 根卷；页面下方的根设备等待阶段与此一致。
+
+本轮据照片和同版源码确认结果，仅更新文档，没有修改驱动、重新构建或操作手机。后续进入根镜像部署和完整根卷内核集成阶段；持续读取稳定性、APFS 挂载与用户态仍未验证。
+
+
+## 根镜像部署与模式 11 准备
+
+2026-10-23，用户授权开始部署并将设备连接到 Fastboot。现场确认序列号 `3B15BB01BAT00000`、产品 `sun`、槽位 B，`partition-size:unixnu=0x1000000000`，分区类型为 raw。写入前重新计算本地镜像完整 SHA-256，与 `unixnu-root.json` 的 `fd43ee7035ce185ce4215ac93fdc006fd784a54b3b7442e21457c226cbe03093` 一致。部署使用项目指定的 Windows platform-tools，目标限定为 `unixnu`，`-S 256M` 分块；完成结果另记于下文。
+
+模式 11 镜像位于 `out/oneplus13t/boot/stage6-run-20-root-windows/boot.img`，复用第 20 次已通过 UFS/GPT 实测的内核，只将 FAT 配置切换为 `native-ufs-probe=11` 并修改菜单标题。配置读回一致，boot 封装与解包比对通过。该模式读取 manifest 及每个窗口的首块后主动 panic，不执行根卷发布或挂载，也不校验手机上全部 8.74 GiB 数据。
+
+本地镜像对应的模式 11 预期字段：
+
+| 字段 | OS（w0） | SystemOS（w1） |
+| --- | --- | --- |
+| offset（十六进制） | `100000` | `16a600000` |
+| size（十六进制） | `16a408600` | `c4e00000` |
+| GPT 显示字段 | `20494645 54524150` | `00000000 00000000` |
+| manifest 中 SHA-256 前四字 | `e5634d04 a8ac35f0 24845f58 3394e0a3` | `b4908cde 41d23e6b c05e6af5 1a2c9eeb` |
+
+应同时出现 `manifest status=0 windows=2`、两个窗口的 `read=1`。SystemOS 是原始 APFS，首块偏移 32 为 `NXSB`，没有外层 GPT；模式 11 打印的两个 GPT 字段为零符合本地输入，不应单凭这两个零判定读取失败。屏幕中的 SHA 来自 manifest，不能代替窗口数据的完整读回哈希。
+
+同时完成了根卷内核的本地预链接准备：使用第 20 次原生内核、固定的 `21H461` KernelCache 和现有 NativePrelink 工具，分别生成 `out/oneplus13t/kernel/storage-prelink-check.macho`（54,071,296 字节）与 `root-prelink-check.macho`（54,366,208 字节）。后者采用固定参考配置的 30 个组件闭包；预链接保留 Apple 可执行字节，原始输入未修改。现有 AMFI/PMGR 静态检查通过，确认本版 AMFI 的 provider 调用与原始 ApplePMGR/AppleT8011PMGR 方法匹配。这些是构建准备产物，报告仍明确标记 `abi_qualified=false`、`loadable=false`、`runtime_qualified=false`；未将它们封装启动。NativeUfs 完整存储类绑定、签名策略入核、平台 provider 发布、根卷配置及内存容量验证仍待完成，不能用本次静态检查代替真机挂载验收。
+
+
+部署结果：`out/oneplus13t/logs/stage6-root-flash-unixnu.log` 记录 34/34 个 sparse 分块的 Sending/Writing 全部 OKAY，进程退出码为 0，Fastboot 报告总用时 611.509 秒。镜像预处理从 WSL UNC 路径读取原始文件，期间没有传输输出；后续已正常开始分块发送并完成。仅写入 `unixnu`，未执行其他分区的 flash/erase。此结果确认 Fastboot 写入完成；手机侧全镜像读回校验尚未进行。
+
+模式 11 已对同一设备执行临时 `fastboot boot`，Sending 和 Booting 均返回 OKAY，退出码为 0，总用时 0.835 秒；日志为 `out/oneplus13t/logs/stage6-run-20-root-windows-fastboot.log`。随后用户提供的屏幕结果确认 manifest 与两个窗口首块读取通过，详见下文。
+
+
+模式 11 真机照片确认：`NATIVE_UFS root windows`，`partition=unixnu first=2ad8f00 last=3ad8eff manifest status=0 windows=2`；OS 的 `off=100000 size=16a408600 gpt=20494645 54524150 read=1`，SystemOS 的 `off=16a600000 size=c4e00000 gpt=00000000 00000000 read=1`。两行 SHA 前四字也与上表一致。停点 `NativeUfs.cpp:1880` 是该模式输出结果后的主动 panic，页面同时显示此前没有记录 fatal exception。由此确认已写入镜像的 manifest、窗口布局及两个窗口首块可由 XNU 原生 UFS 路径读出；未据此声称窗口全量哈希验证、APFS 挂载或用户态启动成功。
+
+
+## 模式 12 候选集成
+
+模式 11 通过后，候选配置开启完整 NativeUfs 块设备类和已有签名策略验证路径，预链接固定 `21H461` 的 IOStorageFamily/APFS 依赖闭包。默认参数为 `native-ufs-probe=12`，由原有报告线程显示 IOMedia 发现结果；仍编译 `NATIVE_UFS_READ_ONLY=1`，未启用根卷挂载或用户态启动配置。模式 10/11 的已实测镜像保留在 `out/`，可继续作为底层读路径基线。
+
+`build-ufs-storage-bindings.py` 改编自 uke 固定提交的绑定检查，通过原始 KernelCache 核对公开 IOBlockStorageDevice 的 190 槽方法表、176 个继承方法、构造器、元类及基类析构语义，随后应用固定预链接偏移；不依赖另一个设备未公开的运行记录。脚本遇到版本、方法表或导入不匹配会停止构建。macOS 实际编译与绑定结果尚待云端确认。
+
+`prepare-ufs-policies.py` 复用 VerifiedRoot 的实际 C/RSA/篡改拒绝测试，从固定 OS/SystemOS 镜像生成两份策略，并用 C 校验器重新验证每一块。云端生成的私钥仅留在临时构建环境，不纳入上传路径；新内核的公开信任锚可与此前本地策略不同，但两份原始窗口的完整哈希固定，手机上的根镜像无需因此重刷。
+
+完整策略约 70 MiB，驱动还会建立受保护副本。因此候选将 DarwinBoot 请求的连续内存从 256 MiB 调至 512 MiB，FAT 负载容量调至 160 MiB。保留加载器实际内存分配及范围检查；新增 ADT 用例检查 512 MiB 请求，原有 256 MiB 输入仍支持。这个新内存窗口尚未进行真机测试。
+
+第 21 次 Actions 已由提交 `323c5f74f055c0b942ce36ca991ce501a34bad07` 启动：<https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39929267713>。本地四项 ADT 检查、源码隔离测试、八项存储回归及 21 段 ARM64 汇编检查通过；云端源码/板级与只读存储检查也已通过，正在准备固定镜像的策略。用户已将手机恢复 Fastboot，候选尚未临时启动。
+
+第 21 次构建随后在存储 ABI 参考对象的编译选项处失败：Apple Clang 不支持 `-Wno-unnecessary-virtual-specifier`，被 `-Werror` 拒绝。此前 NativeAES、完整 NativeUfs 均已编译通过；云端实际完成七组 VerifiedRoot 测试，并逐块验证 OS 的 1,483,785 块和 SystemOS 的 806,400 块。日志保存于 `out/oneplus13t/actions/run-21/logs/`，这些结果不代表手机上的逐块校验已通过。
+
+提交 `c745fdebf599c903ec0feea964cef564e315c984` 仅删除上述无效编译选项，保留严格告警和全部 ABI 检查。第 22 次构建已启动：<https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39931711046>。手机只读查询的 `max-download-size` 为 805,306,368 字节，候选尚未临时启动。
+
+第 22 次构建通过参考对象编译、190 槽位/176 内核方法匹配和构造入口识别，随后被新增的析构入口检查拒绝。固定 kernelcache 中，该抽象类的 D1/D0 为 `brk #1`，D2 位于 `0xfffffff00596edb8`，经导入桩跳转至 `IOService::D2`（`0xfffffff0077c799c`）；先前假定 D1 也为尾跳转不成立。提交 `bfc24028969d19e0795698dce1c658c924704e7c` 按实际指令检查 D1/D0、D2 分支、导入桩及目标符号。本地执行同一检查通过，把目标改为 D0 的负例被拒绝。第 23 次构建：<https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39933152338>，尚待完成及真机验证。
+
+第 23 次构建的全部 11 个 NativeUfs 绑定通过，随后签名策略编译被 XNU 记录中的可选 `EXPORT_HDRS/libsa` 缺失目录告警阻止。提交 `489b4b5970474dcda2389d355a169ac6245f5ad2` 仅增加 `-Wno-error=missing-include-dirs`，该告警仍可见，其余 `-Werror` 保留。本地检查确认真实头文件缺失和普通代码告警仍被拒绝；隔离补丁测试与脚本语法检查通过。
+
+## 第 24 次构建与模式 12 临时启动
+
+[第 24 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39935525749)全部通过，对应提交 `489b4b5970474dcda2389d355a169ac6245f5ad2`。产物位于 `out/oneplus13t/actions/run-24/`，内核为 127,119,360 字节，FAT 负载为 160 MiB。内核与负载的本地哈希匹配云端报告，FAT 内核、ADT 和启动参数读回一致。最终 Mach-O 中两份策略的 UUID、大小和完整镜像哈希均与已部署窗口一致，策略数为 2。
+
+最终内核含 13 个 Mach-O 映像，类型记录为 1,733 项，其中 1,523 项参与分池。按同版 XNU 分配函数重放，`kt_fixed_zones=240` 最大槽位为 26，ASan/UBSan 通过。实际 FAT 中的 ADT 请求 512 MiB，物理基址仍由 DarwinBoot 分配；新内存窗口能否在手机上正常使用仍需屏幕结果确认。
+
+启动镜像为 `out/oneplus13t/boot/stage6-run-24-verified-media/boot.img`，85,360,640 字节。v4 封装与解包比对通过，内嵌 160 MiB 负载，UEFI 和 DTB 与已验证的第 20 次镜像相同。再次确认设备序列号 `3B15BB01BAT00000`、产品 `sun` 后执行临时 `fastboot boot`，Sending、Booting 均返回 OKAY，退出码为 0，总用时 2.655 秒；日志为 `out/oneplus13t/logs/stage6-run-24-verified-media-fastboot.log`。本次未再刷写分区。
+
+模式 12 尝试发布两个经过策略验证的只读块设备，等待最多约 20 秒后主动 panic，显示 `published`、`reads`、`failures`、`media` 及磁盘信息。后续照片显示程序尚未到达该报告线程，而是在 AppleImage4 初始化中停止，详见下节。
+
+
+## 第 24 次真机结果：AppleImage4 缺少设备树节点
+
+照片显示 `last stage: mac_policy_initmach`、`root: not entered`，实际错误为 `panic: failed to get manifest properties`。这里 MAC 是 Mandatory Access Control（强制访问控制），该阶段属于 XNU 的安全策略初始化，与系统是否为 macOS 无关。
+
+照片中的 caller `0xfffffff004a982d4` 位于第 24 次预链接的 `com.apple.security.AppleImage4`。实际二进制在 `0xfffffff004a98604` 准备字符串 `/chosen/manifest-properties`，于 `0xfffffff004a98618` 调用节点查找，并在 `0xfffffff004a98620` 检查空指针；失败时跳到 `0xfffffff004a98700`，传入照片中对应的 panic 文本。当前 FAT 中的 ADT 确实缺少该节点。这里的属性容器与 `unixnu` 根镜像中的 `SHNGROOT` manifest 是不同对象，不能据此判断已写入根镜像损坏。
+
+已在 `make-oneplus13t-adt.py` 的 `/chosen` 下补上空 `manifest-properties` 子节点，并为 256/512 MiB 两种 ADT 加入节点检查。四项 ADT 测试通过。重新生成时沿用第 24 次随机种子；实际解码比较确认仅新增这个空节点，其余节点及属性、FAT 内核、签名策略和启动参数均保留。没有填入伪造的 manifest 值或修改 Image4 校验代码。
+
+修正版为 `out/oneplus13t/boot/stage6-run-24-manifest-node/boot.img`，85,360,640 字节；UEFI、原机 DTB、v4 封装及内嵌 160 MiB 负载保持一致，封装读回检查通过。该版本尚未临时启动，需要手机返回 Fastboot 后验证；补齐节点仅针对本次已定位的空指针失败，不代表后续 Image4 或根卷检查已通过。
+
+
+## 后续真机结果：Image4 哈希算法属性缺失
+
+用户新照片显示同一 AppleImage4 panic 调用入口 `0xfffffff004a982d4`，错误变为 `panic: non-sensical crypto hash method:`，`root: not entered`。启动路径已经越过先前缺少 manifest 容器的检查，但仍未到达根卷探测。
+
+同一恢复包的 `out/ipsw/21H461/DeviceTree.j120ap.im4p` 经 IM4P 提取和本地 LZFSE 解压，完整解析 249 个节点；原始 `/chosen/crypto-hash-method` 为 `sha2-384\0`。实际第 24 次 AppleImage4 二进制在 `0xfffffff004a98fec` 引用 `crypto-hash-method`，在 `0xfffffff004a99018` 引用 `sha2-384`，错误文本引用位于 `0xfffffff004a99100`。上一版 13T ADT 没有这一属性。该声明用于 Image4 算法选择，与 VerifiedRoot 策略内部的 SHA-256 是不同用途。
+
+已在 `/chosen` 增加 `crypto-hash-method = "sha2-384"`，保留结尾空字节，并在 256/512 MiB ADT 测试中检查准确值。四项 ADT 测试通过。实际负载比较确认相对上一版只新增这一属性，既有空 manifest 节点、随机种子、其他 ADT 属性、内核、签名策略及启动参数均保持一致。
+
+新镜像：`out/oneplus13t/boot/stage6-run-24-image4-hash/boot.img`。boot 封装和解包比对通过，UEFI、原机 DTB 及 160 MiB 内嵌负载容量保持一致。本轮未对手机执行命令、未刷写分区；修正版尚待临时启动，后续 Image4、卷发现和根卷挂载仍未确认。
+
+
+## 模式 12 真机结果：APFS 卷发现通过
+
+补齐 `crypto-hash-method` 后，用户照片显示 `NATIVE_UFS media report: published=2 reads=142 failures=0 media=7`，位置为 `NativeUfs.cpp:1784`。该行对应 `mediaReportThread()` 的主动 `panic("%s", gMediaReport)`，用于保存媒体枚举结果。照片还显示此前未记录 fatal exception；本次停机符合模式 12 的设计。
+
+| 媒体 | 照片中的 UUID | 对应内容 |
+| --- | --- | --- |
+| `disk1s1` | `8846FE78-2910-4297-AF97-D59BB6F8FC16` | SystemOS 卷 |
+| `disk3s1` | `04769D26-2CA0-4825-B443-E2E5F88300F2` | OS 根卷 |
+
+两者均与本地只读解析结果及嵌入签名策略一致。`reads=142` 是驱动读取计数，不能据此宣称手机已验证整个 8.74 GiB 镜像。实际已证明两份窗口能发布、原始 IOStorageFamily/APFS 能识别其卷，相关读取没有报告失败。
+
+最后阶段为 `root device wait begin`，最近阶段含 `root fallback: IOMedia Content=Apple_HFS`。当前 ADT 缺少 `/chosen/root-matching`，XNU 使用默认 HFS 匹配，因此没有选中已经发现的 APFS 根卷。
+
+已复用上游的 IOMedia UUID 匹配格式，为 13T ADT 工具增加现有 payload 接口使用的 `--root-match-volume-uuid` 参数；`board.toml` 指向上述 OS 卷 UUID。UUID 先由标准库校验和规范化，再构造匹配字典。六项 ADT 测试通过，包含默认不匹配、有效 UUID 规范化及无效输入拒绝；实际 CLI 输出与负载中的匹配字典一致。
+
+新候选位于 `out/oneplus13t/boot/stage6-run-24-root-match/boot.img`。与上一版逐项比较，仅新增根卷匹配属性，随机种子、其他 ADT 属性、内核、签名策略和启动参数一致。继续使用 `native-ufs-probe=12` 与原有只读构建；没有启用 owner root 信任、改变认证判定或补入用户态安全组件。该候选用于观察根设备选择和挂载进度，不能作为完整用户态启动镜像。报告线程仍可能在挂载完成前主动停止。
+
+封装及解包比对通过，UEFI、原机 DTB 与 160 MiB 内嵌负载容量保持一致。本轮未对手机执行命令、未刷写分区；新候选尚待临时启动。
+
+
+## UUID 匹配后的真机结果：根卷已挂载，认证未通过
+
+最新照片明确显示 `root device wait returned: matched`、`root device selected: disk3s1`、`setconf returned: disk3s1`，以及 `vfs_mountroot mounted; authentication pending`。随后的 `rootvp not authenticated after mounting @bsd_init.c:1101` 位于根卷认证失败分支；此前没有 fatal exception。这轮已验证 APFS 根卷选择和挂载，尚未通过认证或执行用户态。
+
+当前构建已用 VerifiedRoot 对 UFS 窗口读取做签名策略及逐块校验，但 `CONFIG_XNU_OWNER_ROOT_AUDIT` 和 `CONFIG_XNU_OWNER_ROOT_TRUST` 均未启用，挂载后没有查询这条验证链。不能通过修改启动参数或去掉 panic 来代替挂载设备的认证绑定。
+
+本地提交 `2b010bb` 启用已有的 owner root 审计，继续关闭 owner root 接受开关。它复用 `NativeVirtioBlock` 中已有的挂载设备查询函数：用 BSD 主次设备号匹配唯一 IOMedia，沿 provider 链调用 `native_ufs_block_authenticates()`，将实际卷 UUID 与已验证的 UFS 策略绑定。复用的组件编入内核，但未添加 VirtIO 设备节点；13T 的存储仍由 NativeUfs 提供。构建器要求该组件的原始 IOBlockStorageDevice 导入全部落在已核实的 UFS 绑定集合中。
+
+新增 `native-root-audit=1` 仅在审计检查点输出 `NATIVE_ROOT binding: apple=... owner=... readonly=... mounted=... selected=...` 并主动停机。预计下一步应验证 `owner=1`、`readonly=1` 且两项设备号一致；这些值尚未在真机取得。报告之后的根卷接受、SystemOS/Data 挂载和用户态安全组件集成仍待完成。
+
+本地六项 ADT 测试、两项准备/隔离测试和实际审计检查点的 ASan/UBSan 测试通过，覆盖未启用报告、启用报告、成功/失败绑定值的保留。完整 Apple 工具链编译仍需云端运行。平台自动审批两次拒绝向既有 `IssacL04/UniXNU-Pagani_SM8750` 的 `bringup/stage6-unixnu` 分支推送，补充本会话此前的持续云端构建授权后仍被拒绝，理由是未认可该目的地的明确发布授权。本次没有触发云端构建，没有新的 boot.img，也没有对手机执行命令或刷写分区。
+
+
+用户随后明确允许该提交推送和构建。`2b010bb7b5bc8bbd03a7c139a99742a0f10809ea` 已推送到既有分支，[第 25 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39947153821) 已启动。构建完成后检查实际内核、负载与启动封装，再进行真机审计。
+
+第 25 次构建在新增测试读取源码目录时失败：同一步骤中 `$UNIXNU_TREE` 尚未从 `$GITHUB_ENV` 生效。提交 `80b5729` 仅改为使用已有 `$TREE`。第 26 次构建（run `39947395002`）已通过该测试、ADT 和只读存储检查，正在继续完整构建。
+
+
+## 第 26 次构建：根卷绑定审计镜像已准备
+
+[第 26 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39947395002) 已全部成功，提交为 `80b57292a1a4e99731d14a9f53ff066d006d1e20`。新增检查点测试、只读 UFS 测试、原始存储绑定、完整 XNU 编译及 panic 参数路径检查均通过。策略构建使用实际 RSA 与 C 校验器验证 OS 的 1,483,785 个块和 SystemOS 的 806,400 个块。新增认证查询组件编译成功，其全部 IOBlockStorageDevice 导入均在已核实的 NativeUfs 绑定集合内。
+
+下载产物位于 `out/oneplus13t/actions/run-26/`。最终内核与 FAT 内嵌内核完全一致，实际 ADT 包含 OS 卷 UUID、两个已修复的 Image4 输入和 512 MiB DarwinBoot 分配请求；`native-root-audit=1`、模式 12 和原有只读配置均正确。实际内核包含挂载设备查询、UFS 验证回调及诊断文本，嵌入策略数量为 2；`native_owner_root_trust_enabled` 位于零填充的 `__common`，owner root 接受保持关闭。对实际预链接内核的分配记录重放通过：13 个映像、1,734 条类型记录、1,524 条参与分池，预算 240 时最大 26 槽，ASan/UBSan 无报错。
+
+启动镜像为 `out/oneplus13t/boot/stage6-run-26-root-audit/boot.img`，85,368,832 字节。封装、解包比对及哈希核对通过，UEFI、原机 DTB、v4 头与 160 MiB 内嵌负载容量保持一致。本轮尚未执行手机启动或分区写入；等待手机返回 Fastboot，或由用户手动临时启动。下一张照片需要核对 `NATIVE_ROOT binding` 中的 `owner`、`readonly` 和两个设备号。
+
+用户确认返回 Fastboot 后，读取到同一序列号 `3B15BB01BAT00000`、产品 `sun`，随后临时启动第 26 次审计镜像。Sending 和 Booting 均为 OKAY，命令退出码 0，总用时 2.566 秒；日志为 `out/oneplus13t/logs/stage6-run-26-root-audit-fastboot.log`。未刷写分区。Fastboot 结果仅确认镜像传输和启动请求成功，认证绑定结果仍需屏幕照片。
+
+
+## 第 26 次真机审计通过，继续原始 AMFI 启动集成
+
+用户最新照片显示 `NATIVE_ROOT binding: apple=80 owner=1 readonly=1 mounted=1000006 selected=1000006 @bsd_init.c:1264`。`apple=80` 是原生根卷认证的返回值；`owner=1` 来自挂载设备、实际 IOMedia UUID 与已验证 UFS 策略的查询，且根卷只读。后两项按 `%x` 输出，均为 `0x01000006`。检查点按本次构建配置主动 panic；这已完成绑定审计，不代表 launchd 已运行。
+
+提交 `abb7bc7` 启用已有 owner root 接受逻辑：原生认证失败时，仅在上述 owner 绑定查询通过且根卷只读的条件下继续。它同时加入原始 AppleMobileFileIntegrity、CoreTrust、sandbox、ApplePMGR 与文件压缩 kext 的依赖闭包，使用原项目固定的 AMFI 早期初始化入口。设备树保留 13T 身份，新增 DarwinBoot 所需的 TrustCache 内存绑定占位和平台代码限制。
+
+信任缓存由同一 21H461 恢复包的两份未修改原始模块组成，共 61,356 字节，固定 SHA-256 为 `7416ca4f8377146626bb284e2133c76bee6cb4e3ee0af5d648b186235a7323a7`；未加入自签名用户程序。原始 16 KiB 代码签名到 4 KiB 页的验证缓存、SystemOS 挂载/启动、启动 manifest 和 SystemOS union 使用既有实现。本轮不加入可写 Data 分区或持久化功能。
+
+平台 provider 沿用原项目受限 PMGR 实现，保留上游 ABI 名称。构建改为直接核对固定原始 kernelcache，不依赖旧设备的历史构建产物：原始 AMFI 的读/置位/写调用、PMGR 的两个 AON 方法、实际目标 AppleT8011PMGR 的相同常量读/空写指令均通过本地核对。其余未实现的电源操作主动 panic；没有访问 Apple 寄存器或宣称 SM8750 电源管理已经完成。实际 340 槽 C++ 分派与链接仍由云端编译检查。
+
+七项 ADT 测试、真实根卷审计函数测试及信任缓存校验通过；信任缓存的截断、顺序交换和内容损坏输入均被拒绝。提交已推送，第 27 次 Actions 为 https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39960099028 。目前尚无新启动镜像，也未执行本轮手机命令。
+
+第 27 次构建通过了策略、原始信任缓存和原始 PMGR 指令检查，随后在 PMGR 组件编译时因 Xcode 16.4 不认识 `-Wno-unnecessary-virtual-specifier` 而失败。提交 `cd618a2` 仅删除该警告选项，保留 `-Wall -Wextra -Werror` 和全部 ABI 检查，已推送并触发下一次构建。失败日志保存在 `out/oneplus13t/actions/run-27/logs/`。
+
+
+## 第 28 次构建与临时启动
+
+[第 28 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39961798078) 全部成功，提交为 `cd618a276130def4b82712dcb87d47a5c6e1cbf5`。PMGR 组件通过 ARM64/iOS17 编译、完整分派表和原始绑定校验。完整 XNU、17 个原始组件的预链接、FAT 负载和 panic 参数路径检查均通过。实际 RSA 与 C 校验器再次通过 OS 的 1,483,785 块和 SystemOS 的 806,400 块验证。
+
+产物保存在 `out/oneplus13t/actions/run-28/`。下载改用分段读取加速，范围长度和 ZIP CRC 全部通过。最终内核为 127,250,432 字节，SHA-256 为 `cec9bb67c88634b7965b2336916859115d51023035d6185edaf7180b52816bcc`；实际 FAT 中的内核完全相同。FAT 的 SHA-256 为 `f61fac4a1619358b63aab36ff6c7607d36c9b9ae4d66a7c28261f61a0257ca6b`。
+
+本地直接检查 FAT，确认原始信任缓存与本地固定输入完全一致、ADT 包含 TrustCache 占位和平台代码限制、OS UUID 正确，启动参数为 `native-ufs-root=1 sheng-pmgr=2`，已去掉模式 12 和根卷审计停机参数。实际内核的 owner root 接受开关为 1，策略数量为 2；两个策略头的 UUID、镜像大小与摘要均匹配手机上已有镜像。AMFI 和 PMGR 的实际可执行段哈希仍与固定原始输入一致。分配记录重放检查通过：18 个映像、1,869 条记录、1,638 条参与分池，预算 240 时最大 27 槽，ASan/UBSan 无报错。
+
+启动镜像为 `out/oneplus13t/boot/stage6-run-28-root-startup/boot.img`，86,339,584 字节，SHA-256 为 `2fe8d84262c86bb5da0975e8269e94b40830f25857aaf3be50a6d3170d9e2ef8`。封装解包与输入比对通过；UEFI、原机启动 DTB、v4 头和 160 MiB 内嵌负载容量保持一致。
+
+用户确认手机进入 Fastboot 后，已核对序列号 `3B15BB01BAT00000` 和产品 `sun`，并临时启动该镜像。Sending 用时 1.969 秒、Booting 用时 0.337 秒，均为 OKAY；总用时 2.792 秒、退出码 0。日志为 `out/oneplus13t/logs/stage6-run-28-root-startup-fastboot.log`。没有刷写分区。当前只能确认传输和启动请求成功；PMGR 运行、SystemOS 挂载和 launchd 执行仍需下一张真机照片判断。
+
+
+## 第 28 次真机结果：根卷接受通过，SystemOS 准备未返回
+
+用户照片显示 `root authentication decision recorded` 之后继续完成 devfs、信号、BSD task、mountroot post hook 和 `bsd_init`，随后出现 `bsd_do_post - done`、`load_init_program enter` 与 `SystemOS mount enter`。屏幕没有 panic 标题，顶部 poll/timer 仍在刷新。底部较早的 `ether_family_init`、`net_init_run`、`setconf` 等内容来自环形日志；不能据此判断发生了重启循环。
+
+这证明根卷接受阶段已继续执行，用户态启动准备已开始，但尚未证明 SystemOS 挂载成功或 launchd 已执行。`SystemOS mount enter` 包围整个 `native_owner_cache_prepare()`；其中包含 OS 设备认证复查、SystemOS 设备查询、copyout、实际 mount、vnode 查询、挂载后认证以及 boot manifest 发布。原有日志无法区分具体等待位置。
+
+照片中的 `vm_free_delayed_pages: initialized 0 free pages` 不能作为系统剩余 RAM 为零的证据。按本次构建锁定的 [Apple XNU 源码](https://github.com/apple-oss-distributions/xnu/blob/d8b80295118ef25ac3a784134bcf95cd8e88109f/osfmk/vm/vm_compressor_backing_store.c)，`vm_swap_create_file failed` 是后台 swap 创建线程在函数返回失败后打印的日志；打开文件失败等情况都会走该返回路径。本配置尚无可写 Data/swap，但照片未提供失败 errno 或内存计数，不能将这行直接认定为 SystemOS 停滞的根因。
+
+提交 `0d4aeff` 仅增加观测：在上述 SystemOS 调用边界使用已有 `boot_progress_root()` 更新日志和顶部最后阶段；进入准备函数后，原来的 CPU 状态行切换为 `free=... avail=... UFS=... err=...`。页数与 UFS 计数均为十进制，页大小为 4 KiB；这是软件计数的即时读取，字段可能来自相邻更新。原有 poll/timer 仍为十六进制。状态更新不访问设备寄存器、不取得 UFS 锁、不改变请求或认证状态。状态行按屏宽截断，防止覆盖最后阶段。
+
+实际渲染器的 ASan/UBSan 测试和准备/隔离测试通过，覆盖新计数的格式、窄屏截断、ROOT 行保留、光标恢复和计数不被观察者改写。根卷认证、原始代码签名、挂载标志、只读 UFS 和设备树输入保持上一版配置。[第 29 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39969583173) 已启动，尚未生成新的启动镜像。
+
+第 29 次构建在首轮 XNU 编译失败。完整日志确认 `kern_exec.c` 调用 `boot_progress_root()` 时缺少声明；该函数属于 `early_boot_progress.h`，此前文件只包含 `boot_progress.h`。提交 `4fde866` 在 SystemOS 补丁中补上正确的头文件。隔离补丁准备通过，直接从实际补丁生成的头文件在诊断开关为 0、1 时均通过 C11 严格语法检查，且调用文件在使用前包含该头文件。失败日志保存在 `out/oneplus13t/actions/run-29/logs/`。修复已推送重建；尚未执行本轮手机启动。
+
+[第 30 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39971699941) 已启动，使用提交 `4fde8661799d728c0e1d86e37036f2c4e2ecfbfd`。
+
+
+## 第 30 次构建与诊断镜像临时启动
+
+第 30 次 Actions 全部成功，提交为 `4fde8661799d728c0e1d86e37036f2c4e2ecfbfd`。完整 XNU 编译、原始 PMGR 绑定、内核预链接、FAT 生成和 panic 参数路径检查均通过。产物位于 `out/oneplus13t/actions/run-30/`，下载范围、分段长度和 ZIP CRC 校验通过。
+
+实际 FAT 内核与独立内核完全一致，大小为 127,250,432 字节。内核包含所有新增 SystemOS 阶段文字和五项 RAM/UFS 计数符号；ADT、原始信任缓存、根卷启动参数、owner trust 接受开关、两份策略身份以及 AMFI/PMGR 原始可执行段检查通过。实际分配记录重放仍为 18 个映像、1,869 条记录、1,638 条参与分池，预算 240 时最大 27 槽，ASan/UBSan 通过。
+
+内核 SHA-256 为 `461beee763a751576727dabd000792c382ff04ec1c61ae9fede00febd8149cc1`，FAT SHA-256 为 `e2e7e1aaa1aadb39ce4750bd6ccab972bf160dc816f60041908b3753a8127347`。
+
+启动镜像为 `out/oneplus13t/boot/stage6-run-30-systemos-progress/boot.img`，86,339,584 字节，SHA-256 为 `1a8a5498683e51e80165d1064c7402b45e566aea05786ccb14cae7699770033a`。封装解包与输入比对通过，UEFI、原机 DTB、v4 头和 160 MiB 内嵌负载保持一致。
+
+用户此前确认手机已进入 Fastboot；本轮再次读到序列号 `3B15BB01BAT00000`、产品 `sun`，随后执行临时启动。Sending 和 Booting 均为 OKAY，分别耗时 1.964 秒与 0.337 秒，总用时 2.662 秒，退出码 0。日志为 `out/oneplus13t/logs/stage6-run-30-systemos-progress-fastboot.log`，没有刷写分区。
+
+目前仅确认传输与启动请求成功。需新照片读取顶部 ROOT 阶段、free/avail 页数及 UFS/err 计数；若停住，再间隔约 30 秒拍摄同一区域以比较计数。SystemOS 挂载与 launchd 启动仍未验证。
+
+
+## 第 30 次真机结果与社区移植对照：首个用户页访问
+
+新照片最后阶段为 `SystemOS copyout enter`，scratch 地址是 `0x1000`。此前根卷认证返回 1，SystemOS UUID 查询已找到 `/dev/disk1s1`，设备号为 `0x01000002`。未出现 `SystemOS mount syscall enter`，因此等待位于四次 copyout 组成的区间；照片不足以区分具体哪一次。顶部空闲页约 74,160 页（4 KiB 页，约 290 MiB），UFS 读取计数为 241；这张静态照片不能确认计数是否持续变化，也不支持“内存已经耗尽”的判断。屏幕未显示 panic 标题。
+
+按用户给出的 [UniXNU 设备列表](https://unixnu.com/zh/devices/)，定向查看了使用相同 iPadOS 17.7.11 输入且进度更靠前的移植：
+
+- [umi 构建器，固定提交 3eb7257](https://github.com/reAAAq/UniXNU-umi/blob/3eb72578597d2ca16471b172d45eddc096a34a04/bringup/tools/build_umi_xnu.py#L165) 在 owner root 启动时明确要求 `CONFIG_XNU_NATIVE_PAN=y`，否则直接拒绝构建。设备页报告已到 Hello/设置；本次未独立验证该设备运行。
+- [uke 完整配置，固定提交 cf55281](https://github.com/Allenwdk/UniXNU-uke/blob/cf552816de501906082405ebb0e355d8c70f7b60/configs/uke-full_defconfig#L27) 启用原生 PAN，设备页报告已运行 launchd。该仓库其他认证和 Data 方案不作为本轮改动。
+- [tb128fu 配置，固定提交 0d55473](https://github.com/xVanTuring/UniXNU-tb128fu/blob/0d55473e5c3a60656a12123d4c2fa8ea4f4a7383/configs/tb128fu_defconfig#L43) 明确关闭 PAN，因为其 ARMv8.0 CPU 不支持这组指令。这个差异说明不能直接照搬完整设备配置。
+
+本次使用的 [Apple copyio.c](https://github.com/apple-oss-distributions/xnu/blob/d8b80295118ef25ac3a784134bcf95cd8e88109f/osfmk/arm64/copyio.c#L90) 仅在 `__ARM_PAN_AVAILABLE__` 为真时，在用户访问前清 PAN、之后恢复 PAN。原生适配已有 `native-arm-pan.patch`，通过 `XNU_NATIVE_PAN` 为 BCM2837 构建目标声明该能力；13T 之前未开启它。对实际第 30 次内核 `_copyout` 的反汇编确认：检查地址之后直接进入 `__bcopyout`，没有 PAN 读写指令。
+
+固定源码的 `start.s` 将 `SCTLR_EL1` 写为默认值，`proc_reg.h` 的默认值没有设置 SPAN 位。支持 PAN 的 CPU 在异常入口可因此置 PAN；若用户访问路径未临时清除它，权限异常可能反复发生，而缺页处理无法解除 PAN 保护。这与当前第一次写入用户 scratch 页时停滞相符，是本轮优先验证的机制。尚未读取真机该位置的 PAN/ESR/FAR，因此不能仅凭照片宣布根因已经实测确认。
+
+提交 `f7549d0` 只在 `configs/oneplus13t_defconfig` 加入 `CONFIG_XNU_NATIVE_PAN=y` 和原因注释。现有配置解析器与实际 `xnu_env()` 检查通过，输出 `XNU_NATIVE_PAN=1`；owner root/SystemOS 选项保留，Data 挂载仍关闭。完整编译、最终指令检查及临时启动待完成。
+
+[第 31 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39977287333) 已启动，提交为 `f7549d053c2b82952ea762a26bb1b85aedd48c3d`。
+
+
+## 第 31 次：原生 PAN 镜像验证与临时启动
+
+第 31 次 Actions 全部成功，产物位于 `out/oneplus13t/actions/run-31/`。分段下载约 57 秒，范围、长度和 ZIP CRC 校验全部通过。内核与实际 FAT 内嵌文件相同；ADT、原始 trust cache、根卷参数、两份策略、owner trust 开关和 AMFI/PMGR 原始可执行段检查均通过。实际分配记录仍为 18 个映像、1,869 条记录、1,638 条参与分池，预算 240 时最大 27 槽，ASan/UBSan 通过。
+
+最终内核反汇编确认：`_copyin` 和 `_copyout` 都先读取 PAN，在实际 `__bcopyin`/`__bcopyout` 调用前执行 `msr PAN, #0`，返回后执行 `msr PAN, #1`。同一检查已用第 30 次实际内核验证，能拒绝缺失 PAN 切换的旧产物。这证明新配置确实进入执行代码，尚不代表真机已越过该路径。
+
+内核 SHA-256 为 `42b85d96b615d586cdf3bf2cf2d79ba80337b4cb344d46549c10954e0ec80ecd`，FAT SHA-256 为 `52cae3eadad3252b08d101ad4e5f41576f5c8e85eda02da531196c8fa2661b21`。
+
+启动镜像为 `out/oneplus13t/boot/stage6-run-31-native-pan/boot.img`，86,339,584 字节，SHA-256 为 `3f2af3df5432f50fd214e40c98114997a60fe4be761096fc054deb376631430d`。封装解包和实际文件校验通过，UEFI、原机 DTB、v4 头、零 Android ramdisk 和 160 MiB 内嵌负载保持一致。
+
+用户确认进入 Fastboot 后，已再次核对同一序列号 `3B15BB01BAT00000` 和产品 `sun`，然后临时启动。Sending 用时 1.976 秒、Booting 用时 0.337 秒，均为 OKAY；总用时 2.600 秒，退出码 0。日志为 `out/oneplus13t/logs/stage6-run-31-native-pan-fastboot.log`。没有刷写分区。等待新照片确认是否越过 `SystemOS copyout enter`，以及挂载或 launchd 是否继续推进。
+
+
+## 第 31 次真机：SystemOS 成功，tzinit 缺少可写 Data
+
+照片显示最后阶段为 `exec process signature accepted`，根阶段 `SystemOS boot manifest returned`，序号 `0x1f`、返回值 0。panic 为 `tzinit[17] exited -- no exit reason available -- (signal 0, exit status 30)`，调用地址 `0xfffffff00bfdabf4`，启动约 20 秒。此前的 copyout 停点已消失；进程 17 和连续的 exec/signature 阶段说明已进入 launchd 之后的服务启动，但尚未得到稳定用户态或界面。
+
+通过本地只读 apfs-fuse 库从同一 OS 原始镜像提取 `/usr/libexec/tzinit`，文件标识为 `TimeZoneUpdates-87.2.1`。提取器同时读出的 launchd 哈希为 `8cec9a3c44a443b08e977ccc5d577850316ad428c575dc01f09b018dbd5b6a25`，与原始输入锚点一致。tzinit 的错误分支在 `0x100005e18` 至 `0x100005e40` 读取 errno、检查 1–255 范围并传入 exit；程序包含 `/var/db/timezone/zoneinfo`、`icutz`、`localtime` 及 create_symlink 调用。退出码 30 对应 EROFS；具体哪一次文件调用失败尚无用户态日志。
+
+下一候选复用上游 NativeRamBlock 的稀疏页读写和现有 Data 挂载代码，使用原始 private/var（排除 staged_system_apps）生成 256 MiB APFS，保留 uid/gid、权限与符号链接。真实卷 UUID 注入构建配置，DBRDISK1 打包结果须通过完整逻辑内容 SHA-256 回验；DarwinBoot 通过 PackedRAMDisk 传入。Data 仅写 RAM，重启后恢复初始种子，不启用 UFS 持久窗口。
+
+本地已通过 7 项 ADT 检查和源码隔离检查。现有稀疏盘测试中旧的 2 GiB 上限断言与当前允许 1 TiB 的解析器不符；仅在临时测试副本中将越界值改为 1 TiB + 4096，4000 次差分读写及损坏输入、短复制、分配失败检查通过 ASan/UBSan。生产驱动未作更改。APFS 格式化、驱动链接与新镜像真机结果仍待本轮构建验证。
+
+本地提交 `5277550` 已完成上述接线；256 MiB 稀疏样本通过现有 DBRDISK1 打包和完整逻辑 SHA-256 回验。用户已确认手机重新进入 Fastboot，并再次明确授权本次及后续修复的仓库推送和 Actions 构建。提交已推送，第 32 次构建（39985324701）已通过原始镜像校验与 RAM Data 生成，正在编译 XNU。当前尚未执行本轮临时启动。
+
+
+## 第 32 次构建：Data 种子通过，移除跨设备链接依赖
+
+[第 32 次构建](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39985324701)已完成真实 APFS Data 格式化及 NativeRamBlock 编译，最终内核链接缺少 `sheng_boot_watchdog_policy`。该调用来自通用 `zzz-boot-progress.patch` 的 Data 挂载后路径，对应 sheng 设备的可选 launchd 服务禁用策略，当前 13T 未使用这些启动选项，也没有包含该实现。提交 `d75ba0b` 在 13T 的隔离源码补丁中移除这段调用，保留 Data 挂载、错误处理和进度记录。补丁应用及 8 项现有内核构建测试通过；[第 33 次构建](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39988002937)正在验证最终链接。
+
+第 32 次真实种子位于 `out/oneplus13t/actions/run-32/oneplus13t-xnu-32/ram-data/`：逻辑容量 268,435,456 字节，打包后 1,003,616 字节，卷 UUID 为 `CBCABAE2-8CE9-4DCB-971F-F3F68F2A7B26`。39 个原始文件共 611,715 字节，属主和权限均已逐项核对。下载后独立检查编码哈希、完整逻辑 SHA-256 和只读 APFS 解析通过；解析出的 UUID 与 macOS 报告一致，卷为未启用 FileVault 的 OwnerData。重建将产生自己的配套种子和 UUID，不能混用不同构建的内核与 Data。
+
+
+## 第 33 次：RAM Data 候选检查通过并临时启动
+
+[第 33 次构建](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39988002937)以 `d75ba0b` 完成，全部步骤成功。上一轮缺失的 sheng 专用策略调用已从实际内核中消失，Data mount enter/returned 诊断仍保留。最终内核为 127,320,064 字节，含 17 个原版预链接组件；原版安全组件代码、两份根策略身份、trust cache 和启动参数检查通过。NativeRamBlock 的种子查询、读写和 Data 挂载状态符号均已链接，copyin/copyout 的 PAN 清除与恢复仍包围实际复制调用。18 个映像共 1,870 条 kalloc 类型记录，1,639 条参与分池；预算 240 的最大槽位为 27，原始预算算法 ASan/UBSan 重放通过。
+
+实际 FAT 中的 Data 与上传种子逐字节一致，逻辑容量 268,435,456 字节，压缩打包后 1,003,616 字节，卷 UUID 为 `578EFED6-C632-4032-8AFB-6598EC3F66D3`。独立 APFS 解析得到相同 UUID，完整逻辑 SHA-256 为 `4195d9243ea4a72b478ae12bfa359a2b261f07e49b6cce9d51c54c5e285296a3`；内核中包含此 UUID，ADT 包含 PackedRAMDisk，启动配置通过 initrd 加载对应文件且没有持久化参数。
+
+内核 SHA-256 为 `f2f88abc43a3d6411733a3dd44bb473f1c55647239b5f0c26a460ddf3184ef2d`，FAT SHA-256 为 `400bcf262df12c604e37c0035526978bf9f0848b6fe050305307b7c0ed5f2612`。启动镜像位于 `out/oneplus13t/boot/stage6-run-33-ram-data/boot.img`，86,925,312 字节，SHA-256 为 `f81f5d3c9f8d89b946764e474ee5f60e0ce2ff175c0a8b463b411ba60b41048e`。封装检查通过，v4 头、160 MiB 内嵌 FAT、UEFI 和原机 DTB 均符合预期，Android ramdisk 字段为空。
+
+只读 Fastboot 查询确认设备 `3B15BB01BAT00000`、型号 `sun` 后，已执行 `fastboot boot`：Sending 1.988 秒、Booting 0.337 秒，均为 OKAY，总计 2.668 秒。日志为 `out/oneplus13t/logs/stage6-run-33-ram-data-fastboot.log`。本轮没有刷写分区；Data 写入仅保存在 RAM，重启后恢复初始种子。当前只确认镜像发送和启动请求成功，Data 真正挂载、tzinit 正常退出及后续用户态运行仍需手机照片验证。
+
+
+## 第 33 次真机：watchdogd SIGTRAP 与第 34 次临时服务策略
+
+新照片显示 `watchdogd[144] exited -- exit reason namespace 2 subcode 0x5`，最后阶段为 `exec process signature accepted`。SystemOS boot manifest 返回 0，序号 0x1f，age 为 0x65，约 101 秒。页面没有此前记录的 fatal exception。当前候选已经执行到 Data 挂载之后的服务启动路径，未再停在 tzinit；没有单独采集 tzinit 的成功退出记录。
+
+固定 [XNU reason.h](https://github.com/apple-oss-distributions/xnu/blob/xnu-10063.141.1/bsd/sys/reason.h) 定义 namespace 2 为 OS_REASON_SIGNAL，[signal.h](https://github.com/apple-oss-distributions/xnu/blob/xnu-10063.141.1/bsd/sys/signal.h) 定义 5 为 SIGTRAP。两份官方文件已实际读取核对，因此本次并非 watchdog 超时 namespace。
+
+从同一原始 OS 只读提取的 watchdogd 在 `0x100006768` 查找 IOWatchdog；没有匹配服务时，在非虚拟机分支进入 `0x10000aaf8`，通过 `_os_crash` 和 `brk #1` 报告无法查找 watchdog KEXT。当前最终内核没有 IOWatchdog 提供者。原始 com.apple.watchdogd.plist 启用了 `_PanicOnCrash/PanicOnConsecutiveCrash`，与当前进程退出触发内核 panic 的现象一致。照片没有用户态异常 PC，因此缺少后端仍是有代码证据支持的首要解释，未把具体分支当作现场捕获结果。
+
+提交 `57c36e5` 在新建的临时 APFS Data 中写入 `db/com.apple.xpc.launchd/disabled.plist`，唯一条目为 `com.apple.watchdogd=true`，并创建空的 disabled.migrated 标记。两文件权限为 0644；源任务 Label、ProgramArguments 和 panic 策略必须与固定系统一致，否则停止。现有策略文件和符号链接路径均拒绝覆盖。原始系统文件、watchdogd、launchd 及内核 panic 条件均未修改。此策略仅用于硬件后端尚未实现的 bring-up，恢复 watchdog 功能仍需实际驱动适配。 同一原版 launchd 的 `0x100047090` 对 disabled.migrated 调用 stat，成功即跳转到 `0x100046fd4` 加载 disabled.plist；这确认空标记足以选择现有策略加载路径。
+
+本地 3 项回归检查、实际原始任务 plist 检查通过，云端检查已接入同一测试。[第 34 次构建](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39991765255)正在运行；用户已确认重新进入 Fastboot。后续先从实际 APFS 种子读回策略，再临时启动；物理 UFS 写入继续关闭。
+
+
+## 第 34 次：策略产物核对与临时启动
+
+第 34 次 Actions 全部成功。下载范围、长度与 ZIP CRC 检查通过；从实际 FAT 提取的内核和 Data 与上传文件完全一致。独立解析实际 APFS 后，disabled.plist 只有 `com.apple.watchdogd=true`，disabled.migrated 为零字节。内核仍含 17 个原版预链接组件，原始安全代码、两份根策略、trust cache、PAN 切换及 Data 挂载诊断均通过检查。kalloc 共 18 个映像、1,870 条记录、1,639 条参与分池，预算 240 的最大槽位仍为 27。
+
+Data UUID 为 `924B8B8B-321B-45B9-AE49-3862B0AE81F2`，256 MiB 逻辑镜像打包为 1,007,712 字节；完整逻辑 SHA-256 为 `b12d2639f31e835ff42fa59dba79762b9d49c3dda856234a6c0624447d5fb7e6`，并已核对内核中的卷 UUID。仍从原版 private/var 保留 39 个文件共 611,715 字节及其属主和权限。
+
+启动镜像位于 `out/oneplus13t/boot/stage6-run-34-watchdog-policy/boot.img`，86,925,312 字节，SHA-256 为 `6714d95dffd0f55550009e6920220ff0c4d83964cd4c69e07eff05e49748537f`。封装解包检查、v4 头与文件哈希通过；UEFI、原机 DTB 和 160 MiB 负载布局保持一致。
+
+用户确认重新进入 Fastboot 后，再次只读核对设备 `3B15BB01BAT00000` 和型号 `sun`，随后执行临时启动。Sending 1.981 秒、Booting 0.337 秒，均为 OKAY，总计 2.613 秒，退出码 0。日志为 `out/oneplus13t/logs/stage6-run-34-watchdog-policy-fastboot.log`。没有刷写分区。当前等待新照片确认是否越过 watchdogd 停点；硬件 watchdog 尚未实现，Data 修改随重启清除。

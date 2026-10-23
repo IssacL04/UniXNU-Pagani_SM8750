@@ -4,17 +4,19 @@
 
 ## XNU 内核适配与 macOS Actions
 
-最终目标是在 13T 上启动 iPadOS 用户态与界面；根卷使用上游移植路线固定的 iPadOS 17.7.11（21H461），目标为独立的 64 GiB `unixnu` 分区。8.74 GiB 根镜像及签名策略已生成并通过本地校验，尚未写入手机。Stage 6 的第 14 次内核已在真机越过早期 VM 初始化并进入 BSD 根设备查找，随后因 SMMU 映射范围小于实际布局而主动停止。第 15 次照片确认几何检查已通过，随后触发新增的 `unsupported SMMU stream count` 限制。模式 7 随后确认原始组数为 132，UFS 精确条目位于 slot 0、指向 bank 0。已恢复高通的 128 组兼容处理，并允许将该条目重定向至空闲 bank，保留其他设备映射；第 16 次真机照片确认 SMMU 配置和读回检查通过，现停在第一条 NOP OUT 命令超时；第 17 次照片确认 200 ms 预算实际经过约 496 ms、仅两次轮询，且 DMA 未更新。已修复短轮询进入线程等待和多指令汇编被分号截断的问题，本地检查通过，准备第 18 次构建。实测分区边界、补丁、验证结果和续接步骤见 [STAGE6.md](STAGE6.md)。当前源码内核用于硬件探测，iPadOS 根卷挂载、`launchd` 与界面尚未完成。下文 run-9/run-10 记录保留早期启动基线。
+当前已走通 bring-up 阶段 1–6 的主要启动目标，正在推进阶段 7 用户态。系统输入固定为 iPadOS 17.7.11（21H461）；8.74 GiB 根镜像已写入独立的 64 GiB `unixnu` 分区，XNU 通过只读 UFS 路径挂载 OS/SystemOS，并启动原版 `launchd` 和系统服务。
 
-当前提供源码内核的早期启动配置和 UEFI 负载通路。第 6 次镜像已实机显示 `S1` 至 `S6`；第 7 次越过控制台异常；第 8 次越过 `zalloc`；第 9 次实机确认进入 BSD 根设备查找，等待 60 秒后主动 panic。完整 panic 页保留了 `poll=0x3c`、`timer=0x1a3` 和超时路径。单核中断与线程已运行，当前没有可用根设备或用户态，长期稳定性仍待验证。
+第 33 次真机加入 256 MiB 临时 RAM Data 后，推进到 `watchdogd[144]`，约 101 秒后发生 SIGTRAP panic；代码分析指向缺少 IOWatchdog 后端。第 34 次仅在 RAM Data 中停用 `com.apple.watchdogd`，已通过云端构建、实际镜像检查并执行临时启动，等待新的真机结果。稳定用户态、图形界面和交互尚未完成；Data 修改随重启清除，物理 UFS 写入保持关闭。详细记录见 [STAGE6.md](STAGE6.md)。
 
-| 部分 | 本轮状态 | 执行位置 |
+| 部分 | 当前状态 | 执行位置 |
 | --- | --- | --- |
-| DarwinBoot 与 13T BootPayloadDxe | 已加入 DSC/FDF，固件编译通过 | 当前 Linux |
-| Apple 设备树 | `scripts/make-oneplus13t-adt.py`，主机测试对照实际 `sysinfo/live.dtb` 通过 | Linux 或 macOS |
-| XNU 与源码 corecrypto、pthread、ArmDTPlatform、ArmCpu、早期诊断库 | 第 9 次 Actions 构建通过，加入根设备检查点与完整 panic 页，保留此前修复 | GitHub Actions macOS runner |
-| FAT payload 与 Android boot.img | 第 9 次 Actions 已生成 payload；本地已生成 `xnu-source-run-9-root-panic/boot.img` 并通过解包比对 | macOS Actions 与当前 Linux |
-| kernelcache 预链接、iPadOS 根卷与用户态 | Apple KernelCache 与根镜像已准备并校验；预链接和真机根卷启动待完成 | 本轮镜像准备在 Linux 完成；现有通用 userdata 工具使用 macOS |
+| UEFI、UniXNU 与 DarwinBoot | 已进入 XNU，菜单及 framebuffer 诊断可用 | Linux 构建，13T 真机验证 |
+| Apple 设备树与启动负载 | 实际 FAT 文件、ADT、trust cache 和启动参数检查通过 | macOS Actions 与 Linux |
+| XNU、存储适配与原版预链接组件 | 第 34 次构建成功，含 17 个原版组件；真机已挂载根卷并运行用户态服务 | GitHub Actions macOS runner 与 13T |
+| 临时 APFS Data | 保留原始 private/var 属主和权限，内核与种子 UUID 配套，当前仅停用 watchdogd | macOS 生成，Linux 只读核对 |
+| iPadOS 显示与交互 | 尚未验证；现有屏幕输出来自内核诊断 | 待后续适配 |
+
+下文保留各次构建的历史诊断。第 6–9 次已依次越过早期入口、控制台与 zalloc 问题，并确认单核定时器中断和内核线程运行；当时的根设备等待已由后续存储适配解决。
 
 2026-10-21 的[第 1 次构建](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39613407803)在最终链接时缺少 `_native_legacy_display_probe`：上游 `offline-component-load-probes.patch` 的一处调用漏了 `XNU_NATIVE_LEGACY_DISPLAY` 条件，关闭显示驱动的 13T 配置仍引用该符号。提交 `e352179` 补上条件并增加预处理回归测试，覆盖未定义、关闭和开启三种情况。[第 2 次构建](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39614832285)已成功完成内核与 payload 构建，artifact 为 `oneplus13t-xnu-2`。
 
@@ -57,7 +59,7 @@ git -C ../UniXNU submodule update --init --recursive
 
 迁移后的[第 10 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39665495073)以提交 `7205527` 成功完成，覆盖独立源码准备、前置测试、XNU/payload 构建和 macOS 原生 panic 参数检查。产物已下载到 `out/oneplus13t/actions/run-10/`，内核与 FAT 内容、ADT 和启动参数核对通过。此次用于验证迁移后的构建通路；已实测的 run-9 完整镜像保持原样，新基线尚未实机启动。
 
-云端使用本仓库的 [XNU 工作流](.github/workflows/xnu.yml)，通过同一入口准备源码和输出。仍仅手动触发，不需要私有 Secrets，不下载 IPSW，也不构建 userdata。UEFI 和含原机 DTB 的最终 boot.img 留在 Linux 本地构建。仓库更名保留原有提交与 Actions 历史。
+云端使用本仓库的 [XNU 工作流](.github/workflows/xnu.yml)，通过同一入口准备源码和输出。仍仅手动触发，不需要私有 Secrets。工作流下载固定 IPSW 的所需组件、验证原始输入、生成根卷策略与临时 APFS Data，再构建预链接内核和 FAT 负载。手机上的根镜像单独准备；UEFI 和含原机 DTB 的最终 boot.img 留在 Linux 本地构建。仓库更名保留原有提交与 Actions 历史。
 
 ### 触发构建与下载结果
 
@@ -70,7 +72,7 @@ gh workflow run xnu.yml --ref main
 gh run list --workflow xnu.yml --limit 5
 ```
 
-任务会依次检查补丁和测试、安装工具并检查 iPhoneOS SDK、拉取源码、构建内核与 FAT 负载。每次使用新 runner 从源码构建，耗时随网络和 runner 状态变化，超时上限为 6 小时。XNU 的第一遍 bootstrap 用于生成编译参数记录，最终以整个构建步骤的结果为准。
+任务会依次检查补丁和测试、安装工具并检查 iPhoneOS SDK、拉取源码与固定系统输入、生成根卷策略和 RAM Data、构建内核与 FAT 负载。每次使用新 runner 从源码构建，耗时随网络和 runner 状态变化，超时上限为 6 小时。XNU 的第一遍 bootstrap 用于生成编译参数记录，最终以整个构建步骤的结果为准。
 
 构建完成后，打开这次运行，在页面下方 **Artifacts** 下载 `oneplus13t-xnu-运行序号`。需登录 GitHub 才能下载。[下载说明](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts)
 
@@ -78,15 +80,18 @@ gh run list --workflow xnu.yml --limit 5
 
 ```text
 kernel/kernel.macho
+kernel/kernel.json
 payload/payload.img
 payload/payload.json
+ram-data/data.dbrdisk
+ram-data/seed.json
 logs/
 unixnu.lock
 ```
 
-`payload.img` 内已经放入内核、13T Apple 设备树与菜单配置；`unixnu.lock` 记录本次拉取的引用源码提交。构建失败时，工作流仍尝试上传已有日志，artifact 可能只有日志而没有内核或 payload。如果在 checkout、补丁或工具安装阶段失败且尚无日志文件，直接看对应 Actions 步骤的网页日志。不要将出现 artifact 视为编译成功。
+`payload.img` 内已经放入内核、13T Apple 设备树、原始 trust cache、配套 RAM Data 与菜单配置；`unixnu.lock` 记录本次拉取的引用源码提交。构建失败时，工作流仍尝试上传已有日志，artifact 可能只有日志而没有内核或 payload。如果在 checkout、补丁或工具安装阶段失败且尚无日志文件，直接看对应 Actions 步骤的网页日志。不要将出现 artifact 视为编译成功。
 
-`[kernel] source_only = true` 使构建输出源码 XNU 到 `out/oneplus13t/kernel/kernel.macho`，不调用预链接，也不下载 IPSW。该路径仍执行源码 corecrypto 的正常 POST HMAC 填充。已有设备默认继续走原预链接路径。ArmDTPlatform 和 ArmCpu 从实际 XNU 的 `IOPlatformExpert.cpo.json` 继承编译参数，生成构建脚本已经要求的静态库。
+当前配置使用源码 XNU 与原版 KernelCache 组件预链接，存储和安全组件来自同一固定系统输入。源码 corecrypto 仍执行正常 POST HMAC 填充；ArmDTPlatform 和 ArmCpu 从实际 XNU 的 `IOPlatformExpert.cpo.json` 继承编译参数。
 
 ### 下载后在本地打包 boot.img
 
@@ -95,22 +100,18 @@ unixnu.lock
 ```sh
 cd /home/enc3l/Project/UniXNU_SM8750/UniXNU-Pagani_SM8750
 export PATH=/home/enc3l/Project/OP_Kernel_Dev/src/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/bin:$PATH
-unzip /path/to/oneplus13t-xnu-9.zip -d out/oneplus13t/actions/run-9
-test -s out/oneplus13t/actions/run-9/kernel/kernel.macho
-test -s out/oneplus13t/actions/run-9/payload/payload.img
+unzip /path/to/oneplus13t-xnu-34.zip -d out/oneplus13t/actions/run-34
+test -s out/oneplus13t/actions/run-34/kernel/kernel.macho
+test -s out/oneplus13t/actions/run-34/payload/payload.img
 ./unixnu bootimg --uefi ../UEFI-Pagani_SM8750 \
   --dtb .cache/firmware/vendor_boot/dtb \
-  --ramdisk out/oneplus13t/actions/run-9/payload/payload.img \
-  -o out/oneplus13t/boot/xnu-source-run-9-root-panic/boot.img
+  --ramdisk out/oneplus13t/actions/run-34/payload/payload.img \
+  -o out/oneplus13t/boot/stage6-run-34-watchdog-policy/boot.img
 ```
 
 前两项文件检查应均成功，再执行打包。新的候选不会覆盖 `menu-keys`、`no-sdcc` 或 `payload-smoke`。将生成的 `boot.img` 复制到 Windows 后，用已验证的 `fastboot boot` 临时启动路径测试；不要直接刷写 boot 分区。
 
-仅得到 `kernel.macho` 时，也可以在本地安装 mtools 后生成负载：
-
-```sh
-./unixnu build payload --kernel /path/to/kernel.macho
-```
+当前候选应使用同一次构建的完整 `payload.img`。仅有 `kernel.macho` 不足以重建配套负载：还需对应的 ADT、原始 trust cache 和 RAM Data；不同构建的 Data UUID 不能混用。
 
 后续修改本设备配置或补丁，提交并 `git push`，再手动运行同一工作流。通用仓库中的 `macOS build` 仍保留；本设备使用这里的 `Pagani SM8750 XNU (OnePlus 13T)` 即可。
 
