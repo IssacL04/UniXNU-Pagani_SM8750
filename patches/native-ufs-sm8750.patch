@@ -70,7 +70,7 @@ index 0000000..0278ab4
 +  return true;
 +}
 diff --git a/NativeUfs.cpp b/NativeUfs.cpp
-index bdf3df5..74b697d 100644
+index bdf3df5..0095afc 100644
 --- a/NativeUfs.cpp
 +++ b/NativeUfs.cpp
 @@ -3,7 +3,9 @@
@@ -277,11 +277,11 @@ index bdf3df5..74b697d 100644
    }
 +#if defined(NATIVE_UFS_SM8750) && NATIVE_UFS_SM8750
 +  // Firmware-owned DMA and sheng-specific experiments are not qualified on PKX110.
-+  if (probe != 2 && probe != 7 && probe != 8 && probe != 10 && probe != 11 && probe != 0)
++  if (probe != 2 && probe != 7 && probe != 8 && probe != 10 && probe != 11 && probe != 12 && probe != 0)
 +    panic ("NATIVE_UFS: unsupported SM8750 probe %u", probe);
 +#endif
 +#if defined(NATIVE_UFS_PROBE_ONLY) && NATIVE_UFS_PROBE_ONLY
-+  if (rootMode || !probe) panic ("NATIVE_UFS: this image only probes storage; root publication is not built");
++  if (rootMode || !probe || probe == 12) panic ("NATIVE_UFS: this image only probes storage; root publication is not built");
 +#endif
    unsigned diagnostic = 0;
    PE_parse_boot_argn ("native-ufs-diagnostics", &diagnostic, sizeof (diagnostic));

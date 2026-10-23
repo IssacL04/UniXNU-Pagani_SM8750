@@ -36,7 +36,7 @@ jobs:
           echo "UNIXNU_TREE=$TREE" >> "$GITHUB_ENV"
           python3 "$TREE/scripts/test-kernel-source.py"
           python3 "$TREE/scripts/test-bootimg.py"
-          python3 scripts/test-adt.py AdtTest.test_tree_contract AdtTest.test_invalid_window
+          python3 scripts/test-adt.py AdtTest.test_tree_contract AdtTest.test_invalid_window AdtTest.test_media_window
           python3 "$TREE/drivers/DarwinBoot/Test/test-adt.py"
           cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
             -I "$TREE/drivers/DarwinBoot/DarwinBootPkg/Driver" \
@@ -61,6 +61,14 @@ jobs:
           ./unixnu defconfig oneplus13t_defconfig
           ./unixnu fetch xnu libplatform libdispatch AvailabilityVersions libpthread corecrypto-2023 IOStorageFamily 2>&1 | tee out/oneplus13t/logs/actions-fetch.log
           cp unixnu.lock out/oneplus13t/unixnu.lock
+
+      - name: Prepare the pinned root-window policies
+        run: |
+          ./unixnu ipsw fetch KernelCache OS Cryptex1,SystemOS 2>&1 | tee out/oneplus13t/logs/actions-ipsw.log
+          ./unixnu tree
+          python3 scripts/prepare-ufs-policies.py --tree out/oneplus13t/tree \
+            --inputs out/ipsw/21H461 --openssl-prefix "$(brew --prefix openssl@3)" \
+            2>&1 | tee out/oneplus13t/logs/actions-policies.log
 
       - name: Build XNU and the FAT payload
         env:

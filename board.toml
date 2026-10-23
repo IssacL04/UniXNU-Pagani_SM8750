@@ -1,7 +1,7 @@
 [board]
 name = "oneplus13t"
 soc = "SM8750"
-description = "OnePlus 13T PKX110: Stage 6 read-only UFS bring-up"
+description = "OnePlus 13T PKX110: Stage 6 authenticated root-window discovery"
 kit = "oneplus13t"
 
 # iPadOS root-image source; hardware identity remains the OnePlus 13T.
@@ -21,29 +21,37 @@ fetch = ["KernelCache", "DeviceTree", "StaticTrustCache", "Cryptex1,SystemTrustC
 
 [kernel]
 defconfig = "oneplus13t_defconfig"
-# First reach the platform expert without importing Apple's device drivers.
-source_only = true
 archives = [
   "build-corecrypto-14.py",
   "build-corecrypto-14.py --namespace",
   "build-libpthread-kernel.py",
   "build-arm-platform.py",
-  "build-native-ufs.py",
+  "build-native-aes.py",
+  "build-native-ufs.py --root-windows",
+  "build-ufs-storage-bindings.py --kernelcache ../../ipsw/21H461/kernelcache.decompressed",
+  "build-verified-root-probe.py --component os --include-systemos",
 ]
+
+[kernel.prelink]
+tool = "kits/NativePrelink/emit_prelink.py"
+kernel = "build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf"
+kernelcache_sha256 = "f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7"
+slide = "-0x1000000"
+# Probe 12 stops at media discovery; the userland/security closure follows later.
+roots = ["com.apple.iokit.IOStorageFamily", "com.apple.filesystems.apfs"]
 
 [payload]
 volume = "UNIXNU13T"
-size_mib = 64
+size_mib = 160
 loader = "firmware"
-title = "OnePlus 13T Stage 6: VM and UFS trace (read only)"
-dram_size = "0x10000000"
+title = "OnePlus 13T Stage 6: verified root media (read only)"
+dram_size = "0x20000000"
 timeout = 10
-# The source-only kernel needs 33 slots at the default 260-zone budget; 240 needs 30.
-kernel_args = ["-v", "serial=0", "debug=0x14e", "cpus=1", "-enable_kprintf_spam", "kt_fixed_zones=240", "native-ufs-probe=10", "native-ufs-diagnostics=1", "startup_debug=0"]
+kernel_args = ["-v", "serial=0", "debug=0x14e", "cpus=1", "-enable_kprintf_spam", "kt_fixed_zones=240", "native-ufs-probe=12", "native-ufs-diagnostics=1", "offline-apfs-load=1", "startup_debug=0"]
 
 [payload.adt]
 tool = "scripts/make-oneplus13t-adt.py"
-owned_memory_size = "0x10000000"
+owned_memory_size = "0x20000000"
 cpu_regs = "0"
 
 [bootimg]

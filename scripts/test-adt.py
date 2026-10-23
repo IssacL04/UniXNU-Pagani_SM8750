@@ -56,9 +56,16 @@ class AdtTest(unittest.TestCase):
             self.assertEqual(header[1], checksum)
 
     def test_invalid_window(self):
-        for size in (0, 0x10001000, 0x20000000):
+        for size in (0, 0x10001000, 0x40000000):
             with self.assertRaises(ValueError):
                 adt.make_tree(size, bytes(64))
+
+    def test_media_window(self):
+        nodes = decode(adt.make_tree(0x20000000, bytes(64)))
+        chosen = nodes['/device-tree/chosen']
+        self.assertEqual(struct.unpack('<Q', chosen['darwinboot-memory-size']), (0x20000000,))
+        self.assertEqual(chosen['dram-base'], bytes(8))
+        self.assertEqual(chosen['dram-size'], bytes(8))
 
     def test_actual_board_resources(self):
         dtb = Path(__file__).resolve().parents[1] / 'sysinfo/live.dtb'

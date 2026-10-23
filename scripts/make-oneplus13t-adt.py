@@ -51,8 +51,8 @@ def empty_nvram_proxy():
 
 
 def make_tree(memory_size, random_seed):
-    if memory_size != 0x10000000 or len(random_seed) != 64:
-        raise ValueError('Initial 13T profile requires 256 MiB and a 64-byte random seed')
+    if memory_size not in (0x10000000, 0x20000000) or len(random_seed) != 64:
+        raise ValueError('13T probes require 256/512 MiB and a 64-byte random seed')
     return node('device-tree', [('model', b'OnePlus 13T\0'),
                                ('compatible', b'oneplus,pkx110\0qcom,sm8750\0')], [
         node('chosen', [('random-seed', random_seed), *empty_nvram_proxy(),

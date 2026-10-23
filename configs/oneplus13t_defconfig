@@ -1,4 +1,4 @@
-# Source XNU for early platform bring-up; no Apple kernelcache or root disk.
+# Read-only authenticated media discovery; userland boot remains disabled.
 CONFIG_XNU_BUILD_ARCHIVES=y
 CONFIG_XNU_SOURCE_CORECRYPTO14=y
 CONFIG_XNU_SOURCE_PTHREAD=y
@@ -7,10 +7,12 @@ CONFIG_XNU_ARMCPU=y
 CONFIG_XNU_NATIVE_ARCH_TIMER=y
 # The BCM2837 panic buffer address is not mapped on this device.
 CONFIG_XNU_DT_PANIC_REGION=y
-CONFIG_XNU_CRYPTO_BOOTSTRAP="source"
+CONFIG_XNU_CRYPTO_BOOTSTRAP="prelinked"
 # CONFIG_XNU_ARMVIRT_PLATFORM is not set
 CONFIG_XNU_NATIVE_UFS=y
-# CONFIG_XNU_NATIVE_AES is not set
+CONFIG_XNU_NATIVE_AES=y
+CONFIG_XNU_VERIFIED_ROOT_PROBE=y
+CONFIG_XNU_VERIFIED_ROOT_ARCHIVE="{tree}/build/verified-root-os-xnu-bundle/libVerifiedRootProbe.a"
 # CONFIG_XNU_NATIVE_ADRENO is not set
 CONFIG_XNU_BOOT_PROGRESS=y
 CONFIG_XNU_EARLY_BOOT_PROGRESS=y
