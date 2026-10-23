@@ -4,17 +4,65 @@
 
 ## XNU 内核适配与 macOS Actions
 
-当前已走通 bring-up 阶段 1–6 的主要启动目标，正在推进阶段 7 用户态。系统输入固定为 iPadOS 17.7.11（21H461）；8.74 GiB 根镜像已写入独立的 64 GiB `unixnu` 分区，XNU 通过只读 UFS 路径挂载 OS/SystemOS，并启动原版 `launchd` 和系统服务。
+**2026-10-24：第 39 版已在一加 13T 上进入 iPadOS 系统图形界面。** 用户在本次临时启动后确认“成功进入系统”，同时反馈触摸没有反应。目前已走通 UEFI → UniXNU → DarwinBoot → XNU → 原版 launchd / 系统服务 → 系统画面的启动链。触摸控制器尚未适配；加载 IOHIDFamily 和 IOHIDEventDriver 只提供输入框架，不会自动产生触摸事件。
 
-第 33 次真机加入 256 MiB 临时 RAM Data 后，推进到 `watchdogd[144]`，约 101 秒后发生 SIGTRAP panic；代码分析指向缺少 IOWatchdog 后端。第 34 次在 RAM Data 中停用 `com.apple.watchdogd`，用户观察到内核运行十多分钟并持续装载进程，尚未出现图形界面。第 37 次 Stage 7 候选加入原版 Apple 标志、IOSurface/IOMobileGraphics、CPU 画面呈现与 iPad 用户态身份，XNU 内存窗口扩大至 1 GiB；真机显示 Logo 后持续停留，未确认进入 Setup。第 38 次真机跑过可见日志后仍停在 Logo。第 39 次扩展至 4 GiB 内存和 1 GiB 临时 Data，并加入软件刷新、HID 匹配及同版用户态兼容修复；完整构建和产物核对通过，已临时启动，等待屏幕结果。Data 修改随重启清除，物理 UFS 写入保持关闭。详细记录见 [STAGE6.md](STAGE6.md)。
+系统固定为 iPadOS 17.7.11（21H461）。8.74 GiB 根镜像位于独立的 64 GiB `unixnu` 分区，XNU 只读访问 OS/SystemOS；可写 Data 是 1 GiB 的临时 RAM 卷，重启后恢复初始种子。当前为单核运行，申请 4 GiB 内存窗口，显示采用 CPU 复制系统帧到固件 GOP framebuffer 的路径。
 
-| 部分 | 当前状态 | 执行位置 |
+第 37、38 版停在 Apple Logo；第 39 版加入更大的内存与 Data、软件刷新、HID 匹配和同版用户态兼容处理后进入系统界面。这是整组改动的启动结果，尚未通过逐项对照确定哪项修复解除了最后的阻塞。完成初始化向导、进入桌面后的应用操作和长期稳定性尚未单独验证。逐次记录见 [STAGE6.md](STAGE6.md)。
+
+### 已支持的启动与运行能力
+
+以下汇总当前支持范围；“进入系统”的依据是用户真机反馈，精确容量、接口布局及镜像内容另由构建和产物检查确认。
+
+| 功能 | 当前支持范围 | 验证情况与限制 |
 | --- | --- | --- |
-| UEFI、UniXNU 与 DarwinBoot | 已进入 XNU，菜单及 framebuffer 诊断可用 | Linux 构建，13T 真机验证 |
-| Apple 设备树与启动负载 | 实际 FAT 文件、ADT、trust cache 和启动参数检查通过 | macOS Actions 与 Linux |
-| XNU、存储适配与原版预链接组件 | 第 39 次构建成功，含 29 个原版可执行组件及 IOHIDEventDriver 配置；此前真机已挂载根卷并运行用户态服务 | GitHub Actions macOS runner 与 13T |
-| 临时 APFS Data | 保留原始 private/var 属主和权限，内核与种子 UUID 配套，实际 APFS 读回确认八项启动策略和同版迁移偏好 | macOS 生成，Linux 只读核对 |
-| iPadOS 显示与交互 | 已接入原版显示组件与 CPU 呈现代码，等待真机验证；触摸和 GPU 尚未适配 | macOS 构建，13T 待验证 |
+| Fastboot 临时启动 | Android boot v4 镜像承载 BootShim、UEFI 和 XNU 负载，无需将启动镜像刷入 boot 分区 | 已多轮实测，第 39 版 Sending / Booting 均为 OKAY |
+| UEFI、UniXNU 菜单与 Shell | 板级 UEFI 启动、图形菜单、配置读取、倒计时加载及 UEFI Shell | 菜单和 Shell 已获真机确认；物理侧键另列下表 |
+| 内嵌 FAT 负载交接 | 160 MiB FAT 经 BootShim / SEC HOB / BootPayloadDxe 发布，加载内核、ADT、trust cache 和打包 Data | 实际负载读回与完整镜像封装检查通过，已用于真机启动 |
+| 源码 XNU 与单核运行 | ARM64 XNU、GIC 中断、19.2 MHz 架构定时器、内核线程及用户进程调度 | 单核中断与线程此前已有真机日志；当前 `cpus=1`，未启用多核 |
+| 内存与虚拟地址空间 | 4 KiB 页表、内核分配器、真实可用内存分配、4 GiB 连续窗口请求 | 第 39 版已用此配置进入界面；未单独读取系统报告的可用内存容量 |
+| 用户地址访问 | 原生 ARM64 PAN 切换，以及 copyin / copyout 所需的用户页访问 | 已越过此前 SystemOS copyout 停点，继续运行原版用户态 |
+| XNU 原生 UFS 读取 | NativeUfs 的 SMMU / DMA 读路径、LUN 与容量查询、GPT 解析、独立 `unixnu` 分区定位 | 真机已确认分区与根卷读取；物理 UFS 写入关闭，UEFI 的厂商 UFSDxe 仍未启用 |
+| APFS 系统卷 | 原版 IOStorageFamily / APFS 组件、OS 根卷与 SystemOS 挂载、共享缓存和 boot manifest 准备 | 已通过实际挂载并启动系统服务，OS/SystemOS 保持只读 |
+| 根卷与代码校验启动链 | 绑定实际卷 UUID 和 IOMedia 的自有根卷策略、逐块校验、原版静态 trust cache、AMFI / CoreTrust / sandbox 组件 | 根卷绑定审计及原版进程启动已验证；不代表 Apple 原生安全启动或硬件安全体系已实现 |
+| 临时可写 Data | 1 GiB 稀疏 RAM APFS，保留原始 `private/var` 属主、权限和符号链接，支持用户态写入 | 实际种子读回、完整逻辑哈希及配套 UUID 通过检查，已用于当前系统启动；数据不持久化 |
+| 原版用户态 | 原版 launchd、系统服务和进程执行，固定版本的 29 个原版可执行预链接组件及 IOHIDEventDriver 配置 | 已由早期服务启动推进到第 39 版系统画面；未逐个验证全部服务和应用 |
+| 屏幕显示 | 原版 Apple Logo、IOSurface / IOMobileGraphicsFamily、NativeLegacyDisplay、CPU framebuffer 呈现 | 用户确认已越过 Logo 并进入系统界面；没有 GPU 加速或实际帧率测量 |
+| 启动与故障诊断 | 早期阶段日志、完整 panic 页、根卷状态、进程执行/退出、内存和 UFS 计数、显示交接状态 | 日志和 panic 页已有真机证据；30 秒无系统帧回退路径已通过主机检查，未单独触发验收 |
+| 构建与产物验证 | 固定上游与系统输入、隔离补丁、macOS Actions 编译 XNU、Linux 构建 UEFI 与打包、实际 FAT/APFS/接口核对 | 第 39 次完整构建成功；相关回归检查和 ASan/UBSan 检查通过 |
+
+### 已接入的兼容机制与部分支持
+
+这些机制已进入第 39 版，不应据此把对应硬件或全部上层能力列为可用。
+
+| 项目 | 已完成部分 | 当前边界 |
+| --- | --- | --- |
+| 设备树与平台身份 | 13T 板级 ADT、易失 CHRP NVRAM、iPad7,1 / J120、artwork、显示倍率及每份候选的软件平台标识 | ADT 内容已核对；NVRAM 不持久化，软件标识不是真实 Apple ECID，硬件地址与 compatible 保持真实 |
+| 60 Hz 软件刷新 | work-loop 定时器调用原版刷新通知，发布固定刷新属性 | 编译接口与最终调用路径已核对；没有面板 vblank 中断或 60 fps 实测 |
+| HID 输入框架 | IOHIDFamily / IOHIDEventDriver 预链接和匹配加载，等待并记录 IOHIDResource 状态 | 尚无触摸控制器驱动或触摸事件上报；用户已确认屏幕触摸无响应 |
+| 四处用户态兼容修复 | AttentionAwareness 初始化、PosterBoard 两处属性处理、BTAudioHALPlugin 无蓝牙后端时的处理 | 限定 21H461、临时存储和原始指令匹配，原页签名验证后修改内存；各修复未单独做真机对照 |
+| 临时启动策略与偏好 | 停用八项当前不适用的任务，设置同版迁移偏好、容器目录及禁止自动暗屏偏好，清理 MobileGestalt 缓存 | 实际 APFS 内容已核对；Setup 未跳过，缺少图标缓存时可能出现空白图标，自动暗屏行为未单独实测 |
+| 临时 AppleKeyStore 状态 | 提供易失 Data 启动所需的有限状态服务 | 不提供真实密钥、密码、数据保护或安全存储 |
+| 启动所需 PMGR 接口 | 受限平台接口满足当前原版组件的启动调用 | 不等于 SM8750 完整电源管理、调频或休眠支持 |
+| UEFI 侧键与菜单动作 | 13T SPMI 侧键代码和菜单输入接线已构建；保留 restart / power off 项 | 物理侧键和相关动作仍需真机验收；不构成 iPadOS 中的按键支持 |
+
+八项临时停用任务为 `watchdogd`、`identityservicesd`、`locationd`、`CommCenter`、`bluetoothd`、`PerfPowerServices`、`iomfb_fdr_loader` 和 `iconservicesagent`，完整 Label 见 [启动策略源码](scripts/prepare-ram-data.py)，停用原因见 [第 39 次候选记录](STAGE6.md#第-39-次候选补齐进入初始化向导的运行条件)。
+
+### 尚未支持或尚未验收
+
+| 项目 | 当前状态 |
+| --- | --- |
+| 触摸与系统交互 | 触摸硬件驱动、事件上报及坐标映射尚未适配；当前触摸无响应 |
+| GPU / Metal 加速 | 尚未适配 SM8750 GPU，当前只确认 CPU 呈现路径 |
+| Wi-Fi、蓝牙、蜂窝与定位 | 无可用的对应 XNU 硬件后端，不能视为联网、通话或定位可用 |
+| 音频、相机、传感器、振动与生物识别 | 尚未适配或验收 |
+| 电源与热管理 | 电池/充电管理、调频、温控、亮度调节、休眠唤醒及硬件 watchdog 尚未完成；已有供电下启动不证明这些功能可用 |
+| 多核 | 目前只发布启动 CPU，SMP 尚未启用 |
+| 持久化与安全存储 | Data 只在 RAM 中写入；UFS 持久写入、加密 Data、SEP 和硬件密钥能力尚未实现 |
+| XNU 中的 USB 与外接输入 | USB 键鼠、其他外设及调试连接尚未验证；已验证的 Fastboot 属于手机 bootloader |
+| 完整系统使用 | 尚未验证完成初始化向导、桌面操作、应用兼容性、性能和长期稳定性 |
+
+当前成功镜像为 `out/oneplus13t/boot/stage7-run-39/boot.img`；对应源码提交 `02c7ccd`、[第 39 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/40017111424)。后续优先补齐触摸输入，再验证向导与应用交互；此次进度整理只更新文档。
 
 下文保留各次构建的历史诊断。第 6–9 次已依次越过早期入口、控制台与 zalloc 问题，并确认单核定时器中断和内核线程运行；当时的根设备等待已由后续存储适配解决。
 
@@ -119,7 +167,7 @@ test -s out/oneplus13t/actions/run-39/payload/payload.img
 
 当前仅发布 MPIDR 为 0 的启动 CPU。GICD 为 `0x16000000/0x10000`，GICR 为 `0x16080000/0x200000`，redistributor stride 为 `0x40000`，timebase 为 19.2 MHz；均已对照本机导出的设备树。ADT 包含 ArmDTPlatform 所需的 chosen、cpus、arm-io、defaults、options 和易失 CHRP NVRAM。Stage 7 向原版用户态提供 `iPad7,1` / `J120` 兼容身份及 artwork 属性，硬件 `compatible` 保持 `oneplus,pkx110` / `qcom,sm8750`。每份临时 Data 候选生成一个非零软件 `unique-chip-id`；它不代表真实 Apple ECID。
 
-当前由 DarwinBoot 向 UEFI 申请 4 GiB 连续窗口，并通过 `boot_args` 传入实际基址和大小；分配必须落在真实可用内存中。framebuffer 地址与 pitch 由运行时 GOP 提供，保留 13T 的实际屏幕尺寸。临时 APFS Data 的逻辑容量扩展至 1 GiB，实际写入按需占用 RAM。真机已确认硬件 CNTFRQ 与内核 timebase 均为 19.2 MHz，单核定时器中断、内核线程和只读 UFS 路径可用；新内存窗口、显示服务、长期稳定性与多核调度仍待验证。
+当前由 DarwinBoot 向 UEFI 申请 4 GiB 连续窗口，并通过 `boot_args` 传入实际基址和大小；分配必须落在真实可用内存中。framebuffer 地址与 pitch 由运行时 GOP 提供，保留 13T 的实际屏幕尺寸。临时 APFS Data 的逻辑容量扩展至 1 GiB，实际写入按需占用 RAM。真机已确认硬件 CNTFRQ 与内核 timebase 均为 19.2 MHz，单核定时器中断、内核线程和只读 UFS 路径可用；第 39 版已在这组内存和显示配置下进入系统界面，长期稳定性与多核调度仍待验证。
 
 当前 `[bootimg] embed_payload = true` 将完整 FAT 卷追加在 UEFI FD 后，与 BootShim 一起压缩到 Android boot 的 kernel 字段。ARM64 镜像头声明包含负载的完整解压长度。BootShim 只把 FD 搬到固件基址，负载留在原 kernel 输入缓冲区；它用 `x1/x2` 传递负载地址和长度，用 `x3` 标记交接格式。SEC 保存参数并生成独立 HOB。BootPayloadDxe 优先使用此 HOB，范围通过检查后发布只读 Block I/O。它仍只接受 SEC 已保留的 `Kernel` 内存，不放宽到 DXE 堆或任意物理内存。
 
@@ -133,20 +181,20 @@ Android v4 可能在 FAT 前拼接 vendor ramdisk、在尾部追加 bootconfig�
 
 ### 当前可测试镜像
 
-使用 `out/oneplus13t/boot/xnu-source-run-9-root-panic/boot.img`。该镜像包含 UEFI、DarwinBoot、云端第 9 次构建的真实 XNU 内核、根设备检查点、完整 panic 页、`kt_fixed_zones=240` 分配器预算及 13T ADT，使用内嵌负载交接，并保留此前控制台修复和菜单错误显示。UEFI 沿用已构建版本，固件标识仍为 `oneplus13t-xnu-early-progress-20261021`。复制到 Windows 并命名为 `boot-13t-xnu-root-panic.img` 后：
+当前成功候选为 `out/oneplus13t/boot/stage7-run-39/boot.img`（87,924,736 字节）。它包含 UEFI、DarwinBoot、第 39 次构建的 XNU、13T ADT、原版 trust cache 和临时 Data；手机 `unixnu` 分区中需已有配套 OS/SystemOS 根镜像。用户已确认本版进入系统界面，触摸尚不可用。复制到 Windows 并命名为 `boot-13t-stage7-run-39.img` 后：
 
 ```bat
 adb reboot bootloader
-fastboot boot boot-13t-xnu-root-panic.img
+fastboot boot boot-13t-stage7-run-39.img
 ```
 
-如果已在 bootloader，只执行第二条。使用 `fastboot boot` 临时启动，不刷写分区。成功读取配置时应出现 **OnePlus 13T XNU bring-up** 启动项，配置来源为 `\EFI\UniXNU\unixnu.toml`，默认等待 10 秒后尝试加载内核。建议从执行命令前开始录像，以便保留菜单切换、报错和重启前的最后画面。
+如果已在 bootloader，只执行第二条。使用 `fastboot boot` 临时启动，不刷写分区。成功读取配置时应出现 **OnePlus 13T Stage 7: early userspace** 启动项，配置来源为 `\EFI\UniXNU\unixnu.toml`，默认等待 10 秒后尝试加载内核。建议从执行命令前开始录像，以便保留菜单切换、报错和重启前的最后画面。
 
 失败时，底部红字应显示 `payload <阶段> <起止地址>: <状态>`。`embedded HOB` 表示内嵌交接结构不合法；`embedded base/size` 后两项为负载基址和长度，表示不在当前保护范围；`embedded FAT` 表示内嵌范围内未找到有效卷；若仍是 `FAT scan`，说明未收到内嵌交接 HOB而回退到了原机 initrd。`FDT range` 表示入口 FDT 不在当前保护范围；`FDT header/size` 表示头部或长度不合法；`initrd properties` 表示缺少 initrd 属性；`initrd range` 表示 ramdisk 范围不合法；`FAT scan` 表示输入已通过检查但找不到唯一有效卷；`BlockIO ... Success` 且仍为内置菜单，表示块设备已发布，需继续定位 DiskIo/FAT 或配置读取。请保留完整红字及地址。状态通过仅本次启动有效的 `UniXNUBootStatus` 变量传递，不写入持久变量；识别到输入设备时等待手动选择，没有输入设备时保留五分钟。若仍只有 `no boot entry found`，说明连该状态也未读取到，需要检查驱动调度或变量服务。
 
 用户此前日志中的 `964E5B22-6459-11D2-8E39-00A0C969723B` 是 `EFI_SIMPLE_FILE_SYSTEM_PROTOCOL`。错误由 BDS 后续 USB 启动路径枚举文件系统时产生，不代表 XNU 内核入口失败。
 
-若出现 XNU 启动项前仍使用 `built-in configuration`，启动停在配置卷发现阶段；如果出现 XNU 启动项后才报错或黑屏，则已经进入后续加载阶段。能取得串口日志时，重点记录 `13T payload:` 的 FDT 地址、initrd 范围和错误码，以及 `DARWINBOOT: inputs validated; exiting boot services`、内核版本和平台日志。绿色交接条只说明 DarwinEnter 执行，不能代替 XNU 启动证据。第 8 次候选已实测越过分配器断言，执行到 BSD 的 `setconf` 入口。屏幕日志到底部后从顶部覆盖，底部一行未必是最新日志。后续测试重点记录固定 `ROOT` 状态行或完整 panic 页。当前仍没有根文件系统与完整 iOS 用户态。
+若出现 XNU 启动项前仍使用 `built-in configuration`，启动停在配置卷发现阶段；如果出现 XNU 启动项后才报错或黑屏，则已经进入后续加载阶段。能取得串口日志时，重点记录 `13T payload:` 的 FDT 地址、initrd 范围和错误码，以及 `DARWINBOOT: inputs validated; exiting boot services`、内核版本和平台日志。绿色交接条只说明 DarwinEnter 执行，不能代替 XNU 启动证据。第 8、9 次的早期根设备诊断保留在下文；当前第 39 版已挂载根卷并进入系统界面。屏幕日志到底部后从顶部覆盖，底部一行未必是最新日志；排障时记录固定状态行或完整 panic 页。
 
 ### XNU 入口、异常与单核定时器诊断
 
@@ -242,9 +290,9 @@ cc -std=c11 -fshort-wchar -ffunction-sections -fdata-sections \
 
 | 文件 | 用途 |
 | --- | --- |
-| `out/oneplus13t/boot/menu-keys/boot.img` | 最新镜像，8,409,088 字节；新增 13T SPMI 侧键输入，提前连接输入控制台 |
+| `out/oneplus13t/boot/menu-keys/boot.img` | 菜单侧键历史候选，8,409,088 字节；新增 13T SPMI 侧键输入，提前连接输入控制台 |
 | `out/oneplus13t/boot/no-sdcc/boot.img` | 已实测显示 UniXNU 菜单；侧键失效，默认倒计时结束后返回 Android |
-| `out/oneplus13t/boot/menu-keys/boot.json` | 最新镜像的离线打包报告 |
+| `out/oneplus13t/boot/menu-keys/boot.json` | 菜单侧键候选的离线打包报告 |
 | `out/oneplus13t/boot/no-sdcc/boot.json` | 已实测菜单基线的离线打包报告 |
 | `out/oneplus13t/logs/firmware.log` | 完整 UEFI 构建日志 |
 | `out/oneplus13t/boot/integrated/menu-smoke/menu.png` | 上轮 QEMU/AAVMF 竖屏菜单截图；不是手机实拍 |
@@ -269,12 +317,12 @@ cc -std=c11 -fshort-wchar -ffunction-sections -fdata-sections \
 | 产品身份 | 13s / CPH2723 | 13T / PKX110；当前 sysinfo 已确认 |
 | 板级身份 | 24875 | 当前 bootconfig 确认为 24821，SKU 7 |
 | 内存图 | DXE 堆为连续的 `0xBE360000–0xD8000000` | 独立 MemoryMapLib 将硬件 fence 区隔离为保留内存 |
-| 显示配置 | 1216 × 2640 | 当前 AA594 面板和 splash 保留区已匹配；实际扫描基址、pitch 和格式待验证 |
+| 显示配置 | 1216 × 2640 | AA594 面板与 splash 区匹配；第 39 版已用运行时 GOP 地址、pitch 显示系统画面 |
 | DTB 输入 | 不直接采用参考仓库的某个单树 | 使用 13T 历史 vendor_boot 中完整的 13 棵候选树 |
 | DTBO | 参考 pagani 变体 | 历史 DTBO 含 24875 与 24821 各两份，保留原镜像不改写 |
-| 平台入口 | 参考 Pakala 初始化会 detach MDP SMMU streams | 13T 入口保留 bootloader 的显示路由，等待真机核对 |
+| 平台入口 | 参考 Pakala 初始化会 detach MDP SMMU streams | 13T 入口保留 bootloader 显示路由，已用于菜单和系统界面显示 |
 | 启动程序 | 原平台未集成 UniXNU | FD 内置 UniXNU、UniXNUDxe、DarwinBoot 与 BootPayloadDxe |
-| 内部存储 | 打包厂商 UFSDxe | 首阶段暂不打包 UFSDxe，不能访问手机 UFS 分区 |
+| 内部存储 | 打包厂商 UFSDxe | UEFI 仍不打包 UFSDxe；XNU NativeUfs 已支持只读访问系统根卷 |
 
 显示源码 `pagani-24821-display-sun-overlay.dts` 同时声明 `oplus,project-id = <24821 24875>`，支持共享部分显示配置。这不证明面板保活、供电或整套厂商 DXE 已在当前 13T 固件上匹配。
 

@@ -1,8 +1,8 @@
-# Stage 6：一加 13T 存储与根卷
+# Stage 6–7：一加 13T 存储、用户态与系统界面
 
-更新：2026-10-24。根卷挂载和原版 launchd 启动已通过，当前推进阶段 7。第 34 次在 RAM Data 中停用缺少后端的 watchdogd 后，用户观察到内核运行十多分钟并持续装载进程。第 37 次加入显示服务与原版 Apple Logo，真机持续停在 Logo。第 38 次诊断候选已完成构建、实际负载核对及临时启动，Sending/Booting 均为 OKAY；用户反馈可见日志跑完后仍停在 Apple Logo，尚未进入 Setup。第 39 次补齐同版参考中的用户态依赖，完整构建、实际负载核对和临时启动均已完成，等待新的屏幕结果。
+更新：2026-10-24。**第 39 版已获用户真机确认：成功进入系统图形界面，触摸没有反应。** 当前已完成根卷挂载、原版 launchd / 系统服务启动，并推进到系统画面显示。此前第 37、38 版停在 Apple Logo 的状态已由本次结果更新。触摸控制器尚未适配，HID 框架加载不代表已有触摸输入。
 
-最终目标是在一加 13T 上启动 iPadOS 用户态和界面。当前源码 XNU 仅用于打通硬件路径；本阶段以 iPadOS 根卷挂载及其 `launchd` 启动为验收条件，图形界面仍需后续用户态、显示与输入适配。
+当前成功候选为 `out/oneplus13t/boot/stage7-run-39/boot.img`，源码提交 `02c7ccd`。本次反馈证明启动与显示链路已推进到系统界面，尚未单独验证完成初始化向导、桌面和应用交互或长期稳定性。完整功能清单见 [README 的支持状态](README.md#已支持的启动与运行能力)。下文保留各轮当时的诊断、限制与后续修复；最新状态以本段和末尾的第 39 次真机结果为准。
 
 ## iPadOS 输入
 
@@ -52,7 +52,7 @@ DeviceTree、两份 trust cache 和原始 KernelCache 也已从同一恢复包�
 1. 第 20 次候选已通过只读 GPT/首块检查，先保留这一可复现基线。模式 10 主动停止是设计行为，无需为了消除该 panic 修改传输代码。
 2. 根镜像已通过 Fastboot 写入 `unixnu`，模式 11 真机照片确认 `manifest status=0 windows=2`，两个窗口均为 `read=1`，偏移、大小及 manifest 内哈希字段与本地输入一致。已完成窗口首块读回，尚未进行手机侧全镜像哈希验证。
 3. 第 31 次已越过 SystemOS copyout 停点并启动用户态服务，tzinit PID 17 退出状态为 30；第 33 次进入 watchdogd PID 144，停于 SIGTRAP。第 34 次在 RAM Data 中停用该任务后，用户观察到持续运行十多分钟，尚无图形界面。
-4. 按 bring-up.md 的目标，根卷挂载与原版 `launchd` 启动已经通过，当前进入阶段 7。第 38 次仍停留在 Logo；第 39 次加入更大内存与 Data、软件刷新、HID 匹配和固定用户态兼容规则，已临时启动。下一步根据实际画面确认 4 GiB 窗口分配和 Setup 进展；稳定运行与交互仍待验证。
+4. 按 bring-up.md 的目标，根卷挂载与原版 `launchd` 启动已经通过，当前进入阶段 7。第 39 次加入更大内存与 Data、软件刷新、HID 匹配和固定用户态兼容规则后，用户确认进入系统图形界面；触摸无响应。下一步适配触摸控制器和 HID 事件上报，再验证向导与应用交互；长期稳定性仍待验证。
 
 ## 真机寄存器结果与第二轮启动
 
@@ -588,7 +588,7 @@ Data 卷 UUID 为 `DCA82E33-8DB3-4192-A510-B1A9C6903118`，256 MiB 逻辑镜像�
 
 第 38 次用户反馈日志跑完后仍停在 Logo。本轮对照固定 iPadOS 17.7.11 的 [UniXNU-sheng](https://github.com/UniXNU/UniXNU-sheng/tree/251b291adf941b9953fe3ae66a808b9b626e164d)、[UniXNU-tb128fu](https://github.com/xVanTuring/UniXNU-tb128fu/tree/0d55473e5c3a60656a12123d4c2fa8ea4f4a7383) 和通用显示库。Pong 使用 iOS 16，仅作为设计参考。现有预链接依赖已包含参考的大部分原版组件，未接入不适用于 SM8750 的 GPU 或外设寄存器实现。
 
-DarwinBoot 请求增至 4 GiB，临时 APFS Data 增至 1 GiB。13T 实际 DT 的高地址 RAM 存在 6 GiB 区间；加载器仍须从真实 UEFI ConventionalMemory 成功分配连续窗口，不宣称该分配已在真机通过。Data 使用现有稀疏页后端，1 GiB 低于其 2 GiB 易失卷上限；重启后仍恢复种子。新增同版 migration 偏好避免升级迁移，保持 Setup 完成标记不变。
+DarwinBoot 请求增至 4 GiB，临时 APFS Data 增至 1 GiB。13T 实际 DT 的高地址 RAM 存在 6 GiB 区间；加载器仍须从真实 UEFI ConventionalMemory 成功分配连续窗口，本候选准备时尚未验证真机分配，后续第 39 次已用此配置进入系统界面。Data 使用现有稀疏页后端，1 GiB 低于其 2 GiB 易失卷上限；重启后仍恢复种子。新增同版 migration 偏好避免升级迁移，保持 Setup 完成标记不变。
 
 临时 launchd 策略沿用现有文件方式，增加 identityservicesd、locationd、CommCenter、bluetoothd、PerfPowerServices、iomfb_fdr_loader 和 iconservicesagent。前两项涉及同版参考记录的 SpringBoard/chronod/liveactivitiesd 同步等待链，后续项对应缺少硬件后端或参考机上的反复退出。加上 watchdogd 共八项；每项必须匹配当前原始任务的 Label 和完整 ProgramArguments，匹配失败即停止。此策略不代表已在 13T 捕获相同等待栈，停用图标渲染服务也可能使缺少缓存的图标留白。原始系统任务 plist 不修改。
 
@@ -608,4 +608,14 @@ Data UUID 为 `A752350A-AB19-41D8-ADF9-01485A68BA56`，1 GiB 逻辑 APFS 打包�
 
 完整镜像为 `out/oneplus13t/boot/stage7-run-39/boot.img`，87,924,736 字节。封装回验和实际哈希通过，Android v4 头、空 Android ramdisk 字段、UEFI、原机 DTB、BootShim 与 160 MiB 内嵌 FAT 布局核对通过。用户确认 Fastboot 并授权本轮临时启动后，只读核对设备 `3B15BB01BAT00000`、产品 `sun`，再发送镜像：Sending 2.007 秒、Booting 0.337 秒，均为 OKAY，总计 2.700 秒，退出码 0。日志为 `out/oneplus13t/logs/stage7-run-39-fastboot.log`。
 
-本轮未刷写分区，物理 UFS 写入仍关闭，Data 修改随重启清除。当前等待手机画面，尚不能确认已分配 4 GiB 窗口、产生系统帧或进入初始化向导；GPU、触摸和无线外设仍未适配。
+本轮未刷写分区，物理 UFS 写入仍关闭，Data 修改随重启清除。临时启动完成时尚待手机反馈；后续已确认进入系统界面，见下一节。GPU、触摸和无线外设仍未适配。
+
+### 第 39 次真机：进入系统界面，触摸待适配
+
+2026-10-24，用户在第 39 版临时启动后反馈“成功进入系统”，同时确认触摸没有反应。本次据此记录为系统图形界面启动通过：UEFI、DarwinBoot、XNU、只读 OS/SystemOS、临时 Data、原版用户态和显示路径已共同推进到系统画面。反馈未明确区分向导页面与桌面，因此不额外登记“已完成初始化向导”或“桌面应用可交互”。
+
+这次运行使用 4 GiB 内存窗口请求、1 GiB RAM Data、CPU framebuffer 呈现和 60 Hz 软件刷新配置。镜像内容及调用路径此前已核对；此次反馈增加了整机界面启动的证据，不等于可用内存容量、实际帧率、每项兼容修复或所有系统服务都已逐项实测。
+
+触摸无响应符合当前代码范围：已接入 IOHIDFamily / IOHIDEventDriver，尚无 13T 触摸控制器的初始化、硬件事件读取和 HID 触摸报告路径。后续需要完成该输入链路，再验证点击、滑动、坐标方向以及向导和应用交互。UEFI 的侧键候选与 iPadOS 触摸输入属于不同阶段，不能互相替代。
+
+README 已汇总当前全部已支持的启动、运行、存储、显示、诊断和构建能力，并单列部分支持与未完成项。此次只更新文档，不重建或重新启动镜像；`stage7-run-39` 保留为已进入系统界面的基线。物理 UFS 写入继续关闭，Data 随重启恢复种子，GPU、触摸、无线外设和安全存储仍未完成。
