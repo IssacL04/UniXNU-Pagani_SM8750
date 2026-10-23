@@ -93,8 +93,9 @@ class AdtTest(unittest.TestCase):
                          {'name': b'manifest-properties\0'})
 
     def test_userspace_memory_window(self):
-        nodes = decode(adt.make_tree(0x40000000, bytes(64)))
-        self.assertEqual(struct.unpack('<Q', nodes['/device-tree/chosen']['darwinboot-memory-size']), (0x40000000,))
+        for size in (0x40000000, 0x100000000):
+            nodes = decode(adt.make_tree(size, bytes(64)))
+            self.assertEqual(struct.unpack('<Q', nodes['/device-tree/chosen']['darwinboot-memory-size']), (size,))
 
     def test_root_volume_matching(self):
         volume = '04769d26-2ca0-4825-b443-e2e5f88300f2'

@@ -28,6 +28,7 @@ class UpstreamTest(unittest.TestCase):
             git('add', '.', repo=ufs_source)
             git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'UFS fixture', repo=ufs_source)
             git('-c', 'protocol.file.allow=always', 'submodule', 'add', str(ufs_source), 'drivers/NativeUfs')
+            git('-c', 'protocol.file.allow=always', 'submodule', 'add', str(ufs_source), 'drivers/NativeMobileDisplay')
             git('add', '.')
             git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'Fixture')
             (device / 'upstream.rev').write_text(git('rev-parse', 'HEAD'))
@@ -51,10 +52,19 @@ class UpstreamTest(unittest.TestCase):
             self.assertEqual((with_ufs / 'drivers/NativeUfs/fixture').read_text(), 'sm8750\n')
             self.assertEqual((source / 'drivers/NativeUfs/fixture').read_text(), 'ufs\n')
             self.assertEqual((prepared / 'input').read_text(), 'local work\n')
+            display = source / 'drivers/NativeMobileDisplay'
+            (display / 'fixture').write_text('display refresh\n')
+            (device / 'patches/native-mobile-display-stage7.patch').write_text(git('diff', repo=display))
+            git('restore', 'fixture', repo=display)
+            with_display = prepare(device, source)
+            self.assertNotEqual(with_display, with_ufs)
+            self.assertEqual((with_display / 'drivers/NativeMobileDisplay/fixture').read_text(), 'display refresh\n')
+            self.assertEqual((display / 'fixture').read_text(), 'ufs\n')
+            self.assertEqual((with_display / 'drivers/NativeUfs/fixture').read_text(), 'sm8750\n')
             patch.write_text('invalid patch\n')
             with self.assertRaises(subprocess.CalledProcessError):
                 prepare(device, source)
-            self.assertEqual(set((device / '.cache').iterdir()), {prepared, with_ufs})
+            self.assertEqual(set((device / '.cache').iterdir()), {prepared, with_ufs, with_display})
             self.assertEqual((source / 'input').read_text(), 'upstream\n')
 
     def test_board_enables_upstream_archive_builders(self):

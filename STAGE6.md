@@ -1,6 +1,6 @@
 # Stage 6：一加 13T 存储与根卷
 
-更新：2026-10-24。根卷挂载和原版 launchd 启动已通过，当前推进阶段 7。第 34 次在 RAM Data 中停用缺少后端的 watchdogd 后，用户观察到内核运行十多分钟并持续装载进程。第 37 次加入显示服务与原版 Apple Logo，真机持续停在 Logo。第 38 次诊断候选已完成构建、实际负载核对及临时启动，Sending/Booting 均为 OKAY；当前等待屏幕状态定位阻塞，尚未确认进入 Setup。
+更新：2026-10-24。根卷挂载和原版 launchd 启动已通过，当前推进阶段 7。第 34 次在 RAM Data 中停用缺少后端的 watchdogd 后，用户观察到内核运行十多分钟并持续装载进程。第 37 次加入显示服务与原版 Apple Logo，真机持续停在 Logo。第 38 次诊断候选已完成构建、实际负载核对及临时启动，Sending/Booting 均为 OKAY；用户反馈可见日志跑完后仍停在 Apple Logo，尚未进入 Setup。下一候选集中补齐同版参考中的用户态依赖。
 
 最终目标是在一加 13T 上启动 iPadOS 用户态和界面。当前源码 XNU 仅用于打通硬件路径；本阶段以 iPadOS 根卷挂载及其 `launchd` 启动为验收条件，图形界面仍需后续用户态、显示与输入适配。
 
@@ -583,3 +583,17 @@ Data 卷 UUID 为 `DCA82E33-8DB3-4192-A510-B1A9C6903118`，256 MiB 逻辑镜像�
 完整镜像为 `out/oneplus13t/boot/stage7-run-38/boot.img`，87,916,544 字节。封装回验、实际哈希和 Android v4 头检查通过，UEFI、原机 DTB、BootShim 与 160 MiB 内嵌 FAT 布局保持一致。用户重新确认 Fastboot 后，只读查询设备 `3B15BB01BAT00000` 和型号 `sun`，再执行临时启动：Sending 2.007 秒、Booting 0.337 秒，均为 OKAY，总计 2.644 秒，退出码 0。日志位于 `out/oneplus13t/logs/stage7-run-38-fastboot.log`。
 
 本轮未刷写分区，物理 UFS 写入继续关闭。当前等待手机新画面；成功发送镜像不代表已经进入 Setup，诊断回退也依赖观察线程继续运行。
+
+### 第 39 次候选：补齐进入初始化向导的运行条件
+
+第 38 次用户反馈日志跑完后仍停在 Logo。本轮对照固定 iPadOS 17.7.11 的 [UniXNU-sheng](https://github.com/UniXNU/UniXNU-sheng/tree/251b291adf941b9953fe3ae66a808b9b626e164d)、[UniXNU-tb128fu](https://github.com/xVanTuring/UniXNU-tb128fu/tree/0d55473e5c3a60656a12123d4c2fa8ea4f4a7383) 和通用显示库。Pong 使用 iOS 16，仅作为设计参考。现有预链接依赖已包含参考的大部分原版组件，未接入不适用于 SM8750 的 GPU 或外设寄存器实现。
+
+DarwinBoot 请求增至 4 GiB，临时 APFS Data 增至 1 GiB。13T 实际 DT 的高地址 RAM 存在 6 GiB 区间；加载器仍须从真实 UEFI ConventionalMemory 成功分配连续窗口，不宣称该分配已在真机通过。Data 使用现有稀疏页后端，1 GiB 低于其 2 GiB 易失卷上限；重启后仍恢复种子。新增同版 migration 偏好避免升级迁移，保持 Setup 完成标记不变。
+
+临时 launchd 策略沿用现有文件方式，增加 identityservicesd、locationd、CommCenter、bluetoothd、PerfPowerServices、iomfb_fdr_loader 和 iconservicesagent。前两项涉及同版参考记录的 SpringBoard/chronod/liveactivitiesd 同步等待链，后续项对应缺少硬件后端或参考机上的反复退出。加上 watchdogd 共八项；每项必须匹配当前原始任务的 Label 和完整 ProgramArguments，匹配失败即停止。此策略不代表已在 13T 捕获相同等待栈，停用图标渲染服务也可能使缺少缓存的图标留白。原始系统任务 plist 不修改。
+
+IOHIDEventDriver 改用参考的匹配加载接口，并确认 IOHIDResource 发布。显示库借用 [NativeMobileDisplay 8666a995](https://github.com/UniXNU/NativeMobileDisplay/tree/8666a9950c9699b368931d18cac92c0fdb2ce9c0) 的 work-loop 定时器，向原版客户端发送实际时钟驱动的 60 Hz 软件刷新通知，发布对应固定节奏。它用于软件渲染调度，不代表已适配物理面板 vblank。原版虚表和刷新函数绑定继续在编译期核对。关闭额外 kprintf spam，并使用同版参考的 -no_corpses，避免反复崩溃时收集大型 corpse 占用启动资源。
+
+Sheng 的四处 21H461 用户态兼容修复已与当前磁盘原始指令逐字节核对：AttentionAwareness 初始化锁等待、PosterBoard 两处数据保护属性约束、无蓝牙后端时 BTAudioHALPlugin 的忙重试。内核仅在 ephemeral-storage=1、完整原页通过签名校验且文件名/偏移/原始字节全部匹配时修改内存页，并同步指令缓存；磁盘系统文件不变。实现采用固定四项表，不开放任意地址或启动参数补丁。PosterBoard 调整只适用于当前未实现数据保护的临时卷，不能作为安全存储能力。
+
+新测试直接执行补丁中的兼容函数和显示定时器代码，覆盖非临时环境拒绝、错误文件/偏移/字节、修改范围、重复应用、无订阅者、迟到时钟、定时器释放及固定刷新属性；ASan/UBSan 通过。本地运行关闭 LeakSanitizer，因为受控执行环境不支持其进程跟踪，地址和未定义行为检查仍开启。五项 Data 测试、十项 ADT 测试和隔离源码/驱动补丁复用测试通过。新增内核补丁与现有相关补丁已在固定 XNU 原始文件上共同应用成功。完整 iOS 编译和 Setup 真机结果另行记录。

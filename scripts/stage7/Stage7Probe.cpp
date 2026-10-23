@@ -7,6 +7,7 @@
 #include <IOKit/IOUserClient.h>
 #include <libkern/c++/OSData.h>
 #include <libkern/c++/OSSymbol.h>
+#include <libkern/c++/OSKext.h>
 #include <pexpert/pexpert.h>
 #include <mach/kmod.h>
 extern "C" kmod_info_t g_kernel_kmod_info;
@@ -45,6 +46,7 @@ bool native_legacy_gop_mapping_observed(IOService *,IOMemoryMap *mapping,uint32_
 }
 void native_legacy_registration_observed(IOService *) {progress("display registered",1);}
 void native_legacy_swap_stage(unsigned) {}
+void native_legacy_vsync_observed(unsigned event,unsigned hz) {if(event==4)progress("software display refresh Hz",hz);}
 void native_legacy_client_enter(task_t,uint32_t type) {progress("display client enter",type);}
 void native_legacy_client_observed(IOReturn status,IOUserClient *) {progress("display client",status?(uint32_t)status:++clients);}
 void native_legacy_pm_observed(unsigned stage,IOReturn status,unsigned long) {if(status)progress("display PM error",((uint64_t)stage<<32)|(uint32_t)status);}
@@ -115,7 +117,12 @@ extern "C" void native_legacy_display_late_probe(void) {
     progress("IOHIDFamily load enter",0);
     progress("IOHIDFamily load",(uint32_t)OSKextLoadKextWithIdentifier("com.apple.iokit.IOHIDFamily"));
     progress("IOHIDEventDriver load enter",0);
-    progress("IOHIDEventDriver load",(uint32_t)OSKextLoadKextWithIdentifier("com.apple.iokit.IOHIDEventDriver"));
+    progress("IOHIDEventDriver matching",(uint32_t)OSKext::loadKextWithIdentifier(
+        "com.apple.iokit.IOHIDEventDriver",true,false,kOSKextExcludeNone,kOSKextExcludeNone,nullptr));
+    OSDictionary *hidMatching=IOService::serviceMatching("IOHIDResource");
+    IOService *hidResource=hidMatching?IOService::waitForMatchingService(hidMatching,5000000000ULL):nullptr;
+    progress("IOHIDResource ready",hidResource!=nullptr);
+    OSSafeReleaseNULL(hidResource);OSSafeReleaseNULL(hidMatching);
     IOService *display=pendingDisplay;
     pendingDisplay=nullptr;
     if(!display){progress("no initialized display",0);return;}

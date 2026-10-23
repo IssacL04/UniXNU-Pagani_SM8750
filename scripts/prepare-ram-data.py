@@ -17,6 +17,36 @@ import subprocess
 import uuid
 
 
+# Same-build hardware wait/crash loops documented by UniXNU-sheng and UniXNU-tb128fu.
+DISABLED_JOBS = {
+    'com.apple.watchdogd': ['/usr/libexec/watchdogd'],
+    'com.apple.identityservicesd': ['/System/Library/PrivateFrameworks/IDS.framework/identityservicesd.app/identityservicesd'],
+    'com.apple.locationd': ['/usr/libexec/locationd'],
+    'com.apple.CommCenter': ['/System/Library/Frameworks/CoreTelephony.framework/Support/CommCenter'],
+    'com.apple.bluetoothd': ['/usr/sbin/bluetoothd'],
+    'com.apple.PerfPowerServices': ['/usr/libexec/PerfPowerServices'],
+    'com.apple.iomfb_fdr_loader': ['/usr/bin/IOMFB_FDR_Loader', '--launchd_boot'],
+    'com.apple.iconservices.iconservicesagent': ['/System/Library/CoreServices/iconservicesagent'],
+}
+DATA_BYTES = 1024**3
+COMPAT_FIXUPS = (
+    ('system', 'System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64.15', 0x421e8bc, '28ad1bb0008544f9'),
+    ('system', 'System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64.13', 0x1b05bec, '44008052'),
+    ('system', 'System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64.13', 0x1b05b08, '44008052'),
+    ('os', 'System/Library/Audio/Plug-Ins/HAL/BTAudioHALPlugin.driver/BTAudioHALPlugin', 0x38bec, 'ffc300d1f44f01a9'),
+)
+
+
+def verify_userspace_compat(original, system):
+    for volume, relative, offset, expected in COMPAT_FIXUPS:
+        path = (original if volume == 'os' else system) / relative
+        with path.open('rb') as stream:
+            stream.seek(offset)
+            actual = stream.read(len(bytes.fromhex(expected)))
+        if actual.hex() != expected:
+            raise ValueError('Unexpected 21H461 compatibility instructions: ' + relative)
+
+
 def prepare_userspace(target):
     for relative in ('containers/Bundle', 'containers/Data/System',
                      'containers/Shared/SystemGroup', 'containers/Temp'):
@@ -36,14 +66,23 @@ def prepare_userspace(target):
     owner = (target / 'mobile').stat()
     os.chown(path, owner.st_uid, owner.st_gid)
     path.chmod(0o600)
+    # Fresh 21H461 data needs no upgrade migration; keep Setup's completion flags untouched.
+    migration = preferences / 'com.apple.migration.plist'
+    values = plistlib.loads(migration.read_bytes()) if migration.exists() else {}
+    values.update(LastSystemVersion='21H461',
+                  DMUserDataDisposition={'SyntheticDidUpgrade': False, 'buildVersion': '21H461'})
+    migration.write_bytes(plistlib.dumps(values, fmt=plistlib.FMT_BINARY))
+    os.chown(migration, owner.st_uid, owner.st_gid)
+    migration.chmod(0o600)
 
 
-def disable_unimplemented_watchdog(target, daemon):
-    job = plistlib.loads(daemon.read_bytes())
-    if (job.get('Label') != 'com.apple.watchdogd' or
-            job.get('ProgramArguments') != ['/usr/libexec/watchdogd'] or
-            job.get('_PanicOnCrash', {}).get('PanicOnConsecutiveCrash') is not True):
-        raise ValueError('Unexpected original watchdog launch policy')
+def prepare_launch_policy(target, daemons):
+    for label, arguments in DISABLED_JOBS.items():
+        job = plistlib.loads((daemons / (label + '.plist')).read_bytes())
+        if job.get('Label') != label or job.get('ProgramArguments') != arguments:
+            raise ValueError('Unexpected original launch policy: ' + label)
+        if label == 'com.apple.watchdogd' and job.get('_PanicOnCrash', {}).get('PanicOnConsecutiveCrash') is not True:
+            raise ValueError('Unexpected original watchdog crash policy')
     for relative in ('db', 'db/com.apple.xpc.launchd'):
         directory = target / relative
         if directory.is_symlink():
@@ -52,8 +91,8 @@ def disable_unimplemented_watchdog(target, daemon):
     paths = [directory / name for name in ('disabled.plist', 'disabled.migrated')]
     if any(path.exists() or path.is_symlink() for path in paths):
         raise ValueError('Refuse to overwrite an existing launch policy')
-    # shortcut: disable watchdogd in volatile Data until a real IOWatchdog backend exists.
-    policy = {'com.apple.watchdogd': True}
+    # shortcut: unavailable hardware jobs and GPU icon rendering stay off until their backends work.
+    policy = dict.fromkeys(DISABLED_JOBS, True)
     for path, data in zip(paths, (plistlib.dumps(policy), b'')):
         with path.open('xb') as stream:
             stream.write(data)
@@ -80,7 +119,7 @@ def mounted(image, target, readonly=False):
         subprocess.run(['hdiutil', 'detach', device], check=True)
 
 
-def prepare(tree, source, output, config):
+def prepare(tree, source, systemos, output, config):
     if os.geteuid() != 0:
         raise ValueError('Run as root to preserve original uid/gid and modes')
     if output.exists():
@@ -88,14 +127,19 @@ def prepare(tree, source, output, config):
     with source.open('rb') as stream:
         if hashlib.file_digest(stream, 'sha256').hexdigest() != '3f99b859c9728379110b66657c7b15285bcb1925ad8b5726542e2cdcf8b1028d':
             raise ValueError('OS input hash mismatch')
+    with systemos.open('rb') as stream:
+        if hashlib.file_digest(stream, 'sha256').hexdigest() != 'b4908cde41d23e6bc05e6af51a2c9eeb00cf0f863a6a18b1600c96a3fd70414f':
+            raise ValueError('SystemOS input hash mismatch')
     output.mkdir(parents=True)
     image = output / 'data.cdr'
-    # shortcut: 256 MiB volatile Data for bring-up; qualify persistent storage separately.
-    subprocess.run(['hdiutil', 'create', '-size', '256m', '-layout', 'NONE', '-fs', 'APFS',
+    # shortcut: 1 GiB sparse volatile Data for Setup and caches; qualify persistent storage separately.
+    subprocess.run(['hdiutil', 'create', '-size', f'{DATA_BYTES // 1024**2}m', '-layout', 'NONE', '-fs', 'APFS',
                     '-volname', 'OwnerData', '-type', 'UDTO', str(image)], check=True)
     original, target = output / 'os', output / 'data'
     count = total = 0
     with mounted(source, original, readonly=True):
+        with mounted(systemos, output / 'systemos', readonly=True):
+            verify_userspace_compat(original, output / 'systemos')
         if hashlib.sha256((original / 'sbin/launchd').read_bytes()).hexdigest() != '8cec9a3c44a443b08e977ccc5d577850316ad428c575dc01f09b018dbd5b6a25':
             raise ValueError('Original launchd identity mismatch')
         with mounted(image, target) as device:
@@ -137,17 +181,17 @@ def prepare(tree, source, output, config):
                     os.chown(directory, parent.st_uid, parent.st_gid)
             os.chmod(target / 'tmp', 0o1777)
             prepare_userspace(target)
-            disabled_jobs = disable_unimplemented_watchdog(
-                target, original / 'System/Library/LaunchDaemons/com.apple.watchdogd.plist')
+            disabled_jobs = prepare_launch_policy(target, original / 'System/Library/LaunchDaemons')
     with image.open('rb') as stream:
         header = stream.read(4096)
-    if image.stat().st_size != 256 * 1024**2 or header[32:36] != b'NXSB':
+    if image.stat().st_size != DATA_BYTES or header[32:36] != b'NXSB':
         raise ValueError('Unexpected APFS seed geometry')
     pack = runpy.run_path(str(tree / 'drivers/DarwinBoot/Test/packed_ramdisk.py'))['pack']
     packed = pack(image, output / 'data.dbrdisk')
     report = dict(volume_uuid=identity, packed=packed, source_regular_files=count,
                   source_regular_bytes=total, guest_mutable=True, persistent=False,
                   bringup_disabled_jobs=disabled_jobs,
+                  userspace_compat_original_instructions_verified=True,
                   mobilegestalt_cache_cleared=True, setup_skipped=False, auto_dim_disabled=True,
                   ownership_preserved=True, os_inputs_modified=False, hardware_tested=False)
     (output / 'seed.json').write_text(json.dumps(report, indent=2) + '\n')
@@ -161,7 +205,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--tree', type=Path, required=True)
     parser.add_argument('--source', type=Path, required=True)
+    parser.add_argument('--systemos', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--config', type=Path, required=True)
     args = parser.parse_args()
-    prepare(*(getattr(args, name).resolve() for name in ('tree', 'source', 'output', 'config')))
+    prepare(*(getattr(args, name).resolve() for name in ('tree', 'source', 'systemos', 'output', 'config')))

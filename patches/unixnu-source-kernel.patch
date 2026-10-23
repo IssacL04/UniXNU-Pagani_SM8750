@@ -3894,3 +3894,116 @@ diff --git a/patches/xnu/zzz-boot-progress.patch b/patches/xnu/zzz-boot-progress
   #endif
   #if CONFIG_MEMORYSTATUS
  @@ -7891,6 +7899,7 @@
+diff --git a/patches/xnu/native-stage7-userspace-compat.patch b/patches/xnu/native-stage7-userspace-compat.patch
+new file mode 100644
+--- /dev/null
++++ b/patches/xnu/native-stage7-userspace-compat.patch
+@@ -0,0 +1,108 @@
++diff --git a/bsd/kern/ubc_subr.c b/bsd/kern/ubc_subr.c
++--- a/bsd/kern/ubc_subr.c
+++++ b/bsd/kern/ubc_subr.c
++@@ -5888,6 +5888,65 @@
++ 	return validated;
++ }
++
+++/* 21H461 compatibility from UniXNU-sheng, restricted to volatile bring-up Data. */
+++#include <pexpert/device_tree.h>
+++struct native_stage7_fixup {
+++    const char *name;
+++    uint64_t offset;
+++    uint8_t original[8], replacement[8];
+++    uint32_t length;
+++};
+++static const struct native_stage7_fixup native_stage7_fixups[] = {
+++    /* AttentionAwareness class initialization otherwise waits on Siri's initialization lock. */
+++    {"dyld_shared_cache_arm64.15", 0x421e8bc, {0x28,0xad,0x1b,0xb0,0x00,0x85,0x44,0xf9}, {0xc0,0x03,0x5f,0xd6,0x00,0x85,0x44,0xf9}, 8},
+++    /* PosterBoard accepts the real unencrypted Data permissions without a data-protection attribute. */
+++    {"dyld_shared_cache_arm64.13", 0x1b05bec, {0x44,0x00,0x80,0x52}, {0x24,0x00,0x80,0x52}, 4},
+++    {"dyld_shared_cache_arm64.13", 0x1b05b08, {0x44,0x00,0x80,0x52}, {0x24,0x00,0x80,0x52}, 4},
+++    /* No Bluetooth backend: decline its audio plugin instead of reconnecting in a busy loop. */
+++    {"BTAudioHALPlugin", 0x38bec, {0xff,0xc3,0x00,0xd1,0xf4,0x4f,0x01,0xa9}, {0x00,0x00,0x80,0xd2,0xc0,0x03,0x5f,0xd6}, 8},
+++};
+++static bool native_stage7_compat_enabled;
+++uint32_t native_stage7_compat_applied;
+++static void
+++native_stage7_compat_init(void)
+++{
+++    DTEntry chosen;
+++    void const *value;
+++    unsigned int size;
+++    uint32_t ephemeral = 0;
+++    if (SecureDTLookupEntry(NULL, "/chosen", &chosen) == kSuccess &&
+++        SecureDTGetProperty(chosen, "ephemeral-storage", &value, &size) == kSuccess && size == sizeof(ephemeral)) {
+++        memcpy(&ephemeral, value, sizeof(ephemeral));
+++    }
+++    native_stage7_compat_enabled = ephemeral == 1;
+++}
+++STARTUP(EARLY_BOOT, STARTUP_RANK_MIDDLE, native_stage7_compat_init);
+++
+++/* Called only after the full original page passed code-signature validation. */
+++uint32_t
+++native_stage7_compat_page(struct vnode *vp, memory_object_offset_t page_offset, void *kva)
+++{
+++    uint32_t written = 0;
+++    if (!native_stage7_compat_enabled || vp == NULLVP || vp->v_name == NULL) {
+++        return 0;
+++    }
+++    for (unsigned i = 0; i < sizeof(native_stage7_fixups) / sizeof(native_stage7_fixups[0]); ++i) {
+++        const struct native_stage7_fixup *f = &native_stage7_fixups[i];
+++        if (strcmp(vp->v_name, f->name) != 0 || f->offset < page_offset ||
+++            f->offset - page_offset > PAGE_SIZE - f->length) {
+++            continue;
+++        }
+++        uint8_t *at = (uint8_t *)kva + (f->offset - page_offset);
+++        if (memcmp(at, f->original, f->length) != 0) {
+++            continue;
+++        }
+++        memcpy(at, f->replacement, f->length);
+++        written++;
+++        os_atomic_inc(&native_stage7_compat_applied, relaxed);
+++    }
+++    return written;
+++}
+++
++ boolean_t
++ cs_validate_range(
++ 	struct vnode    *vp,
++diff --git a/osfmk/vm/vm_fault.c b/osfmk/vm/vm_fault.c
++--- a/osfmk/vm/vm_fault.c
+++++ b/osfmk/vm/vm_fault.c
++@@ -100,6 +100,9 @@
++ #include <vm/memory_object.h>
++ #include <vm/vm_purgeable_internal.h>   /* Needed by some vm_page.h macros */
++ #include <vm/vm_shared_region.h>
+++#if __arm64__
+++#include <arm/caches_internal.h>
+++#endif
++
++ #include <sys/codesign.h>
++ #include <sys/code_signing.h>
++@@ -7797,6 +7800,14 @@
++ 	page->vmp_cs_tainted |= tainted;
++ 	page->vmp_cs_nx |= nx;
++
+++#if __arm64__
+++	/* Fixed 21H461 compatibility changes land after validation, through the physical aperture, before any mapping. */
+++	if (validated == VMP_CS_ALL_TRUE && tainted == VMP_CS_ALL_FALSE &&
+++	    native_stage7_compat_page(vnode, mo_offset, (void *)phystokv((pmap_paddr_t)VM_PAGE_GET_PHYS_PAGE(page) << PAGE_SHIFT)) != 0) {
+++		cache_sync_page(VM_PAGE_GET_PHYS_PAGE(page));
+++	}
+++#endif
+++
++ #if CHECK_CS_VALIDATION_BITMAP
++ 	if (page->vmp_cs_validated == VMP_CS_ALL_TRUE &&
++ 	    page->vmp_cs_tainted == VMP_CS_ALL_FALSE) {
++diff --git a/osfmk/vm/vm_protos.h b/osfmk/vm/vm_protos.h
++--- a/osfmk/vm/vm_protos.h
+++++ b/osfmk/vm/vm_protos.h
++@@ -539,6 +539,7 @@
++     const void *data,
++     vm_size_t size,
++     unsigned *result);
+++extern uint32_t native_stage7_compat_page(struct vnode *vp, memory_object_offset_t page_offset, void *kva);
++ extern void cs_validate_page(
++ 	struct vnode *vp,
++ 	memory_object_t pager,

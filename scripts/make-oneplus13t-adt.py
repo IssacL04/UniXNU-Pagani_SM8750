@@ -52,8 +52,8 @@ def empty_nvram_proxy():
 
 
 def make_tree(memory_size, random_seed, root_match_volume_uuid=None, trust_cache=False, packed_data_ramdisk=False, ipad_identity=False, unique_chip_id=None, chip_id=0x8011):
-    if memory_size not in (0x10000000, 0x20000000, 0x40000000) or len(random_seed) != 64:
-        raise ValueError('13T probes require 256/512/1024 MiB and a 64-byte random seed')
+    if memory_size not in (0x10000000, 0x20000000, 0x40000000, 0x100000000) or len(random_seed) != 64:
+        raise ValueError('13T requires 256/512/1024/4096 MiB and a 64-byte random seed')
     if unique_chip_id is not None and not 0 < unique_chip_id < 1 << 64:
         raise ValueError('Platform seed must be a nonzero 64-bit value')
     if ipad_identity and unique_chip_id is None:

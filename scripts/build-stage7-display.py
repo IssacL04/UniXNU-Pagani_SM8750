@@ -120,12 +120,12 @@ owned=[];native=[]
 for i,name in enumerate(compiled):
     expected=int(methods[i]['address'],16)
     if name.startswith(('__ZN19NativeLegacyDisplay','__ZNK19NativeLegacyDisplay')):
-        owned.append(i);require(i in (0,1,7,14,84,86,87,141,155,184,188,288,290,296) or i in pure,'Only qualified own methods and guarded leaves override')
+        owned.append(i);require(i in (0,1,7,14,84,86,87,141,155,184,188,288,290,296,301) or i in pure,'Only qualified own methods and guarded leaves override')
     elif '25IOMobileFramebufferLegacy' in name:
         require(i not in pure,'No unresolved original abstract backend target');bindings[name]=expected
     else:
         require(i<168 and names.get(name)==expected,'Actual inherited native base symbol '+str(i));native.append(i)
-require(owned==sorted([0,1,7,14,84,86,87,141,155,184,188,288,290,296]+pure),'Exact owned method set')
+require(owned==sorted([0,1,7,14,84,86,87,141,155,184,188,288,290,296,301]+pure),'Exact owned method set')
 undefined={n for n,_,k in symbols if k==1 and 'IOMobileFramebufferLegacy' in n}
 require(undefined==set(bindings),'All and only actual original-class imports qualified')
 # Exact original IOSurface getters, independently observed through the real

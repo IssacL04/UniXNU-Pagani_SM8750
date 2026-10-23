@@ -35,6 +35,7 @@ jobs:
           python3 scripts/test-ram-data.py
           TREE=$(./unixnu --prepare)
           echo "UNIXNU_TREE=$TREE" >> "$GITHUB_ENV"
+          python3 scripts/test-stage7.py --tree "$TREE"
           python3 "$TREE/scripts/test-kernel-source.py"
           python3 "$TREE/scripts/test-bootimg.py"
           python3 scripts/test-adt.py AdtTest.test_tree_contract AdtTest.test_invalid_window AdtTest.test_media_window AdtTest.test_userspace_memory_window AdtTest.test_root_volume_matching AdtTest.test_invalid_root_uuid AdtTest.test_trust_cache_binding AdtTest.test_packed_data_binding AdtTest.test_ipad_identity
@@ -81,6 +82,7 @@ jobs:
         run: |
           sudo "$(command -v python3)" scripts/prepare-ram-data.py --tree "$UNIXNU_TREE" \
             --source out/ipsw/21H461/044-76040-038.dmg \
+            --systemos out/ipsw/21H461/044-76034-038.dmg \
             --output out/oneplus13t/ram-data --config out/oneplus13t/.config \
             2>&1 | tee out/oneplus13t/logs/actions-ram-data.log
 
