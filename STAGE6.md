@@ -1,6 +1,6 @@
 # Stage 6：一加 13T 存储与根卷
 
-更新：2026-10-24。第 33 次 RAM Data 候选已进入更晚的用户态服务阶段，约 101 秒后因 watchdogd[144] 的 SIGTRAP 退出而 panic。原版程序在找不到 IOWatchdog 时主动崩溃，当前内核缺少该后端；具体用户态崩溃 PC 尚未采集。第 34 次已完成云端构建和实际镜像检查，只在临时 RAM Data 中停用 com.apple.watchdogd，保留原版系统文件与 panic 检查；临时启动 Sending/Booting 均为 OKAY，等待新照片。
+更新：2026-10-24。根卷挂载和原版 launchd 启动已通过，当前推进阶段 7。第 34 次在 RAM Data 中停用缺少后端的 watchdogd 后，用户观察到内核运行十多分钟并持续装载进程。第 37 次加入显示服务与原版 Apple Logo，真机持续停在 Logo。第 38 次诊断候选已完成构建、实际负载核对及临时启动，Sending/Booting 均为 OKAY；当前等待屏幕状态定位阻塞，尚未确认进入 Setup。
 
 最终目标是在一加 13T 上启动 iPadOS 用户态和界面。当前源码 XNU 仅用于打通硬件路径；本阶段以 iPadOS 根卷挂载及其 `launchd` 启动为验收条件，图形界面仍需后续用户态、显示与输入适配。
 
@@ -51,8 +51,8 @@ DeviceTree、两份 trust cache 和原始 KernelCache 也已从同一恢复包�
 
 1. 第 20 次候选已通过只读 GPT/首块检查，先保留这一可复现基线。模式 10 主动停止是设计行为，无需为了消除该 panic 修改传输代码。
 2. 根镜像已通过 Fastboot 写入 `unixnu`，模式 11 真机照片确认 `manifest status=0 windows=2`，两个窗口均为 `read=1`，偏移、大小及 manifest 内哈希字段与本地输入一致。已完成窗口首块读回，尚未进行手机侧全镜像哈希验证。
-3. 第 28 次已通过根卷接受并进入 SystemOS 准备，但未观察到返回。第 30 次进一步定位到 copyout，根认证和 SystemOS 查询成功。第 31 次已越过该停点并启动用户态服务，tzinit PID 17 退出状态为 30；第 33 次已进入 watchdogd PID 144，停于 SIGTRAP；当前断点转为缺少 IOWatchdog 后端。第 34 次已通过 RAM Data 中的单项服务策略完成候选构建和临时启动，等待真机后续状态。
-4. 按 bring-up.md 的目标，根卷挂载与原版 `launchd` 启动已经通过，当前进入阶段 7 用户态排障。下一步确认第 34 次是否越过 watchdogd 停点，并继续处理用户态服务所需的硬件依赖；显示服务、稳定运行与交互仍待验证。
+3. 第 31 次已越过 SystemOS copyout 停点并启动用户态服务，tzinit PID 17 退出状态为 30；第 33 次进入 watchdogd PID 144，停于 SIGTRAP。第 34 次在 RAM Data 中停用该任务后，用户观察到持续运行十多分钟，尚无图形界面。
+4. 按 bring-up.md 的目标，根卷挂载与原版 `launchd` 启动已经通过，当前进入阶段 7。第 37 次真机停留在 Logo；第 38 次增加持久显示/进程退出状态及诊断回退，已临时启动。下一步依据实际屏幕定位显示或用户态停点，继续推进 Setup；稳定运行与交互仍待验证。
 
 ## 真机寄存器结果与第二轮启动
 
@@ -573,3 +573,13 @@ Data 卷 UUID 为 `DCA82E33-8DB3-4192-A510-B1A9C6903118`，256 MiB 逻辑镜像�
 下一候选保留 Logo 上方的阶段、定时器/内存/UFS、显示服务状态和最后退出进程；观察线程运行 30 次仍未交接显示时，展开最近阶段并继续启动。显示状态和最后一次进程退出独立保存，避免被后续 exec 日志冲掉。还修复首次画面复制失败后诊断仍被关闭的路径：尚无成功帧时释放显示占用；成功帧和 panic 仍受保护。这是源码中确认的条件性缺陷，尚未证明就是本次真机停点。
 
 显示初始化、HID/IOSurface 加载、用户客户端和 GOP start 的入口均记录状态；ADT 补齐与实际未旋转 GOP 一致的 display-rotation=0。framebuffer 的 ASan/UBSan 检查覆盖 30 秒回退、首帧失败恢复、成功交接后的像素保护、持久退出记录及 panic；10 项 ADT 测试通过。此次未根据 Logo 画面推断具体服务故障，也未扩大服务禁用列表。
+
+### 第 38 次：诊断候选构建通过并临时启动
+
+[第 38 次构建](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/40011668869)以 `e46eb16` 完成，全部步骤成功。实际 FAT 中的内核、ADT、trust cache、根策略和 RAM Data 配套检查通过，原版安全、显示及 HID 可执行段保持一致。内核为 127,664,128 字节，仍含 29 个原版可执行组件及 IOHIDEventDriver 配置。Data UUID 为 `37B0C3E1-BE3F-471E-BBCE-CDB05ADA267B`，256 MiB 逻辑镜像打包为 1,015,904 字节；实际 APFS 读回确认仅停用 watchdogd，默认未跳过 Setup。
+
+新增显示状态接口、首帧失败恢复接口和 display-rotation=0 均已核对实际负载。编译器将固定诊断提示展开成逐字调用，因此字符串搜索未命中；反汇编确认 30 次轮询比较分支及完整提示字符序列均保留。此处是检查方法的修正，没有为此修改内核或重新构建。
+
+完整镜像为 `out/oneplus13t/boot/stage7-run-38/boot.img`，87,916,544 字节。封装回验、实际哈希和 Android v4 头检查通过，UEFI、原机 DTB、BootShim 与 160 MiB 内嵌 FAT 布局保持一致。用户重新确认 Fastboot 后，只读查询设备 `3B15BB01BAT00000` 和型号 `sun`，再执行临时启动：Sending 2.007 秒、Booting 0.337 秒，均为 OKAY，总计 2.644 秒，退出码 0。日志位于 `out/oneplus13t/logs/stage7-run-38-fastboot.log`。
+
+本轮未刷写分区，物理 UFS 写入继续关闭。当前等待手机新画面；成功发送镜像不代表已经进入 Setup，诊断回退也依赖观察线程继续运行。
