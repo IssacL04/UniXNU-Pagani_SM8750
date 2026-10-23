@@ -3759,3 +3759,102 @@ diff --git a/patches/xnu/offline-owner-root-binding-audit.patch b/patches/xnu/of
 ++	}
  +}
  +#endif
+diff --git a/patches/xnu/offline-owner-systemos-mount.patch b/patches/xnu/offline-owner-systemos-mount.patch
+--- a/patches/xnu/offline-owner-systemos-mount.patch
++++ b/patches/xnu/offline-owner-systemos-mount.patch
+@@ -9,7 +9,7 @@
+  
+  #include <mach/exclaves.h>
+  
+-@@ -7013,8 +7013,253 @@
++@@ -7013,8 +7013,271 @@
+   *		word width of the kernel. Once the self-exec completes, the
+   *		initproc might be different.
+   */
+@@ -62,6 +62,8 @@
+ +#if !defined(XNU_OWNER_UNION_SYSTEMOS) || !XNU_OWNER_UNION_SYSTEMOS
+ +	const char *environment = "DYLD_SHARED_CACHE_DIR=/private/preboot/System/Library/Caches/com.apple.dyld";
+ +#endif
+++	native_owner_cache_stage = -1;
+++	boot_progress_root("SystemOS root device enter", NULL, 0);
+ +	vnode_t original_os_root = rootvnode;
+ +	native_owner_cache_original_root = (uintptr_t)original_os_root;
+ +	mount_t root_mount = vnode_mount(original_os_root);
+@@ -92,32 +94,41 @@
+ +	request.flags |= MNT_UNION;
+ +#endif
+ +	if (device_vnode) vnode_put(device_vnode);
+++	boot_progress_root("SystemOS root auth enter", NULL, (unsigned)root_device);
+ +	root_authorized = (vfs_flags(root_mount) & MNT_RDONLY) && root_device != NODEV &&
+ +	    native_verified_block_root_authorized(root_device);
+++	boot_progress_root("SystemOS root auth returned", NULL, root_authorized);
+ +	if (!root_authorized) goto done;
+ +	native_owner_cache_stage = 1;
+++	boot_progress_root("SystemOS volume query enter", volume, 0);
+ +	if (!native_verified_block_volume_device(volume, &selected, device_path,
+ +	    sizeof(device_path))) goto done;
+ +	strlcpy(native_owner_cache_device_path, device_path, sizeof(native_owner_cache_device_path));
+ +	native_owner_cache_selected_device = selected;
+ +	native_owner_cache_stage = 2;
+++	boot_progress_root("SystemOS volume query returned", device_path, (unsigned)selected);
+ +	/* Exact user-mount payload already qualified against this original APFS. */
+ +	memcpy(mount_data, &spec, sizeof(spec));
+ +	memcpy(mount_data + 8, &mount_flags, sizeof(mount_flags));
+ +	memcpy(mount_data + 16, &mount_mode, sizeof(mount_mode));
+ +	memcpy(mount_data + 0x144, &anonymous_owner, sizeof(anonymous_owner));
+ +	memcpy(mount_data + 0x148, &anonymous_owner, sizeof(anonymous_owner));
+++	boot_progress_root("SystemOS copyout enter", NULL, scratch);
+ +	if ((error = copyout("apfs", request.type, 5)) != 0 ||
+ +	    (error = copyout(mountpoint, request.path, strlen(mountpoint) + 1)) != 0 ||
+ +	    (error = copyout(device_path, spec, strlen(device_path) + 1)) != 0 ||
+ +	    (error = copyout(mount_data, request.data, sizeof(mount_data))) != 0) goto done;
+ +	native_owner_cache_stage = 3;
+++	boot_progress_root("SystemOS mount syscall enter", device_path, request.flags);
+ +	error = mount(p, &request, &result);
+++	boot_progress_root("SystemOS mount syscall returned", NULL, (unsigned)error);
+ +	native_owner_cache_mount_status = error;
+ +	if (error) goto done;
+ +	native_owner_cache_stage = 4;
+++	boot_progress_root("SystemOS vnode lookup enter", mountpoint, 0);
+ +	error = vnode_lookup(mountpoint, 0, &mounted_root, vfs_context_current());
+ +	if (error) goto done;
+++	boot_progress_root("SystemOS vnode lookup returned", NULL, (unsigned)error);
+ +	mount_t cache_mount = vnode_mount(mounted_root);
+ +	device_vnode = vfs_devvp(cache_mount);
+ +	dev_t actual = device_vnode ? vnode_specrdev(device_vnode) : NODEV;
+@@ -130,11 +141,13 @@
+ +	int native_union = (vfs_flags(cache_mount) & MNT_UNION) &&
+ +	    vnode_mountedhere(original_os_root) == cache_mount && rootvnode == mounted_root;
+ +	native_owner_cache_native_union = native_union;
+++	boot_progress_root("SystemOS mounted auth enter", NULL, (unsigned)actual);
+ +	cache_authorized = readonly && actual == selected &&
+ +	    !strcmp(vfs_statfs(cache_mount)->f_fstypename, "apfs") && native_verified_block_root_authorized(actual);
+ +#if defined(XNU_OWNER_UNION_SYSTEMOS) && XNU_OWNER_UNION_SYSTEMOS
+ +	cache_authorized = cache_authorized && native_union;
+ +#endif
+++	boot_progress_root("SystemOS mounted auth returned", NULL, cache_authorized);
+ +	if (!cache_authorized) { error = EAUTH; goto done; }
+ +	native_owner_cache_stage = 5;
+ +#if !defined(XNU_OWNER_UNION_SYSTEMOS) || !XNU_OWNER_UNION_SYSTEMOS
+@@ -150,13 +163,18 @@
+ +	native_owner_cache_stage = 6;
+ +done:
+ +	if (mounted_root) vnode_put(mounted_root);
+++	boot_progress_root("SystemOS root recheck enter", NULL, (unsigned)root_device);
+ +	int root_recheck = root_authorized && native_verified_block_root_authorized(root_device);
+ +	native_owner_cache_root_recheck = root_recheck;
+++	boot_progress_root("SystemOS root recheck returned", NULL, root_recheck);
+ +	if (!root_recheck) error = EAUTH;
+ +#if defined(XNU_OWNER_BOOT_MANIFEST) && XNU_OWNER_BOOT_MANIFEST
+-+	if (!error && cache_authorized && root_recheck &&
+-+	    !native_owner_publish_boot_manifest(root_device, "04769D26-2CA0-4825-B443-E2E5F88300F2",
+-+	        selected, volume)) error = EAUTH;
+++	if (!error && cache_authorized && root_recheck) {
+++		boot_progress_root("SystemOS boot manifest enter", NULL, 0);
+++		if (!native_owner_publish_boot_manifest(root_device, "04769D26-2CA0-4825-B443-E2E5F88300F2",
+++		    selected, volume)) error = EAUTH;
+++		boot_progress_root("SystemOS boot manifest returned", NULL, (unsigned)error);
+++	}
+ +#endif
+ +#if defined(XNU_OWNER_CACHE_STARTUP) && XNU_OWNER_CACHE_STARTUP
+ +	if (!error && cache_authorized && root_recheck) {

@@ -23,6 +23,11 @@ extern volatile uint32_t armdt_platform_configured, armcpu_registered, armcpu_gi
 extern volatile uint64_t armcpu_timer_interrupts;
 extern volatile uint32_t armcpu_gic_boot[8];
 extern void early_boot_progress_vectors_done(void);
+extern volatile int native_owner_cache_stage __attribute__((weak));
+extern volatile uint64_t native_ufs_block_reads __attribute__((weak));
+extern volatile uint64_t native_ufs_block_failures __attribute__((weak));
+extern unsigned vm_page_free_count;
+extern uint32_t memorystatus_available_pages;
 
 // These values are also read by the stackless fatal exception entry.
 uint64_t early_boot_args_pa, early_boot_phys_base, early_boot_virt_base;
@@ -41,6 +46,9 @@ static uint64_t root_sequence, root_value, root_tick, fault_esr, fault_pc, fault
 static int fault_valid;
 char boot_progress_panic_text[2048];
 extern int vsnprintf(char *, size_t, const char *, va_list);
+extern int snprintf(char *, size_t, const char *, ...);
+static char storage_status[96];
+static char timer_status[96];
 
 static void barrier(void)
 {
@@ -153,6 +161,11 @@ static void putc_raw(char c)
 static void text_raw(const char *s)
 {
     while (*s) putc_raw(*s++);
+}
+
+static void line_raw(const char *s)
+{
+    while (*s && column < width / CELL) putc_raw(*s++);
 }
 
 static void hex_raw(uint64_t n)
@@ -439,11 +452,22 @@ static void poll(void *unused0, void *unused1)
         busy = 1;
         unsigned saved_row = row, saved_column = column;
         row = 1; column = 0; clear_line(LINE);
-        text_raw("poll "); hex_raw(++poll_count); text_raw(" timer "); hex_raw(armcpu_timer_interrupts);
+        snprintf(timer_status, sizeof(timer_status), "poll %016llx timer %016llx",
+                 (unsigned long long)++poll_count, (unsigned long long)armcpu_timer_interrupts);
+        line_raw(timer_status);
         row = 2; column = 0; clear_line(2 * LINE);
-        text_raw("DT/CPU/GIC "); putc_raw('0' + !!armdt_platform_configured);
-        putc_raw('/'); putc_raw('0' + !!armcpu_registered); putc_raw('/'); putc_raw('0' + !!armcpu_gic_ready);
-        text_raw(" PPI-enable "); hex_raw(armcpu_gic_boot[1]);
+        if (&native_owner_cache_stage && native_owner_cache_stage &&
+            &native_ufs_block_reads && &native_ufs_block_failures) {
+            snprintf(storage_status, sizeof(storage_status), "free=%u avail=%u UFS=%llu err=%llu",
+                     vm_page_free_count, memorystatus_available_pages,
+                     (unsigned long long)native_ufs_block_reads, (unsigned long long)native_ufs_block_failures);
+            line_raw(storage_status);
+        } else {
+            snprintf(storage_status, sizeof(storage_status), "DT/CPU/GIC %u/%u/%u PPI-enable %016llx",
+                     !!armdt_platform_configured, !!armcpu_registered, !!armcpu_gic_ready,
+                     (unsigned long long)armcpu_gic_boot[1]);
+            line_raw(storage_status);
+        }
         row = saved_row; column = saved_column; barrier(); busy = 0;
     }
     irq_restore(flags);

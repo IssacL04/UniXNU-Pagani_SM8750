@@ -28,6 +28,10 @@ static void thread_call_enter(thread_call_t call) { assert(call); }
 static thread_call_t thread_call_allocate_with_options(void (*fn)(void *, void *), void *arg, int priority, int options)
 { (void)fn; (void)arg; (void)priority; (void)options; return (void *)1; }
 #include "../BootProgress.c"
+volatile int native_owner_cache_stage;
+volatile uint64_t native_ufs_block_reads, native_ufs_block_failures;
+unsigned vm_page_free_count;
+uint32_t memorystatus_available_pages;
 
 static void panic_for_test(const char *format, ...)
 {
@@ -95,6 +99,16 @@ int main(void)
     assert(root_sequence == 1 && root_value == 60);
     assert(!strcmp(root_stage, "root device wait begin"));
     assert(!strcmp(root_detail, "IOMedia Content=Apple_HFS"));
+    native_owner_cache_stage = 3;
+    vm_page_free_count = 1234; memorystatus_available_pages = 2345;
+    native_ufs_block_reads = 5678; native_ufs_block_failures = 9;
+    uint32_t root_line[LINE * PITCH];
+    memcpy(root_line, (void *)(framebuffer + 3 * LINE * stride * 4), sizeof(root_line));
+    unsigned saved_row = row, saved_column = column;
+    poll(NULL, NULL);
+    assert(!strcmp(storage_status, "free=1234 avail=2345 UFS=5678 err=9"));
+    assert(!memcmp(root_line, (void *)(framebuffer + 3 * LINE * stride * 4), sizeof(root_line)));
+    assert(row == saved_row && column == saved_column && native_ufs_block_reads == 5678);
     boot_progress_kernel_exception(0x96000010, 0xfffffff007345678, 0x12345000);
     assert(fault_valid && fault_esr == 0x96000010 && fault_far == 0x12345000);
     panic_for_test("Failed to mount %s: %u %llx %%", "root device", 60U, 0x123456789abcdef0ULL);
@@ -107,7 +121,7 @@ int main(void)
     boot_progress_putc('X'); boot_progress_stage("must not overwrite panic");
     boot_progress_root("must not replace root state", NULL, 1); poll(NULL, NULL);
     assert(scheduled == before_scheduled && stage_count == before_stages && root_sequence == 1);
-    assert(poll_count == 1 && armcpu_timer_interrupts == 7);
+    assert(poll_count == 2 && armcpu_timer_interrupts == 7);
     uintptr_t before_framebuffer = framebuffer;
     boot_progress_bind(4, W, H, PITCH * 4, 32);
     assert(framebuffer == before_framebuffer);
