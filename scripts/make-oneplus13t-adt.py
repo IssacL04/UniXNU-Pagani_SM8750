@@ -52,8 +52,8 @@ def empty_nvram_proxy():
 
 
 def make_tree(memory_size, random_seed, root_match_volume_uuid=None, trust_cache=False, packed_data_ramdisk=False):
-    if memory_size not in (0x10000000, 0x20000000) or len(random_seed) != 64:
-        raise ValueError('13T probes require 256/512 MiB and a 64-byte random seed')
+    if memory_size not in (0x10000000, 0x20000000, 0x40000000) or len(random_seed) != 64:
+        raise ValueError('13T probes require 256/512/1024 MiB and a 64-byte random seed')
     root_matching = []
     if root_match_volume_uuid is not None:
         volume_uuid = str(uuid.UUID(root_match_volume_uuid)).upper()
@@ -65,6 +65,7 @@ def make_tree(memory_size, random_seed, root_match_volume_uuid=None, trust_cache
                                ('compatible', b'oneplus,pkx110\0qcom,sm8750\0')], [
         node('chosen', [('random-seed', random_seed), *empty_nvram_proxy(), *root_matching,
                         *([('amfi-only-platform-code', struct.pack('<I', 1))] if trust_cache else []),
+                        *([('ephemeral-storage', struct.pack('<I', 1))] if packed_data_ramdisk else []),
                         ('crypto-hash-method', b'sha2-384\0'),
                         ('dram-base', bytes(8)), ('dram-size', bytes(8)),
                         ('darwinboot-memory-size', struct.pack('<Q', memory_size))],

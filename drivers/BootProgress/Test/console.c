@@ -142,6 +142,25 @@ int main(void)
     }
     for (unsigned y = 0; y < H; y++)
         for (unsigned x = W; x < PITCH; x++) assert(allocation[GUARD + y * PITCH + x] == 0x12345678);
+    early_boot_progress_init(&args);
+    boot_progress_process_stage(42, "launchd", "load_machfile");
+    assert(strstr(stages[(stage_count - 1) % HISTORY], "pid=42 launchd load_machfile"));
+    boot_progress_exit(43, "backboardd", 1, 2, 3);
+    assert(strstr(stages[(stage_count - 1) % HISTORY], "exit pid=43 backboardd"));
+    busy = 1;
+    assert(!boot_progress_display_handoff());
+    busy = 0;
+    assert(boot_progress_display_handoff());
+    uint32_t *snapshot = malloc(PITCH * H * sizeof(uint32_t));
+    assert(snapshot);
+    memcpy(snapshot, allocation + GUARD, PITCH * H * sizeof(uint32_t));
+    boot_progress_stage("must preserve system frame");
+    boot_progress_root("frame ownership", "preserve pixels", 1);
+    poll(NULL, NULL);
+    assert(!memcmp(snapshot, allocation + GUARD, PITCH * H * sizeof(uint32_t)));
+    free(snapshot);
+    panic_for_test("panic after system display handoff");
+    assert(allocation[GUARD] == 0xffff4040 && !boot_progress_display_handoff());
     early_boot_progress_suspend();
     assert(!boot_progress_active());
     free(tables); free(allocation);

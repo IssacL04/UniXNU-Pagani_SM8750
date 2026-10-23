@@ -37,6 +37,7 @@ static uintptr_t framebuffer, framebuffer_pa;
 static unsigned width, height, stride, column, row = 4;
 static uint64_t poll_count;
 static thread_call_t poll_call;
+static int display_owned;
 static int busy; // shortcut: single-core observer, add SMP synchronization before enabling more CPUs.
 enum { SCALE = 3, CELL = 6 * SCALE, LINE = 14 * SCALE, LOG_TOP = 4 };
 enum { HISTORY = 8, STAGE_BYTES = 80 };
@@ -117,6 +118,7 @@ static int geometry(uintptr_t base, uint64_t w, uint64_t h, uint64_t pitch, uint
 
 static void clear_line(unsigned y)
 {
+    if (display_owned && !panic_state) return;
     if (!framebuffer || y + LINE > height) return;
     for (unsigned dy = 0; dy < LINE; dy++) {
         volatile uint32_t *pixels = (volatile uint32_t *)framebuffer + (y + dy) * stride;
@@ -126,7 +128,7 @@ static void clear_line(unsigned y)
 
 static void glyph(unsigned char c, unsigned x, unsigned y, uint32_t color)
 {
-    if (!framebuffer || x + CELL > width || y + LINE > height) return;
+    if ((display_owned && !panic_state) || !framebuffer || x + CELL > width || y + LINE > height) return;
     if (c < 32 || c > 126) c = '?';
     uint64_t bits = font[c - 32];
     for (unsigned gy = 0; gy < 12; gy++) {
@@ -188,6 +190,16 @@ void boot_progress_bind(uintptr_t base, unsigned w, unsigned h, unsigned pitch, 
     framebuffer = base; width = w; height = h; stride = pitch / 4;
     if ((row + 1) * LINE > height) row = LOG_TOP;
     if ((column + 1) * CELL > width) column = 0;
+}
+
+// Single-core handoff: stop diagnostic drawing before the first system frame.
+int boot_progress_display_handoff(void)
+{
+    uint64_t flags = irq_save();
+    int ready = framebuffer && !panic_state && !busy;
+    if (ready) { display_owned = 1; barrier(); }
+    irq_restore(flags);
+    return ready;
 }
 
 int boot_progress_active(void) { return framebuffer != 0; }
@@ -339,7 +351,7 @@ void early_boot_progress_init(boot_args *args)
     early_boot_phys_base = args->physBase;
     early_boot_virt_base = args->virtBase;
     early_boot_stage = 1;
-    panic_state = 0; stage_count = 0; root_sequence = 0; fault_valid = 0;
+    display_owned = 0; panic_state = 0; stage_count = 0; root_sequence = 0; fault_valid = 0;
     boot_progress_panic_text[0] = 0;
     framebuffer = 0; column = 0; row = LOG_TOP; busy = 0;
     framebuffer_pa = 0;
@@ -484,11 +496,22 @@ void boot_progress_start(void)
     thread_call_enter(poll_call);
 }
 
-// Existing later-stage hooks stay observational; this profile has no userspace yet.
+// Process observations retain identity so repeated execs and restart loops differ.
 void boot_progress_irq(uint64_t pc, uint64_t psr, uint64_t sp) { (void)pc; (void)psr; (void)sp; }
 void boot_progress_poll(void) {}
 void boot_progress_user_breakpoint(void *state, unsigned esr) { (void)state; (void)esr; }
 void boot_progress_user_abort(void *state, unsigned esr, uint64_t far) { (void)state; (void)esr; (void)far; }
 void boot_progress_critical_exit(int pid, char *s, unsigned long n) { (void)pid; (void)s; (void)n; }
-void boot_progress_process_stage(int pid, const char *name, const char *stage) { (void)pid; (void)name; boot_progress_stage(stage); }
-void boot_progress_exit(int pid, const char *name, int status, unsigned ns, uint64_t code) { (void)pid; (void)name; (void)status; (void)ns; (void)code; }
+void boot_progress_process_stage(int pid, const char *name, const char *stage)
+{
+    char line[STAGE_BYTES];
+    snprintf(line, sizeof(line), "pid=%d %.20s %.36s", pid, name ? name : "?", stage ? stage : "?");
+    boot_progress_stage(line);
+}
+void boot_progress_exit(int pid, const char *name, int status, unsigned ns, uint64_t code)
+{
+    char line[STAGE_BYTES];
+    snprintf(line, sizeof(line), "exit pid=%d %.16s status=%x ns=%u code=%llx", pid,
+             name ? name : "?", status, ns, (unsigned long long)code);
+    boot_progress_stage(line);
+}

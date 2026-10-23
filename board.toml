@@ -1,7 +1,7 @@
 [board]
 name = "oneplus13t"
 soc = "SM8750"
-description = "OnePlus 13T PKX110: Stage 6 verified read-only root startup"
+description = "OnePlus 13T PKX110: Stage 7 early userspace and CPU display"
 kit = "oneplus13t"
 
 # iPadOS root-image source; hardware identity remains the OnePlus 13T.
@@ -33,6 +33,7 @@ archives = [
   "build-native-ufs.py --component NativeRamBlock --root-windows",
   "build-sheng-platform-power.py --kernelcache ../../ipsw/21H461/kernelcache.decompressed",
   "build-verified-root-probe.py --component os --include-systemos",
+  "build-stage7-display.py --kernelcache ../../ipsw/21H461/kernelcache.decompressed",
 ]
 
 [kernel.prelink]
@@ -46,22 +47,24 @@ roots = [
   "com.apple.driver.AppleMobileFileIntegrity", "com.apple.kext.CoreTrust",
   "com.apple.security.sandbox", "com.apple.driver.ApplePMGR",
   "com.apple.AppleFSCompression.AppleFSCompressionTypeZlib",
+  "com.apple.iokit.IOSurface", "com.apple.iokit.IOMobileGraphicsFamily",
+  "com.apple.iokit.IOHIDFamily", "com.apple.iokit.IOHIDEventDriver",
 ]
 
 [payload]
 volume = "UNIXNU13T"
 size_mib = 160
 loader = "firmware"
-title = "OnePlus 13T Stage 6: verified root startup (read only)"
-dram_size = "0x20000000"
+title = "OnePlus 13T Stage 7: early userspace"
+dram_size = "0x40000000"
 timeout = 10
-kernel_args = ["-v", "serial=0", "debug=0x14e", "cpus=1", "-enable_kprintf_spam", "kt_fixed_zones=240", "native-ufs-root=1", "native-ufs-diagnostics=1", "sheng-pmgr=2", "offline-apfs-load=1", "startup_debug=0"]
+kernel_args = ["-v", "serial=0", "debug=0x14e", "cpus=1", "-enable_kprintf_spam", "kt_fixed_zones=240", "native-ufs-root=1", "native-ufs-diagnostics=1", "sheng-pmgr=2", "offline-apfs-load=1", "startup_debug=0", "offline-mobile-graphics-load=1", "offline-legacy-register=1", "offline-legacy-phase=4", "offline-legacy-gop=1", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-key-events=1", "sheng-aks=1"]
 trust_cache_sha256 = ["7416ca4f8377146626bb284e2133c76bee6cb4e3ee0af5d648b186235a7323a7"]
 
 [payload.adt]
 packed_data_ramdisk = true
 tool = "scripts/make-oneplus13t-adt.py"
-owned_memory_size = "0x20000000"
+owned_memory_size = "0x40000000"
 cpu_regs = "0"
 # OS IOMedia UUID confirmed by the mode 12 hardware report.
 root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"

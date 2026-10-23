@@ -529,3 +529,15 @@ Data UUID 为 `924B8B8B-321B-45B9-AE49-3862B0AE81F2`，256 MiB 逻辑镜像打�
 启动镜像位于 `out/oneplus13t/boot/stage6-run-34-watchdog-policy/boot.img`，86,925,312 字节，SHA-256 为 `6714d95dffd0f55550009e6920220ff0c4d83964cd4c69e07eff05e49748537f`。封装解包检查、v4 头与文件哈希通过；UEFI、原机 DTB 和 160 MiB 负载布局保持一致。
 
 用户确认重新进入 Fastboot 后，再次只读核对设备 `3B15BB01BAT00000` 和型号 `sun`，随后执行临时启动。Sending 1.981 秒、Booting 0.337 秒，均为 OKAY，总计 2.613 秒，退出码 0。日志为 `out/oneplus13t/logs/stage6-run-34-watchdog-policy-fastboot.log`。没有刷写分区。当前等待新照片确认是否越过 watchdogd 停点；硬件 watchdog 尚未实现，Data 修改随重启清除。
+
+## 第 35 次候选：Stage 7 用户态服务与 CPU 显示
+
+前六阶段及本轮继续使用 iPadOS 17.7.11（21H461，iPad7,1 / j120ap）、XNU 10063.141.1。参考 [UniXNU-sheng](https://github.com/UniXNU/UniXNU-sheng/tree/ab3121e766f68832c90370ae2dd007284d9510d8) 的显示与临时 KeyStore 接线，使用当前固定的 UniXNU 通用驱动源码。Pong 与 Pandora 的 iOS 16 实现仅作设计参考，未混用其内核或驱动 ABI。
+
+本轮加入原版 IOSurface、IOMobileGraphicsFamily、IOHIDFamily、IOHIDEventDriver 及依赖闭包，启用 NativeLegacyDisplay 的 CPU framebuffer 路径。构建脚本直接审查固定 Apple kernelcache：核对原版可执行段、358 项虚表、继承关系及绑定函数指令，再检查编译所得对象；不再依赖 Sheng 私有的预链接候选与旧 QEMU 产物。对象大小沿用同版原始类 ABI，SM8750 上的实例创建与生命周期尚待验证。
+
+板级服务从实际 GOP 获取地址、尺寸及 stride，交接后启动日志停止覆盖系统帧，panic 保留显示能力。原版 HID 服务加载不等于触摸设备适配。临时 AppleKeyStore 状态服务只在 ADT 声明 PackedRAMDisk 临时存储且明确启用时注册，不提供密钥、密码或数据保护操作，不能用于安全存储。OS/SystemOS 仍保持原版，UFS 写入保持关闭。
+
+DarwinBoot 连续内存请求从 512 MiB 提至 1 GiB；实机 DT 存在足够大的高地址 RAM 区间，加载器仍必须从真实 UEFI 常规内存分配成功后才启动，不覆盖保留区。256 MiB RAM Data 继续采用稀疏页存储。1 GiB 的实际分配与运行尚待本轮实机验证。进程日志增加 PID、名称和退出状态，用来区分正常多进程执行与重启循环。
+
+本地原版显示 ABI 审查、全部九项 ADT 检查、framebuffer 交接及 panic 的 ASan/UBSan 检查通过。复用 NativeKeyStoreEvents 边界测试通过；Linux GCC 测试运行额外预包含 cstdint，并关闭测试桩的缩进告警，驱动源码未改。完整 iOS 编译、预链接和硬件显示结果另行记录，当前不声称桌面可用。

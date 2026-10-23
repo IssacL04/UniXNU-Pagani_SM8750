@@ -61,7 +61,7 @@ class AdtTest(unittest.TestCase):
             self.assertEqual(header[1], checksum)
 
     def test_invalid_window(self):
-        for size in (0, 0x10001000, 0x40000000):
+        for size in (0, 0x10001000, 0x80000000):
             with self.assertRaises(ValueError):
                 adt.make_tree(size, bytes(64))
 
@@ -74,6 +74,10 @@ class AdtTest(unittest.TestCase):
         self.assertEqual(chosen['dram-size'], bytes(8))
         self.assertEqual(nodes['/device-tree/chosen/manifest-properties'],
                          {'name': b'manifest-properties\0'})
+
+    def test_userspace_memory_window(self):
+        nodes = decode(adt.make_tree(0x40000000, bytes(64)))
+        self.assertEqual(struct.unpack('<Q', nodes['/device-tree/chosen']['darwinboot-memory-size']), (0x40000000,))
 
     def test_root_volume_matching(self):
         volume = '04769d26-2ca0-4825-b443-e2e5f88300f2'
@@ -123,8 +127,10 @@ class AdtTest(unittest.TestCase):
         self.assertEqual(memory['PackedRAMDisk'], bytes(16))
         self.assertEqual(memory['TrustCache'], bytes(16))
         self.assertNotIn('RAMDisk', memory)
+        self.assertEqual(nodes['/device-tree/chosen']['ephemeral-storage'], struct.pack('<I', 1))
         plain = decode(adt.make_tree(0x20000000, bytes(64)))
         self.assertNotIn('PackedRAMDisk', plain['/device-tree/chosen/memory-map'])
+        self.assertNotIn('ephemeral-storage', plain['/device-tree/chosen'])
 
 
 if __name__ == '__main__':

@@ -37,8 +37,9 @@ jobs:
           echo "UNIXNU_TREE=$TREE" >> "$GITHUB_ENV"
           python3 "$TREE/scripts/test-kernel-source.py"
           python3 "$TREE/scripts/test-bootimg.py"
-          python3 scripts/test-adt.py AdtTest.test_tree_contract AdtTest.test_invalid_window AdtTest.test_media_window AdtTest.test_root_volume_matching AdtTest.test_invalid_root_uuid AdtTest.test_trust_cache_binding AdtTest.test_packed_data_binding
+          python3 scripts/test-adt.py AdtTest.test_tree_contract AdtTest.test_invalid_window AdtTest.test_media_window AdtTest.test_userspace_memory_window AdtTest.test_root_volume_matching AdtTest.test_invalid_root_uuid AdtTest.test_trust_cache_binding AdtTest.test_packed_data_binding
           python3 scripts/test-root-audit.py --tree "$TREE"
+          python3 "$TREE/drivers/NativeKeyStoreEvents/test_closed_boundary.py"
           python3 "$TREE/drivers/DarwinBoot/Test/test-adt.py"
           cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
             -I "$TREE/drivers/DarwinBoot/DarwinBootPkg/Driver" \
@@ -68,6 +69,7 @@ jobs:
         run: |
           ./unixnu ipsw fetch KernelCache OS Cryptex1,SystemOS StaticTrustCache Cryptex1,SystemTrustCache 2>&1 | tee out/oneplus13t/logs/actions-ipsw.log
           ./unixnu tree
+          python3 out/oneplus13t/tree/scripts/audit-stage7-display.py out/ipsw/21H461/kernelcache.decompressed
           python3 scripts/prepare-ufs-policies.py --tree out/oneplus13t/tree \
             --inputs out/ipsw/21H461 --openssl-prefix "$(brew --prefix openssl@3)" \
             2>&1 | tee out/oneplus13t/logs/actions-policies.log
