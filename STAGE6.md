@@ -551,3 +551,5 @@ Data 准备会清除三个 MobileGestalt 缓存路径，创建容器目录，并
 AppleLogo 来自固定 IPSW 的 Firmware/all_flash/applelogo@2732~ipad.im4p，原始 SHA-256 为 de55e7b7a4eff459118f8a4ec9af79b017cfdbfec4c5b079346e414c68ff1fba。构建期校验身份、iBootIm checksum、230×284 灰度/透明度与 LZSS 解码长度，生成内核使用的头文件，不将 Apple 图片提交 Git。XNU 入口在实际 GOP 上居中显示原版 Logo，日志仍记入阶段缓冲，panic 可覆盖 Logo；系统呈现后诊断绘制让出 framebuffer。Logo 出现只证明启动显示路径运行，Setup/SpringBoard 必须以实际用户态画面验证。
 
 新增十项 ADT、四项 RAM Data 策略测试通过，Logo/显示交接/panic 的 framebuffer ASan/UBSan 测试通过。原版 Logo 提取图已人工检查。完整 iOS 构建及实机界面仍在推进。
+
+第 35 次 Actions（40002433110）已完成原始输入、根窗口策略、Data 种子及原版显示静态 ABI 检查，停在新增显示驱动的编译：复用的 XNU `-Weverything` 将编译记录中缺失的 `EXPORT_HDRS/libsa` 搜索目录升级为错误。已保留完整 ABI/目标参数，改用参考驱动的 `-Wall -Wextra -Werror` 警告集合。日志前面的 bootstrap 未解析驱动符号是生成编译记录时的预期中间结果，后续 archive 编译错误才是本次终止点。第 36 次将合并该修复、原版 Logo 与用户态身份改动。
