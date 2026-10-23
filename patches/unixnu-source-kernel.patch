@@ -3723,3 +3723,15 @@ diff --git a/scripts/test-kernel-source.py b/scripts/test-kernel-source.py
      def test_header_fetch_auth_stays_on_github_api(self):
          read_url = runpy.run_path(str(Path(__file__).with_name('prepare-xnu-source.py')))['read_url']
          for token in ('test-token', ''):
+diff --git a/scripts/build-verified-root-probe.py b/scripts/build-verified-root-probe.py
+--- a/scripts/build-verified-root-probe.py
++++ b/scripts/build-verified-root-probe.py
+@@ -136,7 +136,7 @@
+         elif value not in ('-MD', '-MP'):
+             command.append(value)
+         index += 1
+-    command += ['-I' + str(ROOT / 'kits/VerifiedRoot/include'), '-Werror']
++    command += ['-I' + str(ROOT / 'kits/VerifiedRoot/include'), '-Werror', '-Wno-error=missing-include-dirs']
+     result = subprocess.run(command, cwd=record['directory'], capture_output=True, text=True)
+     (out / (source.stem + '.log')).write_text(result.stdout + result.stderr)
+     if result.returncode:
