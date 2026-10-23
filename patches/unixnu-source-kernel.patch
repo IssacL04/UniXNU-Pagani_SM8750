@@ -3868,3 +3868,29 @@ diff --git a/patches/xnu/offline-owner-systemos-mount.patch b/patches/xnu/offlin
  +#endif
  +#if defined(XNU_OWNER_CACHE_STARTUP) && XNU_OWNER_CACHE_STARTUP
  +	if (!error && cache_authorized && root_recheck) {
+diff --git a/patches/xnu/zzz-boot-progress.patch b/patches/xnu/zzz-boot-progress.patch
+--- a/patches/xnu/zzz-boot-progress.patch
++++ b/patches/xnu/zzz-boot-progress.patch
+@@ -197,7 +197,7 @@
+  	uint32_t i;
+  	int error;
+  	vm_map_t map = current_map();
+-@@ -7389,11 +7393,22 @@
++@@ -7389,11 +7393,15 @@
+  	(void) mach_vm_allocate_kernel(map, &scratch_addr, map_page_size, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_NONE);
+  	user_addr_t init_envp = USER_ADDR_NULL;
+  #if defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
+@@ -211,13 +211,6 @@
+  	int data_error = native_owner_data_prepare(p, (user_addr_t)scratch_addr);
+ +	boot_progress_stage("Data mount returned");
+  	if (data_error) panic("offline scratch Data mount failed: %d", data_error);
+-+#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
+-+	extern int sheng_boot_watchdog_policy(void *, uint64_t);
+-+	boot_progress_stage("temporary watchdog launch policy enter");
+-+	int policy_error=sheng_boot_watchdog_policy(p, (uint64_t)scratch_addr);
+-+	if (policy_error) panic("sheng watchdog launch policy failed: %d", policy_error);
+-+	boot_progress_stage("temporary watchdog launch policy ready");
+-+#endif
+  #endif
+  #if CONFIG_MEMORYSTATUS
+ @@ -7891,6 +7899,7 @@
