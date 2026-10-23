@@ -6,13 +6,13 @@
 
 当前已走通 bring-up 阶段 1–6 的主要启动目标，正在推进阶段 7 用户态。系统输入固定为 iPadOS 17.7.11（21H461）；8.74 GiB 根镜像已写入独立的 64 GiB `unixnu` 分区，XNU 通过只读 UFS 路径挂载 OS/SystemOS，并启动原版 `launchd` 和系统服务。
 
-第 33 次真机加入 256 MiB 临时 RAM Data 后，推进到 `watchdogd[144]`，约 101 秒后发生 SIGTRAP panic；代码分析指向缺少 IOWatchdog 后端。第 34 次在 RAM Data 中停用 `com.apple.watchdogd`，用户观察到内核运行十多分钟并持续装载进程，尚未出现图形界面。最新 Stage 7 候选加入原版 Apple 标志、IOSurface/IOMobileGraphics、CPU 画面呈现与 iPad 用户态身份，XNU 内存窗口扩大至 1 GiB，正在等待构建和真机验证。稳定用户态、设置界面和交互尚未完成；Data 修改随重启清除，物理 UFS 写入保持关闭。详细记录见 [STAGE6.md](STAGE6.md)。
+第 33 次真机加入 256 MiB 临时 RAM Data 后，推进到 `watchdogd[144]`，约 101 秒后发生 SIGTRAP panic；代码分析指向缺少 IOWatchdog 后端。第 34 次在 RAM Data 中停用 `com.apple.watchdogd`，用户观察到内核运行十多分钟并持续装载进程，尚未出现图形界面。第 37 次 Stage 7 候选加入原版 Apple 标志、IOSurface/IOMobileGraphics、CPU 画面呈现与 iPad 用户态身份，XNU 内存窗口扩大至 1 GiB。云端构建与实际镜像检查通过，已执行 Fastboot 临时启动，等待手机画面。稳定用户态、设置界面和交互尚未确认；Data 修改随重启清除，物理 UFS 写入保持关闭。详细记录见 [STAGE6.md](STAGE6.md)。
 
 | 部分 | 当前状态 | 执行位置 |
 | --- | --- | --- |
 | UEFI、UniXNU 与 DarwinBoot | 已进入 XNU，菜单及 framebuffer 诊断可用 | Linux 构建，13T 真机验证 |
 | Apple 设备树与启动负载 | 实际 FAT 文件、ADT、trust cache 和启动参数检查通过 | macOS Actions 与 Linux |
-| XNU、存储适配与原版预链接组件 | 第 34 次构建成功，含 17 个原版组件；真机已挂载根卷并运行用户态服务 | GitHub Actions macOS runner 与 13T |
+| XNU、存储适配与原版预链接组件 | 第 37 次构建成功，含 29 个原版可执行组件及 IOHIDEventDriver 配置；此前真机已挂载根卷并运行用户态服务 | GitHub Actions macOS runner 与 13T |
 | 临时 APFS Data | 保留原始 private/var 属主和权限，内核与种子 UUID 配套，当前仅停用 watchdogd | macOS 生成，Linux 只读核对 |
 | iPadOS 显示与交互 | 已接入原版显示组件与 CPU 呈现代码，等待真机验证；触摸和 GPU 尚未适配 | macOS 构建，13T 待验证 |
 
@@ -100,13 +100,13 @@ unixnu.lock
 ```sh
 cd /home/enc3l/Project/UniXNU_SM8750/UniXNU-Pagani_SM8750
 export PATH=/home/enc3l/Project/OP_Kernel_Dev/src/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/bin:$PATH
-unzip /path/to/oneplus13t-xnu-34.zip -d out/oneplus13t/actions/run-34
-test -s out/oneplus13t/actions/run-34/kernel/kernel.macho
-test -s out/oneplus13t/actions/run-34/payload/payload.img
+unzip /path/to/oneplus13t-xnu-37.zip -d out/oneplus13t/actions/run-37
+test -s out/oneplus13t/actions/run-37/kernel/kernel.macho
+test -s out/oneplus13t/actions/run-37/payload/payload.img
 ./unixnu bootimg --uefi ../UEFI-Pagani_SM8750 \
   --dtb .cache/firmware/vendor_boot/dtb \
-  --ramdisk out/oneplus13t/actions/run-34/payload/payload.img \
-  -o out/oneplus13t/boot/stage6-run-34-watchdog-policy/boot.img
+  --ramdisk out/oneplus13t/actions/run-37/payload/payload.img \
+  -o out/oneplus13t/boot/stage7-run-37/boot.img
 ```
 
 前两项文件检查应均成功，再执行打包。新的候选不会覆盖 `menu-keys`、`no-sdcc` 或 `payload-smoke`。将生成的 `boot.img` 复制到 Windows 后，用已验证的 `fastboot boot` 临时启动路径测试；不要直接刷写 boot 分区。

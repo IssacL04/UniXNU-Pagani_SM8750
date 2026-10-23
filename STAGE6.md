@@ -553,3 +553,15 @@ AppleLogo 来自固定 IPSW 的 Firmware/all_flash/applelogo@2732~ipad.im4p，�
 新增十项 ADT、四项 RAM Data 策略测试通过，Logo/显示交接/panic 的 framebuffer ASan/UBSan 测试通过。原版 Logo 提取图已人工检查。完整 iOS 构建及实机界面仍在推进。
 
 第 35 次 Actions（40002433110）已完成原始输入、根窗口策略、Data 种子及原版显示静态 ABI 检查，停在新增显示驱动的编译：复用的 XNU `-Weverything` 将编译记录中缺失的 `EXPORT_HDRS/libsa` 搜索目录升级为错误。已保留完整 ABI/目标参数，改用参考驱动的 `-Wall -Wextra -Werror` 警告集合。日志前面的 bootstrap 未解析驱动符号是生成编译记录时的预期中间结果，后续 archive 编译错误才是本次终止点。第 36 次将合并该修复、原版 Logo 与用户态身份改动。
+
+### 第 37 次：显示后端构建通过并临时启动
+
+第 36 次（40004316536）停在 Xcode 16.4 不支持的 `-Wno-unnecessary-virtual-specifier`；提交 `cead04f` 删除该选项。[第 37 次构建](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/40007131314)全部成功。NativeLegacyDisplay、Stage7Probe、NativeKeyStoreEvents 的 iOS 17 对象检查、原版显示 ABI 绑定、最终链接及 panic 参数检查均通过。
+
+下载后的实际 FAT、内核、ADT、trust cache 和 APFS 种子检查通过。内核为 127,664,128 字节，含 29 个原版可执行组件；IOHIDEventDriver 是无独立可执行文件的配置组件，已从实际预链接元数据确认存在。AMFI、PMGR、IOHIDFamily 和 IOMobileGraphicsFamily 的原版可执行段保持一致。原始 Logo 的全部像素位于实际内核中，CPU 呈现与临时 KeyStore 接线均已链接；ADT 的 1 GiB 请求、iPad 身份和临时存储标记符合配置。30 个映像共 2,319 条 kalloc 类型记录，2,081 条参与分池；预算 240 的最大槽位为 28，原算法 ASan/UBSan 重放通过。
+
+Data 卷 UUID 为 `DCA82E33-8DB3-4192-A510-B1A9C6903118`，256 MiB 逻辑镜像打包为 1,015,904 字节。实际 FAT 中的种子与上传文件一致，完整逻辑哈希及内核中的 UUID 检查通过。只读 APFS 解析确认仍仅停用 watchdogd，三个防自动息屏偏好已写入，默认未跳过 Setup。另从原始 OS 核对 `Setup.app` 和 `SpringBoard.app` 均位于只读系统卷，不受 Data 排除 staged_system_apps 的影响。
+
+完整镜像为 `out/oneplus13t/boot/stage7-run-37/boot.img`，87,916,544 字节。封装回验、实际文件哈希、Android v4、160 MiB 内嵌 FAT 和空 Android ramdisk 字段检查通过，UEFI、DTB 与 BootShim 布局保持一致。只读核对设备 `3B15BB01BAT00000`、型号 `sun` 后执行 `fastboot boot`：Sending 2.011 秒、Booting 0.338 秒，均为 OKAY，总计 2.667 秒，退出码 0。日志位于 `out/oneplus13t/logs/stage7-run-37-fastboot.log`。
+
+本轮未刷写分区。当前确认镜像发送和临时启动请求成功，等待手机画面验证 Logo、显示服务和 Setup；触摸、GPU 加速及安全密钥存储尚未实现。Data 修改仍随重启清除。
