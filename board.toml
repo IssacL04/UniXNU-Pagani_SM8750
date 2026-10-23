@@ -29,6 +29,7 @@ archives = [
   "build-native-aes.py",
   "build-native-ufs.py --root-windows",
   "build-ufs-storage-bindings.py --kernelcache ../../ipsw/21H461/kernelcache.decompressed",
+  "build-native-ufs.py --component NativeVirtioBlock --root-windows",
   "build-verified-root-probe.py --component os --include-systemos",
 ]
 
@@ -47,12 +48,14 @@ loader = "firmware"
 title = "OnePlus 13T Stage 6: verified root media (read only)"
 dram_size = "0x20000000"
 timeout = 10
-kernel_args = ["-v", "serial=0", "debug=0x14e", "cpus=1", "-enable_kprintf_spam", "kt_fixed_zones=240", "native-ufs-probe=12", "native-ufs-diagnostics=1", "offline-apfs-load=1", "startup_debug=0"]
+kernel_args = ["-v", "serial=0", "debug=0x14e", "cpus=1", "-enable_kprintf_spam", "kt_fixed_zones=240", "native-ufs-probe=12", "native-ufs-diagnostics=1", "native-root-audit=1", "offline-apfs-load=1", "startup_debug=0"]
 
 [payload.adt]
 tool = "scripts/make-oneplus13t-adt.py"
 owned_memory_size = "0x20000000"
 cpu_regs = "0"
+# OS IOMedia UUID confirmed by the mode 12 hardware report.
+root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
 
 [bootimg]
 # This ABL loads init_boot's ramdisk even during fastboot boot.

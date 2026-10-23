@@ -3735,3 +3735,27 @@ diff --git a/scripts/build-verified-root-probe.py b/scripts/build-verified-root-
      result = subprocess.run(command, cwd=record['directory'], capture_output=True, text=True)
      (out / (source.stem + '.log')).write_text(result.stdout + result.stderr)
      if result.returncode:
+diff --git a/patches/xnu/offline-owner-root-binding-audit.patch b/patches/xnu/offline-owner-root-binding-audit.patch
+--- a/patches/xnu/offline-owner-root-binding-audit.patch
++++ b/patches/xnu/offline-owner-root-binding-audit.patch
+@@ -43,7 +43,7 @@
+  		}
+  	}
+  
+-@@ -1114,6 +1146,32 @@
++@@ -1114,6 +1146,38 @@
+  
+  	bsd_init_kprintf("done\n");
+  }
+@@ -71,5 +71,11 @@
+ +native_owner_root_checkpoint(int apple, int owner, dev_t device)
+ +{
+ +	__asm__ volatile("" : : "r"(apple), "r"(owner), "r"(device) : "memory");
+++	int report = 0;
+++	if (PE_parse_boot_argn("native-root-audit", &report, sizeof(report)) && report) {
+++		panic("NATIVE_ROOT binding: apple=%d owner=%d readonly=%d mounted=%x selected=%x",
+++		    apple, owner, native_owner_root_readonly, (unsigned)device,
+++		    (unsigned)native_owner_root_selected_device);
+++	}
+ +}
+ +#endif

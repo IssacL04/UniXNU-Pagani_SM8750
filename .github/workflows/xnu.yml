@@ -36,7 +36,8 @@ jobs:
           echo "UNIXNU_TREE=$TREE" >> "$GITHUB_ENV"
           python3 "$TREE/scripts/test-kernel-source.py"
           python3 "$TREE/scripts/test-bootimg.py"
-          python3 scripts/test-adt.py AdtTest.test_tree_contract AdtTest.test_invalid_window AdtTest.test_media_window
+          python3 scripts/test-adt.py AdtTest.test_tree_contract AdtTest.test_invalid_window AdtTest.test_media_window AdtTest.test_root_volume_matching AdtTest.test_invalid_root_uuid
+          python3 scripts/test-root-audit.py --tree "$UNIXNU_TREE"
           python3 "$TREE/drivers/DarwinBoot/Test/test-adt.py"
           cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
             -I "$TREE/drivers/DarwinBoot/DarwinBootPkg/Driver" \

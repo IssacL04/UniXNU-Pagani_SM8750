@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check the emitted ADT and its GIC/CPU facts against the actual exported FDT."""
 import importlib.util
+import plistlib
 import struct
 import subprocess
 import unittest
@@ -40,10 +41,14 @@ class AdtTest(unittest.TestCase):
         root = '/device-tree'
         self.assertTrue({root + '/' + n for n in ('chosen', 'cpus', 'arm-io', 'defaults', 'options')} <= nodes.keys())
         self.assertEqual(nodes[root + '/chosen']['random-seed'], bytes(range(64)))
+        self.assertNotIn('root-matching', nodes[root + '/chosen'])
+        self.assertEqual(nodes[root + '/chosen']['crypto-hash-method'], b'sha2-384\0')
         self.assertEqual(struct.unpack('<Q', nodes[root + '/chosen']['darwinboot-memory-size']), (0x10000000,))
         self.assertEqual(nodes[root + '/chosen']['dram-base'], bytes(8))
         self.assertEqual(nodes[root + '/chosen']['dram-size'], bytes(8))
         self.assertEqual(list(nodes[root + '/chosen/memory-map']), ['name'])
+        self.assertEqual(nodes[root + '/chosen/manifest-properties'],
+                         {'name': b'manifest-properties\0'})
         self.assertEqual(nodes[root + '/cpus/cpu0']['reg'], bytes(4))
         self.assertFalse(any('/cpu1' in p or '/psci' in p or '/ufshc' in p for p in nodes))
         bank = nodes[root + '/chosen']['nvram-proxy-data']
@@ -63,9 +68,25 @@ class AdtTest(unittest.TestCase):
     def test_media_window(self):
         nodes = decode(adt.make_tree(0x20000000, bytes(64)))
         chosen = nodes['/device-tree/chosen']
+        self.assertEqual(chosen['crypto-hash-method'], b'sha2-384\0')
         self.assertEqual(struct.unpack('<Q', chosen['darwinboot-memory-size']), (0x20000000,))
         self.assertEqual(chosen['dram-base'], bytes(8))
         self.assertEqual(chosen['dram-size'], bytes(8))
+        self.assertEqual(nodes['/device-tree/chosen/manifest-properties'],
+                         {'name': b'manifest-properties\0'})
+
+    def test_root_volume_matching(self):
+        volume = '04769d26-2ca0-4825-b443-e2e5f88300f2'
+        nodes = decode(adt.make_tree(0x20000000, bytes(64), volume))
+        xml = nodes['/device-tree/chosen']['root-matching']
+        self.assertEqual(xml[-1:], b'\0')
+        self.assertEqual(plistlib.loads(xml[:-1], fmt=plistlib.FMT_XML), {
+            'IOProviderClass': 'IOMedia', 'IOPropertyMatch': {'UUID': volume.upper()}})
+
+    def test_invalid_root_uuid(self):
+        for value in ('', 'disk3s1', '04769D26', '<string>invalid</string>'):
+            with self.assertRaises(ValueError):
+                adt.make_tree(0x20000000, bytes(64), value)
 
     def test_actual_board_resources(self):
         dtb = Path(__file__).resolve().parents[1] / 'sysinfo/live.dtb'

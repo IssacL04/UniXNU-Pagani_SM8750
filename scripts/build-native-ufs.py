@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the SM8750 read-only UFS driver with the source kernel's IOKit ABI."""
+"""Build read-only UFS and its existing root-binding helper with the kernel ABI."""
 import argparse
 import json
 from pathlib import Path
@@ -11,15 +11,18 @@ import subprocess
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root-windows', action='store_true')
+    parser.add_argument('--component', choices=('NativeUfs', 'NativeVirtioBlock'), default='NativeUfs')
     args = parser.parse_args()
+    if args.component == 'NativeVirtioBlock' and not args.root_windows:
+        parser.error('The root-binding helper requires --root-windows')
     root = Path(__file__).resolve().parents[1]
     compile_command = runpy.run_path(str(root / 'scripts/build-arm-platform.py'))['compile_command']
     recipe = root / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/iokit/DEVELOPMENT/IOPlatformExpert.cpo.json'
     record = json.loads(recipe.read_text().strip().rstrip(','))
-    output = root / 'build/native-ufs'
+    output = root / ('build/native-ufs' if args.component == 'NativeUfs' else 'build/native-virtio-block')
     output.mkdir(parents=True, exist_ok=True)
-    obj = output / 'NativeUfs.o'
-    command = compile_command(record, root / 'drivers/NativeUfs/NativeUfs.cpp', obj)
+    obj = output / (args.component + '.o')
+    command = compile_command(record, root / 'drivers' / args.component / (args.component + '.cpp'), obj)
     command += ['-DNATIVE_UFS_SM8750=1', '-DNATIVE_UFS_READ_ONLY=1',
                 '-Wno-unused-function']
     if args.root_windows:
@@ -38,7 +41,16 @@ def main():
         raise SystemExit('Probe unexpectedly requires prelinked IOStorageFamily')
     if args.root_windows and 'IOBlockStorageDevice' not in symbols:
         raise SystemExit('Root-window build lacks the storage class')
-    archive = output / 'libNativeUfs.a'
+    if args.component == 'NativeVirtioBlock':
+        # Reuse the original storage imports already qualified and linked by NativeUfs.
+        bindings = json.loads((root / 'build/native-ufs/bindings.json').read_text())['bindings']
+        imports = subprocess.check_output(['xcrun', 'nm', '-u', '-j', obj], text=True).split()
+        if any(name not in bindings for name in imports if 'IOBlockStorageDevice' in name):
+            raise SystemExit('Root-binding helper has unqualified original storage imports')
+        defined = subprocess.check_output(['xcrun', 'nm', '-U', '-j', obj], text=True).split()
+        if '_native_verified_block_root_authorized' not in defined or '_native_ufs_block_authenticates' not in imports:
+            raise SystemExit('Root-binding helper lacks its mounted-device query or UFS callback')
+    archive = output / ('lib' + args.component + '.a')
     archive.unlink(missing_ok=True)
     subprocess.run(['xcrun', 'ar', 'rcs', archive, obj], check=True)
     print(archive)
