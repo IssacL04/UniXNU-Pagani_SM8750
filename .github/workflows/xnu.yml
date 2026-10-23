@@ -36,7 +36,7 @@ jobs:
           echo "UNIXNU_TREE=$TREE" >> "$GITHUB_ENV"
           python3 "$TREE/scripts/test-kernel-source.py"
           python3 "$TREE/scripts/test-bootimg.py"
-          python3 scripts/test-adt.py AdtTest.test_tree_contract AdtTest.test_invalid_window AdtTest.test_media_window AdtTest.test_root_volume_matching AdtTest.test_invalid_root_uuid AdtTest.test_trust_cache_binding
+          python3 scripts/test-adt.py AdtTest.test_tree_contract AdtTest.test_invalid_window AdtTest.test_media_window AdtTest.test_root_volume_matching AdtTest.test_invalid_root_uuid AdtTest.test_trust_cache_binding AdtTest.test_packed_data_binding
           python3 scripts/test-root-audit.py --tree "$TREE"
           python3 "$TREE/drivers/DarwinBoot/Test/test-adt.py"
           cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
@@ -74,11 +74,19 @@ jobs:
             --inputs out/ipsw/21H461 --output out/oneplus13t/original-static-system.bundle \
             2>&1 | tee out/oneplus13t/logs/actions-trust.log
 
+      - name: Prepare volatile Data from the original var tree
+        run: |
+          sudo "$(command -v python3)" scripts/prepare-ram-data.py --tree "$UNIXNU_TREE" \
+            --source out/ipsw/21H461/044-76040-038.dmg \
+            --output out/oneplus13t/ram-data --config out/oneplus13t/.config \
+            2>&1 | tee out/oneplus13t/logs/actions-ram-data.log
+
       - name: Build XNU and the FAT payload
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           ./unixnu build kernel payload -j 3 --trust-cache out/oneplus13t/original-static-system.bundle \
+            --data-ramdisk out/oneplus13t/ram-data/data.dbrdisk \
             2>&1 | tee out/oneplus13t/logs/actions-build.log
 
       - name: Check the native panic argument path
@@ -96,5 +104,7 @@ jobs:
             device/out/oneplus13t/payload/**
             device/out/oneplus13t/logs/**
             device/out/oneplus13t/unixnu.lock
+            device/out/oneplus13t/ram-data/seed.json
+            device/out/oneplus13t/ram-data/data.dbrdisk
           if-no-files-found: warn
           retention-days: 7

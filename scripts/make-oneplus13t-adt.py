@@ -51,7 +51,7 @@ def empty_nvram_proxy():
             ('nvram-current-bank', bytes(4)), ('nvram-proxy-data', bank)]
 
 
-def make_tree(memory_size, random_seed, root_match_volume_uuid=None, trust_cache=False):
+def make_tree(memory_size, random_seed, root_match_volume_uuid=None, trust_cache=False, packed_data_ramdisk=False):
     if memory_size not in (0x10000000, 0x20000000) or len(random_seed) != 64:
         raise ValueError('13T probes require 256/512 MiB and a 64-byte random seed')
     root_matching = []
@@ -69,7 +69,8 @@ def make_tree(memory_size, random_seed, root_match_volume_uuid=None, trust_cache
                         ('dram-base', bytes(8)), ('dram-size', bytes(8)),
                         ('darwinboot-memory-size', struct.pack('<Q', memory_size))],
              # AppleImage4 requires the container even without manifest values.
-             [node('memory-map', [('TrustCache', bytes(16))] if trust_cache else []),
+             [node('memory-map', ([('TrustCache', bytes(16))] if trust_cache else []) +
+                   ([('PackedRAMDisk', bytes(16))] if packed_data_ramdisk else [])),
               node('manifest-properties')]),
         node('cpus', children=[node('cpu0', [
             ('state', b'running\0'), ('reg', bytes(4)),
@@ -96,12 +97,13 @@ def main():
     parser.add_argument('--cpu-regs', default='0')
     parser.add_argument('--root-match-volume-uuid')
     parser.add_argument('--trust-cache', action='store_true')
+    parser.add_argument('--packed-data-ramdisk', action='store_true')
     args = parser.parse_args()
     if args.cpu_regs != '0' or args.dram_size != args.owned_memory_size:
         parser.error('Initial profile uses cpu0 and only the DarwinBoot-owned RAM window')
     try:
         data = make_tree(args.owned_memory_size, os.urandom(64), args.root_match_volume_uuid,
-                         args.trust_cache)
+                         args.trust_cache, args.packed_data_ramdisk)
     except ValueError as error:
         parser.error(str(error))
     args.output.parent.mkdir(parents=True, exist_ok=True)

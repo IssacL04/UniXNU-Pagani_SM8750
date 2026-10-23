@@ -30,6 +30,7 @@ archives = [
   "build-native-ufs.py --root-windows",
   "build-ufs-storage-bindings.py --kernelcache ../../ipsw/21H461/kernelcache.decompressed",
   "build-native-ufs.py --component NativeVirtioBlock --root-windows",
+  "build-native-ufs.py --component NativeRamBlock --root-windows",
   "build-sheng-platform-power.py --kernelcache ../../ipsw/21H461/kernelcache.decompressed",
   "build-verified-root-probe.py --component os --include-systemos",
 ]
@@ -58,6 +59,7 @@ kernel_args = ["-v", "serial=0", "debug=0x14e", "cpus=1", "-enable_kprintf_spam"
 trust_cache_sha256 = ["7416ca4f8377146626bb284e2133c76bee6cb4e3ee0af5d648b186235a7323a7"]
 
 [payload.adt]
+packed_data_ramdisk = true
 tool = "scripts/make-oneplus13t-adt.py"
 owned_memory_size = "0x20000000"
 cpu_regs = "0"

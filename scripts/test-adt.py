@@ -117,6 +117,15 @@ class AdtTest(unittest.TestCase):
         self.assertEqual(cells('/soc/ufshc@1d84000', 'iommus'), [smmu, 0x60, 0])
         self.assertEqual(cells('/soc/apps-smmu@15000000', 'reg'), [0x15000000, 0x100000])
 
+    def test_packed_data_binding(self):
+        nodes = decode(adt.make_tree(0x20000000, bytes(64), trust_cache=True, packed_data_ramdisk=True))
+        memory = nodes['/device-tree/chosen/memory-map']
+        self.assertEqual(memory['PackedRAMDisk'], bytes(16))
+        self.assertEqual(memory['TrustCache'], bytes(16))
+        self.assertNotIn('RAMDisk', memory)
+        plain = decode(adt.make_tree(0x20000000, bytes(64)))
+        self.assertNotIn('PackedRAMDisk', plain['/device-tree/chosen/memory-map'])
+
 
 if __name__ == '__main__':
     unittest.main()
