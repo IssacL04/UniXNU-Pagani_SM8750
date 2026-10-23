@@ -79,7 +79,7 @@ while index < len(arguments):
     index += 1
 command += ['-I', str(ROOT / 'build/storage-abi/include'), '-I', str(ROOT / '.cache/xnu-work/osfmk'),
             '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-Wno-deprecated-declarations',
-            '-Wno-c99-designator', '-Wno-reorder-init-list', '-Wno-unnecessary-virtual-specifier',
+            '-Wno-c99-designator', '-Wno-reorder-init-list',
             '-Wno-deprecated-enum-enum-conversion']
 result = subprocess.run(command, cwd=recipe['directory'], capture_output=True, text=True)
 (reference.with_suffix('.log')).write_text(result.stdout + result.stderr)
