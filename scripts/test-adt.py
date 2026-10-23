@@ -88,6 +88,14 @@ class AdtTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 adt.make_tree(0x20000000, bytes(64), value)
 
+    def test_trust_cache_binding(self):
+        nodes = decode(adt.make_tree(0x20000000, bytes(64), trust_cache=True))
+        self.assertEqual(nodes['/device-tree/chosen/memory-map']['TrustCache'], bytes(16))
+        self.assertEqual(nodes['/device-tree/chosen']['amfi-only-platform-code'], struct.pack('<I', 1))
+        plain = decode(adt.make_tree(0x20000000, bytes(64)))
+        self.assertNotIn('TrustCache', plain['/device-tree/chosen/memory-map'])
+        self.assertNotIn('amfi-only-platform-code', plain['/device-tree/chosen'])
+
     def test_actual_board_resources(self):
         dtb = Path(__file__).resolve().parents[1] / 'sysinfo/live.dtb'
         def cells(node, prop):
