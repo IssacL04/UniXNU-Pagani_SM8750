@@ -165,7 +165,19 @@ def tail_target(address):
     if immediate & 0x2000000:
         immediate -= 0x4000000
     return address + immediate * 4
-require(tail_target(destructor) == tail_target(pointers[0]), 'Base destructor semantics differ')
+# Abstract-class D1/D0 trap; its callable D2 tail-calls the imported IOService D2.
+require(all(read(native, candidate, address, 4) == struct.pack('<I', 0xd4200020)
+            for address in pointers[:2]), 'Unexpected abstract destructor entries')
+stub = tail_target(destructor)
+adrp, ldr, branch = struct.unpack('<3I', read(native, candidate, stub, 12))
+require(adrp & 0x9f00001f == 0x90000010 and ldr & 0xffc003ff == 0xf9400210 and
+        branch == 0xd61f0200, 'Unqualified base-destructor import stub')
+immediate = ((adrp >> 5 & 0x7ffff) << 2) | (adrp >> 29 & 3)
+if immediate & 0x100000:
+    immediate -= 0x200000
+slot = (stub & ~4095) + immediate * 4096 + (ldr >> 10 & 4095) * 8
+target, = struct.unpack('<Q', read(native, candidate, slot, 8))
+require(target == by_name['__ZN9IOServiceD2Ev'], 'Unexpected base-destructor target')
 
 
 possible = {name: pointers[i] for i, name in enumerate(methods)}
