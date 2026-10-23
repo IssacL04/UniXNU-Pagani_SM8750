@@ -30,7 +30,7 @@ for value in arguments:
         command.append(value)
 command += ['-mgeneral-regs-only', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter',
             '-Wno-c99-designator', '-Wno-reorder-init-list', '-Wno-deprecated-enum-enum-conversion',
-            '-Wno-unnecessary-virtual-specifier', '-I', str(directory), '-I', str(root / '.cache/xnu-work/osfmk')]
+            '-I', str(directory), '-I', str(root / '.cache/xnu-work/osfmk')]
 subprocess.run(command, cwd=record['directory'], check=True)
 data = obj.read_bytes()
 assert struct.unpack_from('<4I', data) == (0xfeedfacf, 0x100000c, 0, 1), 'Require ARM64 Mach-O object'

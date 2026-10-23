@@ -6,7 +6,7 @@
 
 当前已走通 bring-up 阶段 1–6 的主要启动目标，正在推进阶段 7 用户态。系统输入固定为 iPadOS 17.7.11（21H461）；8.74 GiB 根镜像已写入独立的 64 GiB `unixnu` 分区，XNU 通过只读 UFS 路径挂载 OS/SystemOS，并启动原版 `launchd` 和系统服务。
 
-第 33 次真机加入 256 MiB 临时 RAM Data 后，推进到 `watchdogd[144]`，约 101 秒后发生 SIGTRAP panic；代码分析指向缺少 IOWatchdog 后端。第 34 次仅在 RAM Data 中停用 `com.apple.watchdogd`，已通过云端构建、实际镜像检查并执行临时启动，等待新的真机结果。稳定用户态、图形界面和交互尚未完成；Data 修改随重启清除，物理 UFS 写入保持关闭。详细记录见 [STAGE6.md](STAGE6.md)。
+第 33 次真机加入 256 MiB 临时 RAM Data 后，推进到 `watchdogd[144]`，约 101 秒后发生 SIGTRAP panic；代码分析指向缺少 IOWatchdog 后端。第 34 次在 RAM Data 中停用 `com.apple.watchdogd`，用户观察到内核运行十多分钟并持续装载进程，尚未出现图形界面。最新 Stage 7 候选加入原版 Apple 标志、IOSurface/IOMobileGraphics、CPU 画面呈现与 iPad 用户态身份，XNU 内存窗口扩大至 1 GiB，正在等待构建和真机验证。稳定用户态、设置界面和交互尚未完成；Data 修改随重启清除，物理 UFS 写入保持关闭。详细记录见 [STAGE6.md](STAGE6.md)。
 
 | 部分 | 当前状态 | 执行位置 |
 | --- | --- | --- |
@@ -14,7 +14,7 @@
 | Apple 设备树与启动负载 | 实际 FAT 文件、ADT、trust cache 和启动参数检查通过 | macOS Actions 与 Linux |
 | XNU、存储适配与原版预链接组件 | 第 34 次构建成功，含 17 个原版组件；真机已挂载根卷并运行用户态服务 | GitHub Actions macOS runner 与 13T |
 | 临时 APFS Data | 保留原始 private/var 属主和权限，内核与种子 UUID 配套，当前仅停用 watchdogd | macOS 生成，Linux 只读核对 |
-| iPadOS 显示与交互 | 尚未验证；现有屏幕输出来自内核诊断 | 待后续适配 |
+| iPadOS 显示与交互 | 已接入原版显示组件与 CPU 呈现代码，等待真机验证；触摸和 GPU 尚未适配 | macOS 构建，13T 待验证 |
 
 下文保留各次构建的历史诊断。第 6–9 次已依次越过早期入口、控制台与 zalloc 问题，并确认单核定时器中断和内核线程运行；当时的根设备等待已由后续存储适配解决。
 
@@ -117,9 +117,9 @@ test -s out/oneplus13t/actions/run-34/payload/payload.img
 
 ### 13T 的板级输入
 
-首轮仅发布 MPIDR 为 0 的启动 CPU。GICD 为 `0x16000000/0x10000`，GICR 为 `0x16080000/0x200000`，redistributor stride 为 `0x40000`，timebase 为 19.2 MHz；均已对照本机导出的设备树。ADT 包含 ArmDTPlatform 所需的 chosen、cpus、arm-io、defaults、options 和易失 CHRP NVRAM，不填入虚构的 Apple 设备身份或 sheng 的 UFS/GPU 地址。
+当前仅发布 MPIDR 为 0 的启动 CPU。GICD 为 `0x16000000/0x10000`，GICR 为 `0x16080000/0x200000`，redistributor stride 为 `0x40000`，timebase 为 19.2 MHz；均已对照本机导出的设备树。ADT 包含 ArmDTPlatform 所需的 chosen、cpus、arm-io、defaults、options 和易失 CHRP NVRAM。Stage 7 向原版用户态提供 `iPad7,1` / `J120` 兼容身份及 artwork 属性，硬件 `compatible` 保持 `oneplus,pkx110` / `qcom,sm8750`。每份临时 Data 候选生成一个非零软件 `unique-chip-id`；它不代表真实 Apple ECID。
 
-DarwinBoot 向 UEFI 申请 256 MiB 连续窗口，并通过 `boot_args` 传入实际基址和大小。ADT 不把 13T 分散的物理内存拼成一段连续可用 RAM。framebuffer 地址与 pitch 由运行时 GOP 提供。侧核、PSCI、电源管理、存储和 GPU 需要后续独立适配。真机已确认硬件 CNTFRQ 与内核 timebase 均为 19.2 MHz，并能沿用 GOP framebuffer 显示至 S6；单核定时器中断和观察线程已实测运行，长期稳定性与多核调度仍待验证。
+DarwinBoot 当前向 UEFI 申请 1 GiB 连续窗口，并通过 `boot_args` 传入实际基址和大小；分配必须落在真实可用内存中。framebuffer 地址与 pitch 由运行时 GOP 提供，保留 13T 的实际屏幕尺寸。临时 APFS Data 的逻辑容量仍为 256 MiB，实际写入按需占用 RAM。真机已确认硬件 CNTFRQ 与内核 timebase 均为 19.2 MHz，单核定时器中断、内核线程和只读 UFS 路径可用；新内存窗口、显示服务、长期稳定性与多核调度仍待验证。
 
 当前 `[bootimg] embed_payload = true` 将完整 FAT 卷追加在 UEFI FD 后，与 BootShim 一起压缩到 Android boot 的 kernel 字段。ARM64 镜像头声明包含负载的完整解压长度。BootShim 只把 FD 搬到固件基址，负载留在原 kernel 输入缓冲区；它用 `x1/x2` 传递负载地址和长度，用 `x3` 标记交接格式。SEC 保存参数并生成独立 HOB。BootPayloadDxe 优先使用此 HOB，范围通过检查后发布只读 Block I/O。它仍只接受 SEC 已保留的 `Kernel` 内存，不放宽到 DXE 堆或任意物理内存。
 
