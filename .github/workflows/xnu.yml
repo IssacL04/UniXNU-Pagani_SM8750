@@ -32,6 +32,7 @@ jobs:
       - name: Prepare the isolated UniXNU source and check the board
         run: |
           python3 scripts/test-upstream.py
+          python3 scripts/test-ram-data.py
           TREE=$(./unixnu --prepare)
           echo "UNIXNU_TREE=$TREE" >> "$GITHUB_ENV"
           python3 "$TREE/scripts/test-kernel-source.py"

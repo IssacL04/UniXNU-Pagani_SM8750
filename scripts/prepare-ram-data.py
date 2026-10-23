@@ -17,6 +17,31 @@ import subprocess
 import uuid
 
 
+def disable_unimplemented_watchdog(target, daemon):
+    job = plistlib.loads(daemon.read_bytes())
+    if (job.get('Label') != 'com.apple.watchdogd' or
+            job.get('ProgramArguments') != ['/usr/libexec/watchdogd'] or
+            job.get('_PanicOnCrash', {}).get('PanicOnConsecutiveCrash') is not True):
+        raise ValueError('Unexpected original watchdog launch policy')
+    for relative in ('db', 'db/com.apple.xpc.launchd'):
+        directory = target / relative
+        if directory.is_symlink():
+            raise ValueError('Refuse symlink in launch policy path')
+        directory.mkdir(mode=0o755, exist_ok=True)
+    paths = [directory / name for name in ('disabled.plist', 'disabled.migrated')]
+    if any(path.exists() or path.is_symlink() for path in paths):
+        raise ValueError('Refuse to overwrite an existing launch policy')
+    # shortcut: disable watchdogd in volatile Data until a real IOWatchdog backend exists.
+    policy = {'com.apple.watchdogd': True}
+    for path, data in zip(paths, (plistlib.dumps(policy), b'')):
+        with path.open('xb') as stream:
+            stream.write(data)
+        path.chmod(0o644)
+        if path.read_bytes() != data:
+            raise ValueError('Launch policy readback mismatch')
+    return list(policy)
+
+
 @contextmanager
 def mounted(image, target, readonly=False):
     target.mkdir(parents=True, exist_ok=True)
@@ -90,6 +115,8 @@ def prepare(tree, source, output, config):
                     parent = directory.parent.stat()
                     os.chown(directory, parent.st_uid, parent.st_gid)
             os.chmod(target / 'tmp', 0o1777)
+            disabled_jobs = disable_unimplemented_watchdog(
+                target, original / 'System/Library/LaunchDaemons/com.apple.watchdogd.plist')
     with image.open('rb') as stream:
         header = stream.read(4096)
     if image.stat().st_size != 256 * 1024**2 or header[32:36] != b'NXSB':
@@ -98,6 +125,7 @@ def prepare(tree, source, output, config):
     packed = pack(image, output / 'data.dbrdisk')
     report = dict(volume_uuid=identity, packed=packed, source_regular_files=count,
                   source_regular_bytes=total, guest_mutable=True, persistent=False,
+                  bringup_disabled_jobs=disabled_jobs,
                   ownership_preserved=True, os_inputs_modified=False, hardware_tested=False)
     (output / 'seed.json').write_text(json.dumps(report, indent=2) + '\n')
     lines = [line for line in config.read_text().splitlines()
