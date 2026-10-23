@@ -6,14 +6,14 @@
 
 当前已走通 bring-up 阶段 1–6 的主要启动目标，正在推进阶段 7 用户态。系统输入固定为 iPadOS 17.7.11（21H461）；8.74 GiB 根镜像已写入独立的 64 GiB `unixnu` 分区，XNU 通过只读 UFS 路径挂载 OS/SystemOS，并启动原版 `launchd` 和系统服务。
 
-第 33 次真机加入 256 MiB 临时 RAM Data 后，推进到 `watchdogd[144]`，约 101 秒后发生 SIGTRAP panic；代码分析指向缺少 IOWatchdog 后端。第 34 次在 RAM Data 中停用 `com.apple.watchdogd`，用户观察到内核运行十多分钟并持续装载进程，尚未出现图形界面。第 37 次 Stage 7 候选加入原版 Apple 标志、IOSurface/IOMobileGraphics、CPU 画面呈现与 iPad 用户态身份，XNU 内存窗口扩大至 1 GiB；真机显示 Logo 后持续停留，未确认进入 Setup。第 38 次真机跑过可见日志后仍停在 Logo。下一候选扩展至 4 GiB 内存和 1 GiB 临时 Data，并补齐软件显示刷新、HID 匹配及同版用户态兼容修复；尚待完整构建与真机验证。Data 修改随重启清除，物理 UFS 写入保持关闭。详细记录见 [STAGE6.md](STAGE6.md)。
+第 33 次真机加入 256 MiB 临时 RAM Data 后，推进到 `watchdogd[144]`，约 101 秒后发生 SIGTRAP panic；代码分析指向缺少 IOWatchdog 后端。第 34 次在 RAM Data 中停用 `com.apple.watchdogd`，用户观察到内核运行十多分钟并持续装载进程，尚未出现图形界面。第 37 次 Stage 7 候选加入原版 Apple 标志、IOSurface/IOMobileGraphics、CPU 画面呈现与 iPad 用户态身份，XNU 内存窗口扩大至 1 GiB；真机显示 Logo 后持续停留，未确认进入 Setup。第 38 次真机跑过可见日志后仍停在 Logo。第 39 次扩展至 4 GiB 内存和 1 GiB 临时 Data，并加入软件刷新、HID 匹配及同版用户态兼容修复；完整构建和产物核对通过，已临时启动，等待屏幕结果。Data 修改随重启清除，物理 UFS 写入保持关闭。详细记录见 [STAGE6.md](STAGE6.md)。
 
 | 部分 | 当前状态 | 执行位置 |
 | --- | --- | --- |
 | UEFI、UniXNU 与 DarwinBoot | 已进入 XNU，菜单及 framebuffer 诊断可用 | Linux 构建，13T 真机验证 |
 | Apple 设备树与启动负载 | 实际 FAT 文件、ADT、trust cache 和启动参数检查通过 | macOS Actions 与 Linux |
-| XNU、存储适配与原版预链接组件 | 第 38 次构建成功，含 29 个原版可执行组件及 IOHIDEventDriver 配置；此前真机已挂载根卷并运行用户态服务 | GitHub Actions macOS runner 与 13T |
-| 临时 APFS Data | 保留原始 private/var 属主和权限，内核与种子 UUID 配套，下一候选按同版参考处理八项缺少后端的任务 | macOS 生成，Linux 只读核对 |
+| XNU、存储适配与原版预链接组件 | 第 39 次构建成功，含 29 个原版可执行组件及 IOHIDEventDriver 配置；此前真机已挂载根卷并运行用户态服务 | GitHub Actions macOS runner 与 13T |
+| 临时 APFS Data | 保留原始 private/var 属主和权限，内核与种子 UUID 配套，实际 APFS 读回确认八项启动策略和同版迁移偏好 | macOS 生成，Linux 只读核对 |
 | iPadOS 显示与交互 | 已接入原版显示组件与 CPU 呈现代码，等待真机验证；触摸和 GPU 尚未适配 | macOS 构建，13T 待验证 |
 
 下文保留各次构建的历史诊断。第 6–9 次已依次越过早期入口、控制台与 zalloc 问题，并确认单核定时器中断和内核线程运行；当时的根设备等待已由后续存储适配解决。
@@ -100,13 +100,13 @@ unixnu.lock
 ```sh
 cd /home/enc3l/Project/UniXNU_SM8750/UniXNU-Pagani_SM8750
 export PATH=/home/enc3l/Project/OP_Kernel_Dev/src/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/bin:$PATH
-unzip /path/to/oneplus13t-xnu-38.zip -d out/oneplus13t/actions/run-38
-test -s out/oneplus13t/actions/run-38/kernel/kernel.macho
-test -s out/oneplus13t/actions/run-38/payload/payload.img
+unzip /path/to/oneplus13t-xnu-39.zip -d out/oneplus13t/actions/run-39
+test -s out/oneplus13t/actions/run-39/kernel/kernel.macho
+test -s out/oneplus13t/actions/run-39/payload/payload.img
 ./unixnu bootimg --uefi ../UEFI-Pagani_SM8750 \
   --dtb .cache/firmware/vendor_boot/dtb \
-  --ramdisk out/oneplus13t/actions/run-38/payload/payload.img \
-  -o out/oneplus13t/boot/stage7-run-38/boot.img
+  --ramdisk out/oneplus13t/actions/run-39/payload/payload.img \
+  -o out/oneplus13t/boot/stage7-run-39/boot.img
 ```
 
 前两项文件检查应均成功，再执行打包。新的候选不会覆盖 `menu-keys`、`no-sdcc` 或 `payload-smoke`。将生成的 `boot.img` 复制到 Windows 后，用已验证的 `fastboot boot` 临时启动路径测试；不要直接刷写 boot 分区。
@@ -119,7 +119,7 @@ test -s out/oneplus13t/actions/run-38/payload/payload.img
 
 当前仅发布 MPIDR 为 0 的启动 CPU。GICD 为 `0x16000000/0x10000`，GICR 为 `0x16080000/0x200000`，redistributor stride 为 `0x40000`，timebase 为 19.2 MHz；均已对照本机导出的设备树。ADT 包含 ArmDTPlatform 所需的 chosen、cpus、arm-io、defaults、options 和易失 CHRP NVRAM。Stage 7 向原版用户态提供 `iPad7,1` / `J120` 兼容身份及 artwork 属性，硬件 `compatible` 保持 `oneplus,pkx110` / `qcom,sm8750`。每份临时 Data 候选生成一个非零软件 `unique-chip-id`；它不代表真实 Apple ECID。
 
-下一候选由 DarwinBoot 向 UEFI 申请 4 GiB 连续窗口，并通过 `boot_args` 传入实际基址和大小；分配必须落在真实可用内存中。framebuffer 地址与 pitch 由运行时 GOP 提供，保留 13T 的实际屏幕尺寸。临时 APFS Data 的逻辑容量扩展至 1 GiB，实际写入按需占用 RAM。真机已确认硬件 CNTFRQ 与内核 timebase 均为 19.2 MHz，单核定时器中断、内核线程和只读 UFS 路径可用；新内存窗口、显示服务、长期稳定性与多核调度仍待验证。
+当前由 DarwinBoot 向 UEFI 申请 4 GiB 连续窗口，并通过 `boot_args` 传入实际基址和大小；分配必须落在真实可用内存中。framebuffer 地址与 pitch 由运行时 GOP 提供，保留 13T 的实际屏幕尺寸。临时 APFS Data 的逻辑容量扩展至 1 GiB，实际写入按需占用 RAM。真机已确认硬件 CNTFRQ 与内核 timebase 均为 19.2 MHz，单核定时器中断、内核线程和只读 UFS 路径可用；新内存窗口、显示服务、长期稳定性与多核调度仍待验证。
 
 当前 `[bootimg] embed_payload = true` 将完整 FAT 卷追加在 UEFI FD 后，与 BootShim 一起压缩到 Android boot 的 kernel 字段。ARM64 镜像头声明包含负载的完整解压长度。BootShim 只把 FD 搬到固件基址，负载留在原 kernel 输入缓冲区；它用 `x1/x2` 传递负载地址和长度，用 `x3` 标记交接格式。SEC 保存参数并生成独立 HOB。BootPayloadDxe 优先使用此 HOB，范围通过检查后发布只读 Block I/O。它仍只接受 SEC 已保留的 `Kernel` 内存，不放宽到 DXE 堆或任意物理内存。
 

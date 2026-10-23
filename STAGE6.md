@@ -1,6 +1,6 @@
 # Stage 6：一加 13T 存储与根卷
 
-更新：2026-10-24。根卷挂载和原版 launchd 启动已通过，当前推进阶段 7。第 34 次在 RAM Data 中停用缺少后端的 watchdogd 后，用户观察到内核运行十多分钟并持续装载进程。第 37 次加入显示服务与原版 Apple Logo，真机持续停在 Logo。第 38 次诊断候选已完成构建、实际负载核对及临时启动，Sending/Booting 均为 OKAY；用户反馈可见日志跑完后仍停在 Apple Logo，尚未进入 Setup。下一候选集中补齐同版参考中的用户态依赖。
+更新：2026-10-24。根卷挂载和原版 launchd 启动已通过，当前推进阶段 7。第 34 次在 RAM Data 中停用缺少后端的 watchdogd 后，用户观察到内核运行十多分钟并持续装载进程。第 37 次加入显示服务与原版 Apple Logo，真机持续停在 Logo。第 38 次诊断候选已完成构建、实际负载核对及临时启动，Sending/Booting 均为 OKAY；用户反馈可见日志跑完后仍停在 Apple Logo，尚未进入 Setup。第 39 次补齐同版参考中的用户态依赖，完整构建、实际负载核对和临时启动均已完成，等待新的屏幕结果。
 
 最终目标是在一加 13T 上启动 iPadOS 用户态和界面。当前源码 XNU 仅用于打通硬件路径；本阶段以 iPadOS 根卷挂载及其 `launchd` 启动为验收条件，图形界面仍需后续用户态、显示与输入适配。
 
@@ -52,7 +52,7 @@ DeviceTree、两份 trust cache 和原始 KernelCache 也已从同一恢复包�
 1. 第 20 次候选已通过只读 GPT/首块检查，先保留这一可复现基线。模式 10 主动停止是设计行为，无需为了消除该 panic 修改传输代码。
 2. 根镜像已通过 Fastboot 写入 `unixnu`，模式 11 真机照片确认 `manifest status=0 windows=2`，两个窗口均为 `read=1`，偏移、大小及 manifest 内哈希字段与本地输入一致。已完成窗口首块读回，尚未进行手机侧全镜像哈希验证。
 3. 第 31 次已越过 SystemOS copyout 停点并启动用户态服务，tzinit PID 17 退出状态为 30；第 33 次进入 watchdogd PID 144，停于 SIGTRAP。第 34 次在 RAM Data 中停用该任务后，用户观察到持续运行十多分钟，尚无图形界面。
-4. 按 bring-up.md 的目标，根卷挂载与原版 `launchd` 启动已经通过，当前进入阶段 7。第 37 次真机停留在 Logo；第 38 次增加持久显示/进程退出状态及诊断回退，已临时启动。下一步依据实际屏幕定位显示或用户态停点，继续推进 Setup；稳定运行与交互仍待验证。
+4. 按 bring-up.md 的目标，根卷挂载与原版 `launchd` 启动已经通过，当前进入阶段 7。第 38 次仍停留在 Logo；第 39 次加入更大内存与 Data、软件刷新、HID 匹配和固定用户态兼容规则，已临时启动。下一步根据实际画面确认 4 GiB 窗口分配和 Setup 进展；稳定运行与交互仍待验证。
 
 ## 真机寄存器结果与第二轮启动
 
@@ -592,8 +592,20 @@ DarwinBoot 请求增至 4 GiB，临时 APFS Data 增至 1 GiB。13T 实际 DT �
 
 临时 launchd 策略沿用现有文件方式，增加 identityservicesd、locationd、CommCenter、bluetoothd、PerfPowerServices、iomfb_fdr_loader 和 iconservicesagent。前两项涉及同版参考记录的 SpringBoard/chronod/liveactivitiesd 同步等待链，后续项对应缺少硬件后端或参考机上的反复退出。加上 watchdogd 共八项；每项必须匹配当前原始任务的 Label 和完整 ProgramArguments，匹配失败即停止。此策略不代表已在 13T 捕获相同等待栈，停用图标渲染服务也可能使缺少缓存的图标留白。原始系统任务 plist 不修改。
 
-IOHIDEventDriver 改用参考的匹配加载接口，并确认 IOHIDResource 发布。显示库借用 [NativeMobileDisplay 8666a995](https://github.com/UniXNU/NativeMobileDisplay/tree/8666a9950c9699b368931d18cac92c0fdb2ce9c0) 的 work-loop 定时器，向原版客户端发送实际时钟驱动的 60 Hz 软件刷新通知，发布对应固定节奏。它用于软件渲染调度，不代表已适配物理面板 vblank。原版虚表和刷新函数绑定继续在编译期核对。关闭额外 kprintf spam，并使用同版参考的 -no_corpses，避免反复崩溃时收集大型 corpse 占用启动资源。
+IOHIDEventDriver 改用参考的匹配加载接口，等待 IOHIDResource 并记录结果。显示库借用 [NativeMobileDisplay 8666a995](https://github.com/UniXNU/NativeMobileDisplay/tree/8666a9950c9699b368931d18cac92c0fdb2ce9c0) 的 work-loop 定时器，向原版客户端发送实际时钟驱动的 60 Hz 软件刷新通知，发布对应固定节奏。它用于软件渲染调度，不代表已适配物理面板 vblank。原版虚表和刷新函数绑定继续在编译期核对。关闭额外 kprintf spam，并使用同版参考的 -no_corpses，避免反复崩溃时收集大型 corpse 占用启动资源。
 
 Sheng 的四处 21H461 用户态兼容修复已与当前磁盘原始指令逐字节核对：AttentionAwareness 初始化锁等待、PosterBoard 两处数据保护属性约束、无蓝牙后端时 BTAudioHALPlugin 的忙重试。内核仅在 ephemeral-storage=1、完整原页通过签名校验且文件名/偏移/原始字节全部匹配时修改内存页，并同步指令缓存；磁盘系统文件不变。实现采用固定四项表，不开放任意地址或启动参数补丁。PosterBoard 调整只适用于当前未实现数据保护的临时卷，不能作为安全存储能力。
 
 新测试直接执行补丁中的兼容函数和显示定时器代码，覆盖非临时环境拒绝、错误文件/偏移/字节、修改范围、重复应用、无订阅者、迟到时钟、定时器释放及固定刷新属性；ASan/UBSan 通过。本地运行关闭 LeakSanitizer，因为受控执行环境不支持其进程跟踪，地址和未定义行为检查仍开启。五项 Data 测试、十项 ADT 测试和隔离源码/驱动补丁复用测试通过。新增内核补丁与现有相关补丁已在固定 XNU 原始文件上共同应用成功。完整 iOS 编译和 Setup 真机结果另行记录。
+
+### 第 39 次：构建、产物检查与临时启动
+
+[第 39 次构建](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/40017111424)以 `02c7ccd` 完成，全部步骤成功，包括新增兼容函数和刷新定时器的主机检查、显示驱动 358 项接口布局检查及原生 panic 参数检查。最终内核为 127,668,224 字节，含 29 个原版可执行组件和 IOHIDEventDriver 配置。实际 FAT、ADT 的 4 GiB 请求、trust cache、两份根策略及原版安全/显示/HID 可执行段均通过核对。
+
+Data UUID 为 `A752350A-AB19-41D8-ADF9-01485A68BA56`，1 GiB 逻辑 APFS 打包为 1,020,016 字节，完整逻辑哈希通过。独立 APFS 读回确认八项 disabled 策略、空迁移标记、21H461 migration 偏好和禁止自动暗屏设置；两份 Setup 完成偏好文件均不存在。原始系统输入保持不变。
+
+最终机器码保留了四条固定兼容规则、临时存储开关及原始代码页签名验证后的调用；完整验证且无 taint 才进入修复，修改后调用 cache_sync_page。实际显示虚表第 301 项指向新的刷新属性实现，定时器回调使用真实系统时钟并调用原版通知函数。30 个映像共 2,319 条 kalloc 类型记录，2,081 条参与分池；预算 240 的最大槽位为 28，原算法 ASan/UBSan 重放通过。
+
+完整镜像为 `out/oneplus13t/boot/stage7-run-39/boot.img`，87,924,736 字节。封装回验和实际哈希通过，Android v4 头、空 Android ramdisk 字段、UEFI、原机 DTB、BootShim 与 160 MiB 内嵌 FAT 布局核对通过。用户确认 Fastboot 并授权本轮临时启动后，只读核对设备 `3B15BB01BAT00000`、产品 `sun`，再发送镜像：Sending 2.007 秒、Booting 0.337 秒，均为 OKAY，总计 2.700 秒，退出码 0。日志为 `out/oneplus13t/logs/stage7-run-39-fastboot.log`。
+
+本轮未刷写分区，物理 UFS 写入仍关闭，Data 修改随重启清除。当前等待手机画面，尚不能确认已分配 4 GiB 窗口、产生系统帧或进入初始化向导；GPU、触摸和无线外设仍未适配。
