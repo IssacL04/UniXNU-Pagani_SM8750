@@ -5,6 +5,8 @@ CONFIG_XNU_SOURCE_PTHREAD=y
 CONFIG_XNU_ARM_DT_PLATFORM=y
 CONFIG_XNU_ARMCPU=y
 CONFIG_XNU_NATIVE_ARCH_TIMER=y
+# SM8750 copyio must temporarily clear PAN when accessing user pages.
+CONFIG_XNU_NATIVE_PAN=y
 # The BCM2837 panic buffer address is not mapped on this device.
 CONFIG_XNU_DT_PANIC_REGION=y
 CONFIG_XNU_CRYPTO_BOOTSTRAP="prelinked"
