@@ -46,10 +46,12 @@ for path in ('drivers/ShengPlatformPower/ShengPlatformPower.cpp',
     assert (args.tree / path).is_file(), path
 
 with tempfile.TemporaryDirectory(prefix='pagani-layout-') as directory:
-    local = Path(directory)
+    local = Path(directory).resolve()
     for folder, name in [('drivers', 'NativeUfs'), ('kits', 'VerifiedRoot')]:
         (local / folder / name).mkdir(parents=True)
-    ctx.args = cli.common().parse_args(['--local', str(local)])
+    alias = local / 'alias'
+    alias.symlink_to(local, target_is_directory=True)
+    ctx.args = cli.common().parse_args(['--local', str(alias)])
     overridden = feeds.resolve(ctx)
     assert overridden['driver', 'NativeUfs'].path == local / 'drivers/NativeUfs'
     assert overridden['kit', 'VerifiedRoot'].path == local / 'kits/VerifiedRoot'
