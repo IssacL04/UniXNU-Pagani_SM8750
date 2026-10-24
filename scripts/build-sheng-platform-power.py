@@ -48,7 +48,7 @@ for i in range(177, 340):
 header += '};\nstatic_assert(sizeof(ApplePMGR)==0x4b8a8,"Original provider storage");\n'
 (OUT / 'OriginalPMGRABI.h').write_text(header)
 (OUT / 'GuardedPMGRSlots.inc').write_text(guards)
-source = ROOT / 'scripts/pmgr/ShengPlatformPower.cpp'
+source = ROOT / 'drivers/ShengPlatformPower/ShengPlatformPower.cpp'
 obj = OUT / 'ShengPlatformPower.o'
 record = json.loads((ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/iokit/DEVELOPMENT/IOPlatformExpert.cpo.json').read_text().strip().rstrip(','))
 command, i = [], 0

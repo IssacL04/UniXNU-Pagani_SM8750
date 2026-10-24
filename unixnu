@@ -16,12 +16,8 @@ def prepare(device=DEVICE, source=None):
     revision = (device / 'upstream.rev').read_text().strip()
     if not re.fullmatch('[0-9a-f]{40}', revision):
         raise ValueError('upstream.rev must contain a full Git commit ID')
-    patch = device / 'patches/unixnu-source-kernel.patch'
-    driver_patches = [(device / 'patches' / name, module) for name, module in (
-        ('native-ufs-sm8750.patch', 'NativeUfs'),
-        ('native-mobile-display-stage7.patch', 'NativeMobileDisplay'))]
-    fingerprint = hashlib.sha256(patch.read_bytes() + b''.join(
-        path.read_bytes() for path, _ in driver_patches if path.is_file())).hexdigest()
+    patch = device / 'patches/unixnu-framework.patch'
+    fingerprint = hashlib.sha256(patch.read_bytes()).hexdigest()
     cache = device / '.cache'
     target = cache / f'upstream-{revision[:12]}-{fingerprint[:12]}'
     if target.is_dir():
@@ -52,15 +48,13 @@ def prepare(device=DEVICE, source=None):
             git('-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive', cwd=tree)
         git('apply', '--check', patch, cwd=tree)
         git('apply', patch, cwd=tree)
-        for driver_patch, module in driver_patches:
-            if driver_patch.is_file():
-                git('apply', '--check', driver_patch, cwd=tree / 'drivers' / module)
-                git('apply', driver_patch, cwd=tree / 'drivers' / module)
         tree.rename(target)
     return target
 
 
 def main():
+    if not (DEVICE / 'modules/Pagani/README.md').is_file():
+        raise SystemExit('Initialize the pinned drivers: git submodule update --init --recursive')
     tree = prepare()
     if sys.argv[1:] == ['--prepare']:
         print(tree)

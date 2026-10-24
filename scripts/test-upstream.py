@@ -33,7 +33,7 @@ class UpstreamTest(unittest.TestCase):
             git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'Fixture')
             (device / 'upstream.rev').write_text(git('rev-parse', 'HEAD'))
             (source / 'input').write_text('board\n')
-            patch = device / 'patches/unixnu-source-kernel.patch'
+            patch = device / 'patches/unixnu-framework.patch'
             patch.write_text(git('diff'))
             git('restore', 'input')
             prepared = prepare(device, source)
@@ -43,28 +43,15 @@ class UpstreamTest(unittest.TestCase):
             (prepared / 'input').write_text('local work\n')
             self.assertEqual(prepare(device, source), prepared)
             self.assertEqual((prepared / 'input').read_text(), 'local work\n')
-            (source / 'drivers/NativeUfs/fixture').write_text('sm8750\n')
-            ufs_patch = device / 'patches/native-ufs-sm8750.patch'
-            ufs_patch.write_text(git('diff', repo=source / 'drivers/NativeUfs'))
-            git('restore', 'fixture', repo=source / 'drivers/NativeUfs')
-            with_ufs = prepare(device, source)
-            self.assertNotEqual(with_ufs, prepared)
-            self.assertEqual((with_ufs / 'drivers/NativeUfs/fixture').read_text(), 'sm8750\n')
-            self.assertEqual((source / 'drivers/NativeUfs/fixture').read_text(), 'ufs\n')
+            patch.write_text(patch.read_text().replace('+board', '+updated board'))
+            updated = prepare(device, source)
+            self.assertNotEqual(updated, prepared)
+            self.assertEqual((updated / 'input').read_text(), 'updated board\n')
             self.assertEqual((prepared / 'input').read_text(), 'local work\n')
-            display = source / 'drivers/NativeMobileDisplay'
-            (display / 'fixture').write_text('display refresh\n')
-            (device / 'patches/native-mobile-display-stage7.patch').write_text(git('diff', repo=display))
-            git('restore', 'fixture', repo=display)
-            with_display = prepare(device, source)
-            self.assertNotEqual(with_display, with_ufs)
-            self.assertEqual((with_display / 'drivers/NativeMobileDisplay/fixture').read_text(), 'display refresh\n')
-            self.assertEqual((display / 'fixture').read_text(), 'ufs\n')
-            self.assertEqual((with_display / 'drivers/NativeUfs/fixture').read_text(), 'sm8750\n')
             patch.write_text('invalid patch\n')
             with self.assertRaises(subprocess.CalledProcessError):
                 prepare(device, source)
-            self.assertEqual(set((device / '.cache').iterdir()), {prepared, with_ufs, with_display})
+            self.assertEqual(set((device / '.cache').iterdir()), {prepared, updated})
             self.assertEqual((source / 'input').read_text(), 'upstream\n')
 
     def test_board_enables_upstream_archive_builders(self):

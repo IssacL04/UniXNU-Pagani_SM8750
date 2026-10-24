@@ -80,34 +80,67 @@
 
 ### 仓库分工与同步上游
 
-当前工作区使用三个同级目录：
+当前工作区使用四个同级目录：
 
 | 目录 | 内容与远端 |
 | --- | --- |
-| `../UniXNU` | 官方 [UniXNU/UniXNU](https://github.com/UniXNU/UniXNU) 的干净检出，用于同步上游 |
-| 本仓库 `UniXNU-Pagani_SM8750` | [设备仓库](https://github.com/IssacL04/UniXNU-Pagani_SM8750)：13T 配置、诊断驱动、完整适配补丁与构建入口 |
-| `../UEFI-Pagani_SM8750` | [UEFI 仓库](https://github.com/IssacL04/UEFI-Pagani_SM8750)：BootShim、SEC、菜单交接及 13T 板级代码 |
+| `../UniXNU` | 主仓 fork [UniXNU_Enc3l](https://github.com/IssacL04/UniXNU_Enc3l)，`origin` 指向 fork、`upstream` 指向官方 UniXNU/UniXNU |
+| 本仓库 `UniXNU-Pagani_SM8750` | 独立设备仓库：板级配置、XNU 补丁、构建与验证脚本、移植文档 |
+| `../UniXNU-Pagani-Drivers` | [统一驱动仓库](https://github.com/IssacL04/UniXNU-Pagani-Drivers)：当前使用的驱动、诊断模块与内核库 |
+| `../UEFI-Pagani_SM8750` | [UEFI 仓库](https://github.com/IssacL04/UEFI-Pagani_SM8750)：BootShim、SEC、菜单交接及 13T 固件驱动 |
 
-2026-10-22 已将官方检出同步至 `5a9264bd91fa52821fc4c333f2e8ce8a28e35981`，并把本地改动完整保存到 [适配补丁](patches/unixnu-source-kernel.patch)。设备构建的 `upstream.rev` 固定为本轮已验证的 `d9460ebbbf43dd7f21b0ef3f62e9437c35b2315c`；官方目录后续快进不改变这条构建基线。补丁覆盖源码内核、ArmDTPlatform/ArmCpu、DarwinBoot、菜单状态、boot.img 打包和此前的移植文档；官方目录及子模块保持干净。
+按[官网仓库结构](https://unixnu.com/contributing/repository)保留 `drivers/`、`kits/`、`patches/`、`scripts/` 和 `docs/` 的职责。这里明确采用一个驱动集合仓库，替代官网每个模块一个仓库的组织方式：`modules/Pagani` 是唯一新增子模块，`drivers/<Name>` 与 `kits/<Name>` 是指向它内部目录的相对符号链接。官方模块覆盖顺序保持不变；设备仓库固定 gitlink，默认构建不依赖同级驱动检出。
 
-从本仓库执行 `./unixnu`。入口会优先从同级官方检出准备独立副本；没有该目录时从 GitHub 获取。补丁仅应用到本仓库 `.cache/upstream-<提交>-<补丁摘要>/`。相同版本直接复用，修改提交或补丁会生成新副本，不覆盖已有工作副本中的编辑。需要长期保留的适配应更新到仓库补丁中。
-
-所有 UniXNU 输出位于本仓库 `out/`，包括内核、FAT payload、完整 boot.img、日志和构建树。当前 UEFI 的 `Build` 是指向 `out/oneplus13t/uefi-build` 的链接；入口也会为尚无 `Build` 的同级 UEFI 检出创建该链接。原机 `sysinfo/`、DTB/DTBO、缓存和镜像继续只留本地，不上传 Git。
-
-同步官方目录只需：
-
-```sh
-git -C ../UniXNU pull --ff-only
-git -C ../UniXNU submodule update --init --recursive
+```text
+UniXNU-Pagani_SM8750/
+  unixnu                       隔离准备基础构建器并调用官方入口
+  upstream.rev                 固定基础仓库提交
+  board.toml / configs/        13T 配置
+  .gitmodules                  一个驱动集合子模块
+  modules/Pagani/              UniXNU-Pagani-Drivers 的固定提交
+  drivers/<Name> -> ../modules/Pagani/drivers/<Name>
+  kits/<Name> -> ../modules/Pagani/kits/<Name>
+  patches/xnu/                 当前基线的完整 XNU 补丁集
+  patches/unixnu-framework.patch  基础构建器和 UEFI package 的必要修改
+  scripts/                     板级构建、打包与验证脚本
+  docs/                        从原适配补丁迁出的文档
 ```
 
-设备构建继续使用固定的 `upstream.rev`。采用新的上游版本时，先更新该文件并检查补丁与测试，确认兼容后再提交，避免直接改变当前可用的构建基线。上游本次新增 `CONFIG_XNU_BUILD_ARCHIVES` 门控，13T 配置已显式开启。
+`patches/xnu` 在官方解析器中是一个整体模块，因此保留完整的固定版本补丁集，避免覆盖后遗漏通用补丁。ArmCpu、ArmDTPlatform、DarwinBoot、NativeUfs 和 NativeMobileDisplay 的修改已合入驱动仓库源码；PMGR 和 Stage7Probe 的 C++ 源码也已移入 `drivers/`。设备构建脚本继续保留在本仓库，沿用从构建树定位源码的方式。
 
-迁移后的 UEFI 已在 Linux 重新编译通过，Mu_Basecore 补丁在构建完成后正常撤回。固件仓库当前为私有，访问或克隆需要授权账户；设备仓库沿用原有公开可见性。
+首次克隆与准备：
 
-迁移后的[第 10 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/39665495073)以提交 `7205527` 成功完成，覆盖独立源码准备、前置测试、XNU/payload 构建和 macOS 原生 panic 参数检查。产物已下载到 `out/oneplus13t/actions/run-10/`，内核与 FAT 内容、ADT 和启动参数核对通过。此次用于验证迁移后的构建通路；已实测的 run-9 完整镜像保持原样，新基线尚未实机启动。
+```sh
+git clone --recurse-submodules https://github.com/IssacL04/UniXNU-Pagani_SM8750.git
+cd UniXNU-Pagani_SM8750
+./unixnu defconfig oneplus13t_defconfig
+./unixnu tree
+```
 
-云端使用本仓库的 [XNU 工作流](.github/workflows/xnu.yml)，通过同一入口准备源码和输出。仍仅手动触发，不需要私有 Secrets。工作流下载固定 IPSW 的所需组件、验证原始输入、生成根卷策略与临时 APFS Data，再构建预链接内核和 FAT 负载。手机上的根镜像单独准备；UEFI 和含原机 DTB 的最终 boot.img 留在 Linux 本地构建。仓库更名保留原有提交与 Actions 历史。
+已有检出先执行 `git submodule update --init --recursive`。需要修改驱动时，在设备仓库执行：
+
+```sh
+./unixnu tree --local ../UniXNU-Pagani-Drivers
+./unixnu build kernel payload --local ../UniXNU-Pagani-Drivers
+```
+
+`--local` 只影响本次命令。省略它时恢复使用固定子模块。驱动修改先在同级仓库提交并推送，再更新设备仓库引用：
+
+```sh
+git -C modules/Pagani fetch origin
+git -C modules/Pagani checkout --detach <已推送的完整提交号>
+git add modules/Pagani
+git commit -m "build(pagani): update driver bundle"
+git push origin main
+```
+
+`upstream.rev` 继续固定为 `d9460ebbbf43dd7f21b0ef3f62e9437c35b2315c`。入口优先从同级 `UniXNU` fork 准备隔离副本，没有该目录时从官方远端获取。只在 `.cache/upstream-<提交>-<框架补丁摘要>/` 应用框架补丁，不修改同级 fork。`./unixnu --prepare` 返回基础构建器缓存；实际已解析设备模块的树由 `./unixnu tree` 生成。
+
+所有输出继续放在设备仓库 `out/`。UEFI `Build` 链接仍指向 `out/oneplus13t/uefi-build`。原机 `sysinfo/`、DTB/DTBO、IPSW、根镜像、缓存与厂商固件只留本地。
+
+同级 fork 可按其已有远端设置同步；更新 fork 不会改变设备构建基线。采用新上游版本时，需要一起检查 `upstream.rev`、框架补丁、XNU 补丁集和驱动兼容性。
+
+云端 [XNU 工作流](.github/workflows/xnu.yml)递归检出固定驱动子模块，先组装设备构建树，再运行布局和现有回归检查。工作流仍仅手动触发，设备仓库独立提交与推送；私有 UEFI 仓库及完整 boot.img 打包仍留在本地。拆仓保留第 39 版源码与配置的行为，新的结构尚需后续完整 macOS 构建和真机验收。
 
 ### 触发构建与下载结果
 

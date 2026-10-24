@@ -1,0 +1,184 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index 35c58d2..c0300ef 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -7193,6 +7193,82 @@ uint64_t native_owner_data_seed_base, native_owner_data_seed_size;
+ uint8_t native_owner_data_seed_sha256[32];
+ char native_owner_data_device_path[64];
+ 
++/* Boot-time read-only union views of owner-provided GPU addon content over sealed system directories, mounted after the Data mount and
++ * before launchd starts: the Adreno Metal plugin bundle over /System/Library/Extensions (the original Metal discovery loads
++ * /System/Library/Extensions/<MetalPluginName>.bundle) and an owner launchd job over /System/Library/LaunchDaemons (a process outside
++ * every sandbox profile). Only with boot-arg sheng-gpu-addon=1. Never panics: a missing source directory or a refused mount only
++ * records its status. The backing directories are owner Data (not an authenticated immutable volume); code in them still has to
++ * pass AMFI through the loaded trust cache. */
++extern volatile int native_bindfs_boot_mount;
++volatile int native_gpu_addon_stage = 0;
++volatile int native_gpu_addon_status = -1;
++volatile int native_gpu_addon2_stage = 0;
++volatile int native_gpu_addon2_status = -1;
++static void
++native_gpu_addon_mount(proc_t p, user_addr_t scratch, user_addr_t offset, const char *source, size_t source_size,
++    const char *point, size_t point_size, const char *visible, const char *own, volatile int *stage, volatile int *status)
++{
++	vnode_t probe = NULLVP;
++	int error;
++	*stage = 1;
++	error = vnode_lookup(source, 0, &probe, vfs_context_current());
++	if (error) {
++		*status = error;
++		return;
++	}
++	vnode_put(probe);
++	probe = NULLVP;
++	*stage = 2;
++	struct mount_args request = {.type = scratch + offset, .path = scratch + offset + 0x20,
++	    .flags = MNT_RDONLY | MNT_UNION, .data = scratch + offset + 0x100};
++	int32_t result = 0;
++	if ((error = copyout("bindfs", request.type, 7)) || (error = copyout(point, request.path, point_size)) ||
++	    (error = copyout(source, request.data, source_size))) {
++		*status = error;
++		return;
++	}
++	native_bindfs_boot_mount = 1;
++	error = mount(p, &request, &result);
++	native_bindfs_boot_mount = 0;
++	if (error) {
++		*status = error;
++		return;
++	}
++	*stage = 3;
++	/* The union must still show a sealed lower entry next to the owner's. */
++	error = vnode_lookup(visible, 0, &probe, vfs_context_current());
++	if (!error) {
++		vnode_put(probe);
++		probe = NULLVP;
++		*stage = 4;
++		/* ... and the owner's own entry must be visible through it (stage 5). */
++		error = vnode_lookup(own, 0, &probe, vfs_context_current());
++		if (!error) {
++			vnode_put(probe);
++			probe = NULLVP;
++			*stage = 5;
++		}
++	}
++	*status = error;
++}
++static void
++native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
++{
++	uint32_t enabled = 0;
++	if (!PE_parse_boot_argn("sheng-gpu-addon", &enabled, sizeof(enabled)) || enabled != 1) {
++		return;
++	}
++	static const char extensions_source[] = "/private/var/ngpu/addons", extensions_point[] = "/System/Library/Extensions";
++	static const char daemons_source[] = "/private/var/ngpu/daemons", daemons_point[] = "/System/Library/LaunchDaemons";
++	native_gpu_addon_mount(p, scratch, 0x400, extensions_source, sizeof(extensions_source), extensions_point,
++	    sizeof(extensions_point), "/System/Library/Extensions/AGXMetalA10.bundle",
++	    "/System/Library/Extensions/NativeAdrenoMetal.bundle/Info.plist", &native_gpu_addon_stage,
++	    &native_gpu_addon_status);
++	native_gpu_addon_mount(p, scratch, 0x600, daemons_source, sizeof(daemons_source), daemons_point, sizeof(daemons_point),
++	    "/System/Library/LaunchDaemons/com.apple.backboardd.plist",
++	    "/System/Library/LaunchDaemons/org.blu-sharky.adrenoprobed.plist", &native_gpu_addon2_stage, &native_gpu_addon2_status);
++}
++
+ static int
+ native_owner_data_prepare(proc_t p, user_addr_t scratch)
+ {
+@@ -7250,6 +7326,7 @@ native_owner_data_prepare(proc_t p, user_addr_t scratch)
+ 	if (actual != device || (vfs_flags(data_mount) & MNT_RDONLY) ||
+ 	    strcmp(vfs_statfs(data_mount)->f_fstypename, "apfs")) error = EINVAL;
+ 	if (!error) native_owner_data_stage = 4;
++	if (!error) native_gpu_addon_prepare(p, scratch);
+ done:
+ 	if (data_root) vnode_put(data_root);
+ 	native_owner_data_status = error;
+diff --git a/bsd/miscfs/bindfs/bind_vfsops.c b/bsd/miscfs/bindfs/bind_vfsops.c
+index 412f9ec..4466a64 100644
+--- a/bsd/miscfs/bindfs/bind_vfsops.c
++++ b/bsd/miscfs/bindfs/bind_vfsops.c
+@@ -78,6 +78,8 @@
+ 
+ #include "bindfs.h"
+ 
++volatile int native_bindfs_boot_mount = 0;
++
+ #define BINDFS_ENTITLEMENT "com.apple.private.bindfs-allow"
+ 
+ #define SIZEOF_MEMBER(type, member) (sizeof(((type *)0)->member))
+@@ -139,8 +141,9 @@ bindfs_mount(struct mount * mp, __unused vnode_t devvp, user_addr_t user_data, v
+ 		return ENOTSUP;
+ 	}
+ 
+-	/* check entitlement */
+-	if (!IOCurrentTaskHasEntitlement(BINDFS_ENTITLEMENT)) {
++	/* check entitlement; the boot-time addon mount (kern_exec.c native_gpu_addon_prepare) runs before any
++	 * entitled process exists and sets this flag around its own mount() call only */
++	if (!native_bindfs_boot_mount && !IOCurrentTaskHasEntitlement(BINDFS_ENTITLEMENT)) {
+ 		return EPERM;
+ 	}
+ 
+@@ -230,6 +233,9 @@ bindfs_mount(struct mount * mp, __unused vnode_t devvp, user_addr_t user_data, v
+ 	sp->f_flags = flags;
+ 
+ 	xmp->bindm_flags = BINDM_CASEINSENSITIVE; /* default to case insensitive */
++	if (native_bindfs_boot_mount) {
++		xmp->bindm_flags |= BINDM_FORCE_ROOT;
++	}
+ 
+ 	error = bindfs_vfs_getlowerattr(vnode_mount(lowerrootvp), &vfa, ctx);
+ 	if (error == 0) {
+diff --git a/bsd/miscfs/bindfs/bind_vnops.c b/bsd/miscfs/bindfs/bind_vnops.c
+index 8609009..0c659c7 100644
+--- a/bsd/miscfs/bindfs/bind_vnops.c
++++ b/bsd/miscfs/bindfs/bind_vnops.c
+@@ -105,6 +105,14 @@ bindfs_getattr(struct vnop_getattr_args * args)
+ 		vnode_put(lowervp);
+ 
+ 		if (error == 0) {
++			if (MOUNTTOBINDMOUNT(vnode_mount(args->a_vp))->bindm_flags & BINDM_FORCE_ROOT) {
++				if (VATTR_IS_ACTIVE(args->a_vap, va_uid)) {
++					VATTR_RETURN(args->a_vap, va_uid, 0);
++				}
++				if (VATTR_IS_ACTIVE(args->a_vap, va_gid)) {
++					VATTR_RETURN(args->a_vap, va_gid, 0);
++				}
++			}
+ 			if (VATTR_IS_ACTIVE(args->a_vap, va_fsid)) {
+ 				/* fix up fsid so it doesn't say the underlying fs*/
+ 				VATTR_RETURN(args->a_vap, va_fsid, vfs_statfs(vnode_mount(args->a_vp))->f_fsid.val[0]);
+diff --git a/bsd/miscfs/bindfs/bindfs.h b/bsd/miscfs/bindfs/bindfs.h
+index c3bebc8..4555530 100644
+--- a/bsd/miscfs/bindfs/bindfs.h
++++ b/bsd/miscfs/bindfs/bindfs.h
+@@ -81,6 +81,9 @@
+ //#define BINDFS_DEBUG 0
+ 
+ #define BINDM_CACHE 0x0001
++/* Owner boot overlay (native_bindfs_boot_mount): report every file as owned by root:wheel. The backing directory is owner data made
++ * without root; launchd and the loader expect system-directory content to be root owned. Mode bits are left as they are. */
++#define BINDM_FORCE_ROOT 0x80000000ULL
+ #define BINDM_CASEINSENSITIVE 0x0000000000000002
+ 
+ typedef int (*vop_t)(void *);
+diff --git a/osfmk/kern/startup.c b/osfmk/kern/startup.c
+index dfa5da2..e9f129e 100644
+--- a/osfmk/kern/startup.c
++++ b/osfmk/kern/startup.c
+@@ -470,10 +470,12 @@ kernel_bootstrap(void)
+ 		if (PE_parse_boot_argn("-show_pointers", &namep, sizeof(namep))) {
+ 			doprnt_hide_pointers = FALSE;
+ 		}
+-		if (PE_parse_boot_argn("-no_slto_panic", &namep, sizeof(namep))) {
+-			extern boolean_t spinlock_timeout_panic;
+-			spinlock_timeout_panic = FALSE;
+-		}
++	}
++	/* Owner device: honour -no_slto_panic without a debugger-enabled device policy. A thread that waits for an IPI acknowledgement
++	 * (restartable ranges) then keeps waiting instead of panicking the whole machine; the other cores keep running. */
++	if (PE_parse_boot_argn("-no_slto_panic", &namep, sizeof(namep))) {
++		extern boolean_t spinlock_timeout_panic;
++		spinlock_timeout_panic = FALSE;
+ 	}
+ 
+ 	kernel_bootstrap_log("console_init");

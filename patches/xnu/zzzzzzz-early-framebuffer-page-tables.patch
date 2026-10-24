@@ -1,0 +1,19 @@
+--- a/osfmk/arm64/arm_vm_init.c
++++ b/osfmk/arm64/arm_vm_init.c
+@@ -2263,12 +2263,16 @@
+ 
+ 	mem_segments = (mem_size + 0x0FFFFFFF) >> 28;
+ 
+ 	va_l1 = dynamic_memory_begin;
+ 	va_l1_end = va_l1 + ((2 + (mem_segments * 10)) << 20);
+ 	va_l1_end += round_page(args->Video.v_height * args->Video.v_rowBytes);
++#if defined(XNU_EARLY_BOOT_PROGRESS) && XNU_EARLY_BOOT_PROGRESS
++	/* The early observer maps GOP once before initialize_screen maps it again. */
++	va_l1_end += round_page(args->Video.v_height * args->Video.v_rowBytes);
++#endif
+ 	va_l1_end = (va_l1_end + 0x00000000007FFFFFULL) & 0xFFFFFFFFFF800000ULL;
+ 
+ 	cpu_l1_tte = cpu_tte + ((va_l1 & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT);
+ 
+ 	while (va_l1 < va_l1_end) {
+ 		va_l2 = va_l1;

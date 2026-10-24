@@ -60,7 +60,13 @@ def main():
     parser.add_argument('--captured', type=Path, help='Directory with locally captured GPT and first block')
     args = parser.parse_args()
     device = Path(__file__).resolve().parents[1]
-    tree = args.tree or Path(subprocess.check_output([str(device / 'unixnu'), '--prepare'], text=True).strip())
+    if args.tree:
+        tree = args.tree
+    else:
+        subprocess.run([str(device / 'unixnu'), 'tree'], check=True)
+        tree = Path(os.environ.get('UNIXNU_OUT', device / 'out')) / 'oneplus13t/tree'
+        base = Path(subprocess.check_output([str(device / 'unixnu'), '--prepare'], text=True).strip())
+        sys.path.insert(0, str(base / 'scripts'))
     sys.path.insert(0, str(tree / 'scripts'))
     from unixnu import userdata
     from unixnu.util import Error

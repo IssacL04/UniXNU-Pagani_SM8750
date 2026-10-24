@@ -1,0 +1,26 @@
+--- a/pexpert/arm/pe_identify_machine.c
++++ b/pexpert/arm/pe_identify_machine.c
+@@ -146,11 +146,23 @@
+ 		}
+ 	}
+ 
++#if defined(XNU_NATIVE_ARCH_TIMER) && XNU_NATIVE_ARCH_TIMER
++	/* Architectural counter conversion must use the frequency programmed by firmware. */
++	uint64_t counter_frequency;
++	__asm__ volatile ("mrs %0, cntfrq_el0" : "=r"(counter_frequency));
++	if (counter_frequency == 0 || counter_frequency > UINT32_MAX) {
++		panic("Invalid architectural counter frequency: %llu", counter_frequency);
++	}
++	gPEClockFrequencyInfo.timebase_frequency_hz = (uint32_t)counter_frequency;
++	gPEClockFrequencyInfo.dec_clock_rate_hz = (uint32_t)counter_frequency;
++#endif
++
+ 	/* Set the num / den pairs form the hz values. */
+ 	gPEClockFrequencyInfo.bus_clock_rate_num = gPEClockFrequencyInfo.bus_clock_rate_hz;
+ 	gPEClockFrequencyInfo.bus_clock_rate_den = 1;
+ 
+ 	gPEClockFrequencyInfo.bus_to_cpu_rate_num =
++	    (gPEClockFrequencyInfo.bus_clock_rate_hz == 0) ? 0 :
+ 	    (2 * gPEClockFrequencyInfo.cpu_clock_rate_hz) / gPEClockFrequencyInfo.bus_clock_rate_hz;
+ 	gPEClockFrequencyInfo.bus_to_cpu_rate_den = 2;
+ 

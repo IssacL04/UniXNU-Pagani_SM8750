@@ -13,7 +13,7 @@ parser.add_argument('component', choices=['NativeLegacyDisplay', 'NativeKeyStore
 component = parser.parse_args().component
 directory = root / 'build' / ('native-keystore-events' if component == 'NativeKeyStoreEvents' else 'native-legacy-display')
 directory.mkdir(parents=True, exist_ok=True)
-source = (root / 'scripts/stage7/Stage7Probe.cpp' if component == 'Stage7Probe' else
+source = (root / 'drivers/Stage7Probe/Stage7Probe.cpp' if component == 'Stage7Probe' else
           root / 'drivers' / ('NativeMobileDisplay' if component == 'NativeLegacyDisplay' else component) / (component + '.cpp'))
 record = json.loads((root / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/iokit/DEVELOPMENT/IOPlatformExpert.cpo.json').read_text().strip().rstrip(','))
 obj = directory / (component + '.o')

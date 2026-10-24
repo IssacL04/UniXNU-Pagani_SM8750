@@ -1,0 +1,3 @@
+[submodule "modules/Pagani"]
+	path = modules/Pagani
+	url = https://github.com/IssacL04/UniXNU-Pagani-Drivers.git

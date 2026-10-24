@@ -1,0 +1,182 @@
+--- a/osfmk/kern/early_boot_progress.h
++++ b/osfmk/kern/early_boot_progress.h
+@@ -2,6 +2,10 @@
+ #ifndef XNU_EARLY_BOOT_PROGRESS_H
+ #define XNU_EARLY_BOOT_PROGRESS_H
+ #include <stdint.h>
++#include <stdarg.h>
++#ifdef __cplusplus
++extern "C" {
++#endif
+ #if defined(XNU_EARLY_BOOT_PROGRESS) && XNU_EARLY_BOOT_PROGRESS
+ struct boot_args;
+ void early_boot_progress_init(struct boot_args *);
+@@ -12,10 +16,17 @@
+ void early_boot_progress_vm_ready(void);
+ void early_boot_progress_fatal(struct boot_args *, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+ void boot_progress_kernel_exception(uint64_t, uint64_t, uint64_t);
++void boot_progress_root(const char *, const char *, uint64_t);
++void boot_progress_panic(const char *, va_list *, unsigned long, unsigned, uint64_t);
+ #else
+ #define early_boot_progress_arm_init() ((void)0)
+ #define early_boot_progress_suspend() ((void)0)
+ #define early_boot_progress_vm_ready() ((void)0)
+ #define boot_progress_kernel_exception(...) ((void)0)
++#define boot_progress_root(...) ((void)0)
++#define boot_progress_panic(...) ((void)0)
++#endif
++#ifdef __cplusplus
++}
+ #endif
+ #endif
+--- a/osfmk/kern/debug.c
++++ b/osfmk/kern/debug.c
+@@ -1,3 +1,4 @@
++#include <kern/early_boot_progress.h>
+ /*
+  * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
+  *
+@@ -1134,6 +1135,8 @@
+ {
+ #pragma clang diagnostic pop
+ 
++	boot_progress_panic(panic_format_str, panic_args, panic_caller, reason, panic_options_mask);
++
+ #if defined(__x86_64__) && (DEVELOPMENT || DEBUG)
+ 	read_lbr();
+ #endif
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -1,3 +1,4 @@
++#include <kern/early_boot_progress.h>
+ #include <kern/boot_progress.h>
+ /*
+  * Copyright (c) 2000-2021 Apple Inc. All rights reserved.
+@@ -1326,7 +1327,9 @@
+ 	u_int32_t       flags;
+ 	kern_return_t   err;
+ 
++	boot_progress_root("setconf enter", NULL, 0);
+ 	err = IOFindBSDRoot(rootdevice, sizeof(rootdevice), &rootdev, &flags);
++	boot_progress_root("setconf returned", err ? NULL : rootdevice, (uint32_t)err);
+ 	if (err) {
+ 		printf("setconf: IOFindBSDRoot returned an error (%d);"
+ 		    "setting rootdevice to 'sd0a'.\n", err);     /* XXX DEBUG TEMP */
+--- a/iokit/bsddev/IOKitBSDInit.cpp
++++ b/iokit/bsddev/IOKitBSDInit.cpp
+@@ -1,3 +1,4 @@
++#include <kern/early_boot_progress.h>
+ /*
+  * Copyright (c) 1998-2021 Apple Inc. All rights reserved.
+  *
+@@ -754,14 +755,19 @@
+ 
+ 	int xchar, dchar;
+ 
++	boot_progress_root("IOFindBSDRoot enter", NULL, mountAttempts);
++
+ 	// stall here for anyone matching on the IOBSD resource to finish (filesystems)
+ 	matching = IOService::serviceMatching(gIOResourcesKey);
+ 	assert(matching);
+ 	matching->setObject(gIOResourceMatchedKey, gIOBSDKey);
+ 
++	boot_progress_root("IOBSD resource wait", NULL, 30);
+ 	if ((service = IOService::waitForMatchingService(matching, 30ULL * kSecondScale))) {
++		boot_progress_root("IOBSD resource ready", NULL, 0);
+ 		OSSafeReleaseNULL(service);
+ 	} else {
++		boot_progress_root("IOBSD resource timeout", NULL, 30);
+ 		IOLog("!BSD\n");
+ 	}
+ 	matching->release();
+@@ -783,9 +789,12 @@
+ 		rdBootVar[0] = 0;
+ 	}
+ 
++	boot_progress_root("root selection", rdBootVar[0] ? rdBootVar : "no rd/rootdev boot argument", 0);
+ 	if ((regEntry = IORegistryEntry::fromPath( "/chosen", gIODTPlane ))) {
+ 		do {
++			boot_progress_root("chosen ramfile probe", NULL, 0);
+ 			di_root_ramfile(regEntry);
++			boot_progress_root("chosen ramfile returned", NULL, 0);
+ 			OSObject* unserializedContainer = NULL;
+ 			data = OSDynamicCast(OSData, regEntry->getProperty( "root-matching" ));
+ 			if (data) {
+@@ -823,10 +832,12 @@
+ //	It will become /dev/mdx, where x is 0-f.
+ //
+ 
++	boot_progress_root("RAMDisk property probe", NULL, didRam);
+ 	if (!didRam) {                                                                                           /* Have we already build this ram disk? */
+ 		didRam = 1;                                                                                             /* Remember we did this */
+ 		if ((regEntry = IORegistryEntry::fromPath( "/chosen/memory-map", gIODTPlane ))) {        /* Find the map node */
+ 			data = (OSData *)regEntry->getProperty("RAMDisk");      /* Find the ram disk, if there */
++			boot_progress_root("RAMDisk property", data ? "present" : "absent", 0);
+ 			if (data) {                                                                                      /* We found one */
+ 				uintptr_t *ramdParms;
+ 				ramdParms = (uintptr_t *)data->getBytesNoCopy();        /* Point to the ram disk base and size */
+@@ -885,6 +896,7 @@
+ 		}
+ 	}
+ 
++	boot_progress_root("root matching selection", rdBootVar, matching != NULL);
+ 	if ((!matching) && rdBootVar[0]) {
+ 		// by BSD name
+ 		look = rdBootVar;
+@@ -920,6 +932,7 @@
+ 
+ 	if (!matching) {
+ 		OSString * astring;
++		boot_progress_root("root fallback", "IOMedia Content=Apple_HFS", 0);
+ 		// Match any HFS media
+ 
+ 		matching = IOService::serviceMatching( "IOMedia" );
+@@ -932,14 +945,17 @@
+ 	}
+ 
+ 	if (gIOKitDebug & kIOWaitQuietBeforeRoot) {
++		boot_progress_root("root waitQuiet enter", NULL, 0);
+ 		IOLog( "Waiting for matching to complete\n" );
+ 		IOService::getPlatform()->waitQuiet();
++		boot_progress_root("root waitQuiet returned", NULL, 0);
+ 	}
+ 
+ 	if (matching) {
+ 		OSSerialize * s = OSSerialize::withCapacity( 5 );
+ 
+ 		if (matching->serialize( s )) {
++			boot_progress_root("root match criteria", s->text(), ROOTDEVICETIMEOUT);
+ 			IOLog( "Waiting on %s\n", s->text());
+ 		}
+ 		s->release();
+@@ -955,10 +971,14 @@
+ 		t.tv_sec = ROOTDEVICETIMEOUT;
+ 		t.tv_nsec = 0;
+ 		matching->retain();
++		boot_progress_root("root device wait begin", NULL, t.tv_sec);
+ 		service = IOService::waitForService( matching, &t );
++		boot_progress_root("root device wait returned", service ? "matched" : "timeout", 0);
+ 		if ((!service) || (mountAttempts == 10)) {
+ #if !XNU_TARGET_OS_OSX || !defined(__arm64__)
++			boot_progress_root("root timeout: noroot icon", NULL, ROOTDEVICETIMEOUT);
+ 			PE_display_icon( 0, "noroot");
++			boot_progress_root("root timeout: icon returned", NULL, 0);
+ 			IOLog( "Still waiting for root device\n" );
+ #endif
+ 
+@@ -981,6 +1001,7 @@
+ 			// The disk isn't found - have the user pick from System Recovery.
+ 			(void)IOSetRecoveryBoot(BSD_BOOTFAIL_MEDIA_MISSING, NULL, true);
+ #elif XNU_TARGET_OS_IOS
++			boot_progress_root("root timeout: panic", "Failed to mount root device", ROOTDEVICETIMEOUT);
+ 			panic("Failed to mount root device");
+ #endif
+ 		}
+@@ -1044,6 +1065,7 @@
+ 
+ iofrootx:
+ 
++	boot_progress_root("root device selected", rootName, *root);
+ 	IOService::setRootMedia(service);
+ 
+ 	if ((gIOKitDebug & (kIOLogDTree | kIOLogServiceTree | kIOLogMemory)) && !debugInfoPrintedOnce) {

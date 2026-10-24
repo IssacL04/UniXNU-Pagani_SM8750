@@ -206,7 +206,7 @@ run(['xcrun','ar','rcs',archive,*objects])
 sources=[ROOT/'drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp',
          ROOT/'drivers/NativeMobileDisplay/NativeLegacyRequest.h',
          ROOT/'drivers/NativeKeyStoreEvents/NativeKeyStoreEvents.cpp',
-         ROOT/'scripts/stage7/Stage7Probe.cpp',Path(__file__),
+         ROOT/'drivers/Stage7Probe/Stage7Probe.cpp',Path(__file__),
          ROOT/'scripts/build-stage7-driver.py',ROOT/'scripts/original_stage7.py',ROOT/'scripts/audit-stage7-display.py']
 (OUT/'build-report.json').write_text(json.dumps(dict(original_sha256=original.sha256,
     archive_sha256=sha(archive),source_sha256={str(p.relative_to(ROOT)):sha(p) for p in sources},
