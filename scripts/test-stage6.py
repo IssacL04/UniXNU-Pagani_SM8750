@@ -53,6 +53,52 @@ def check_arm64_asm(device, tree, work):
     print(f'PASS: {len(functions)} production ARM64 asm blocks retain every system instruction in Mach-O')
 
 
+def check_gpu_addon(tree, work):
+    source = (tree / 'drivers/NativeRamBlock/NativeRamBlock.cpp').read_text()
+    body = source.split('extern "C" int native_ram_block_gpu_addon', 1)[1].split('extern "C" int native_ram_block_volume_seed', 1)[0]
+    harness = r'''
+#include <cassert>
+#include <cstdint>
+#include <cstring>
+static unsigned long gPhysBase=0x10000, gPhysSize=0x8000000;
+static int gIODTPlane;
+static bool present=true, property=true, mapped=true;
+struct OSData {
+  uint64_t range[2]={0x11000,4096}; unsigned length=16;
+  unsigned getLength(){return length;} const void *getBytesNoCopy(){return range;}
+} dataRange;
+struct IORegistryEntry {
+  static IORegistryEntry *fromPath(const char *,int){static IORegistryEntry entry;return present?&entry:nullptr;}
+  void *getProperty(const char *){return property?&dataRange:nullptr;} void release(){}
+};
+#define OSDynamicCast(T,v) static_cast<T *>(v)
+static uintptr_t ml_static_ptovirt(uint64_t p){return mapped?p:0;}
+'''
+    harness += 'extern "C" int native_ram_block_gpu_addon' + body
+    harness += r'''
+int main(){
+  const uint8_t *data=nullptr; uint64_t bytes=0;
+  auto invalid=[&](){data=reinterpret_cast<const uint8_t *>(1);bytes=1;
+    assert(!native_ram_block_gpu_addon(&data,&bytes));assert(!data&&!bytes);};
+  assert(native_ram_block_gpu_addon(&data,&bytes)&&bytes==4096&&reinterpret_cast<uintptr_t>(data)==0x11000);
+  assert(!native_ram_block_gpu_addon(nullptr,&bytes));assert(!native_ram_block_gpu_addon(&data,nullptr));
+  present=false;invalid();present=true;property=false;invalid();property=true;
+  dataRange.length=8;invalid();dataRange.length=16;
+  for(uint64_t size:{UINT64_C(0),UINT64_C(0x4000001),UINT64_MAX}){dataRange.range[1]=size;invalid();}
+  dataRange.range[1]=4096;
+  for(uint64_t base:{UINT64_C(0xf000),UINT64_C(0x11001),UINT64_C(0x8010000),UINT64_MAX}){dataRange.range[0]=base;invalid();}
+  dataRange.range[0]=gPhysBase+gPhysSize-4096;dataRange.range[1]=8192;invalid();
+  dataRange.range[0]=0x11000;dataRange.range[1]=4096;mapped=false;invalid();
+}
+'''
+    path = work / 'gpu-addon.cpp'
+    path.write_text('#include <initializer_list>\n' + harness)
+    binary = work / 'gpu-addon'
+    subprocess.run([os.environ.get('CXX', 'c++'), '-std=c++17', '-Wall', '-Wextra', '-Werror',
+                    '-fsanitize=address,undefined', str(path), '-o', str(binary)], check=True)
+    subprocess.run([str(binary)], check=True, env=dict(os.environ, ASAN_OPTIONS='detect_leaks=0'))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--tree', type=Path, required=True)
@@ -94,6 +140,7 @@ def main():
     env = dict(os.environ, ASAN_OPTIONS='detect_leaks=0')
     with tempfile.TemporaryDirectory(prefix='stage6-') as directory:
         check_arm64_asm(device, tree, Path(directory))
+        check_gpu_addon(tree, Path(directory))
         for name in ('Sm8750', 'LunDiscovery', 'RootCommands', 'RootDiagnostics', 'RootLayout', 'SmmuTakeover', 'RootWindowRead', 'TransferPoll'):
             binary = Path(directory) / name
             command = [os.environ.get('CXX', 'c++'), '-std=c++17', '-Wall', '-Wextra', '-Werror',

@@ -14,7 +14,7 @@ paths = ["board.toml", "feeds.toml", "configs/**", ".gitmodules", ".github/**", 
 inputs = ["Four layers: ARM64, pinned sm8750, ipados-17.7.11-21H461, OnePlus 13T. Arrays are complete replacements."]
 configuration = ["schema_version=2; soc_source=sm8750; complete component/fragment/archive arrays; configs/oneplus13t_defconfig."]
 procedure = ["From UniXNU: defconfig oneplus13t_defconfig -D ../UniXNU-Pagani_SM8750; fetch; status --json; tree; run scripts/test-format2.py with the main scripts on PYTHONPATH."]
-findings = ["Four layers: ARM64, pinned sm8750, ipados-17.7.11-21H461, OnePlus 13T. Arrays are complete replacements.", "Community sources share one gitlink; official module names are not substituted based only on a legacy name. CI creates the resolved logs directory before the first tee; status alone does not create it."]
+findings = ["Four layers: ARM64, pinned sm8750, ipados-17.7.11-21H461, OnePlus 13T. Arrays are complete replacements.", "Community sources share one gitlink; official module names are not substituted based only on a legacy name. CI creates the resolved logs directory before the first tee. Archive builders import the board-selected prelink library; the AES helper receives the community object directory and publishes the declared archive name."]
 completion = ["All source pins resolve; every selected component has a record; status shows the intended overrides and patch order."]
 limits = ["The main fork carries community catalog entries; stock upstream alone cannot resolve this selection."]
 next_action = ["Build the migrated pinned sources, inspect host artifacts, then request a separate temporary-boot test and record its exact image revision."]
@@ -28,7 +28,7 @@ id = "firmware"
 status = "implemented"
 components = ["PaganiDarwinBoot"]
 paths = ["proprietary-files.txt", "patches/mu*", "patches/uefi*", "scripts/check-memory-map.py"]
-inputs = ["PKX110 ABL uses init_boot ramdisk during fastboot boot; embedded payload plus the BootPayload HOB remains necessary."]
+inputs = ["PKX110 ABL uses init_boot ramdisk during fastboot boot; embedded payload plus the BootPayload HOB remains necessary.", "Private firmware checkout: IssacL04/UEFI-Pagani_SM8750 at 50b7313f40684aa25481cd109d7f48b9a50663fa."]
 configuration = ["firmware.config=oneplus13t; firmware.packages points to PaganiDarwinBoot; bootimg.embed_payload=true."]
 procedure = ["From UniXNU after kernel inputs pass: build package; firmware; payload; bootimg using ignored local input paths."]
 findings = ["PKX110 ABL uses init_boot ramdisk during fastboot boot; embedded payload plus the BootPayload HOB remains necessary.", "UniXNURamDiskDxe, DiskIoDxe and FAT support the standard FDT handoff; firmware must be rebuilt."]
@@ -82,8 +82,8 @@ paths = ["scripts/*ufs*", "scripts/test-stage6.py", "scripts/*storage*", "script
 inputs = ["The physical root is unixnu on LUN 0, 4096-byte LBAs 44928768..61705983; runtime UFS writes are disabled."]
 configuration = ["userdata.partition=unixnu; XNU_NATIVE_UFS, OWNER_ROOT_AUDIT, TRUST_CACHE_RUNTIME, OWNER_UNION_SYSTEMOS, NATIVE_RAM_BLOCK enabled."]
 procedure = ["Prepare UFS policy archives and original trust; prepare RAM Data on macOS; run test-stage6.py and test-root-audit.py; build the kernel."]
-findings = ["The physical root is unixnu on LUN 0, 4096-byte LBAs 44928768..61705983; runtime UFS writes are disabled.", "Read-only OS/SystemOS windows use the original APFS/AMFI path. Data is a 1 GiB RAM seed and loses changes on reboot. Virtio is an ABI dependency, not tested 13T hardware."]
-completion = ["Host: register, clock, link and SMMU facts match the board inventory.", "Reads: SCSI capacity, GPT and known blocks are correct; OS/SystemOS windows stay within userdata.", "Root: the configured volume mounts and launchd starts. Persistence: writes survive reboot within the allocated Data region."]
+findings = ["The physical root is unixnu on LUN 0, 4096-byte LBAs 44928768..61705983; runtime UFS writes are disabled.", "Read-only OS/SystemOS windows use the original APFS/AMFI path. Data is a 1 GiB RAM seed and loses changes on reboot. Virtio is an ABI dependency, not tested 13T hardware. The RAMBlock addon query is synchronized with upstream RamBlock 25c57e0e9b68bf452dd1986914525edc9d2320bc for the shared kernel ABI; missing and invalid handoff ranges are checked on the host. No GPU addon is packaged."]
+completion = ["Host: register, clock, link and SMMU facts match the board inventory.", "Reads: SCSI capacity, GPT and known blocks are correct; OS/SystemOS windows stay within the allocated unixnu partition.", "Root: the configured volume mounts and launchd starts. Persistence: writes survive reboot within the allocated Data region."]
 limits = ["Physical writes and persistent Data are unsupported. Never deploy the historical userdata-root.img filename to Android userdata."]
 next_action = ["Build the migrated pinned sources, inspect host artifacts, then request a separate temporary-boot test and record its exact image revision."]
 evidence = [

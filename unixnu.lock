@@ -7,16 +7,16 @@ commit = "933f9360f1b70dfbda5548386a3d65e0358b4f7d"
 commit = "e45fbe30a7879e0b16e26dddb78538f1b00e0bff"
 
 [source."PaganiArmCpu"]
-commit = "d28b6f0ba603fc058fd535f1d51e82b7bbbf8009"
+commit = "56eb51425dc955d9df3f1878b8801788a9fe2a9a"
 
 [source."PaganiArmDTPlatform"]
-commit = "d28b6f0ba603fc058fd535f1d51e82b7bbbf8009"
+commit = "56eb51425dc955d9df3f1878b8801788a9fe2a9a"
 
 [source."PaganiDarwinBoot"]
-commit = "d28b6f0ba603fc058fd535f1d51e82b7bbbf8009"
+commit = "56eb51425dc955d9df3f1878b8801788a9fe2a9a"
 
 [source."PaganiVerifiedRoot"]
-commit = "d28b6f0ba603fc058fd535f1d51e82b7bbbf8009"
+commit = "56eb51425dc955d9df3f1878b8801788a9fe2a9a"
 
 [source."corecrypto-2023"]
 commit = "11fba65b12d8830630e248dfa8344caf8b065f26"

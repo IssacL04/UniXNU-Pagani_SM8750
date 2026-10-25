@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Check the migrated profile and the ADT handoff against the retained format-1 contract."""
 import argparse
+import os
 import runpy
 import struct
 import subprocess
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 from unixnu import cli, components, devicetree, feeds, kernel, patches
 from unixnu.config import Context
@@ -39,6 +41,10 @@ assert ctx.board['payload']['text_fixups'] == [
     'dyld_shared_cache_arm64.13,1b05bec,44008052,24008052',
     'dyld_shared_cache_arm64.13,1b05b08,44008052,24008052',
     'BTAudioHALPlugin,38bec,ffc300d1f44f01a9,000080d2c0035fd6']
+
+with mock.patch.object(ctx, 'need_config', return_value={'XNU_BUILD_ARCHIVES': True}), \
+        mock.patch.object(kernel, 'archive_plan', return_value=[('script', 'build-software-aes-bindings.py --help')]):
+    kernel.build_archives(ctx, dict(os.environ))
 
 
 def decode(data):
