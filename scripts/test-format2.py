@@ -14,13 +14,13 @@ from unixnu.config import Context
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--device', type=Path, default=Path(__file__).resolve().parents[1])
-args = parser.parse_args()
-ctx = Context(cli.parser().parse_args(['status', '-D', str(args.device)]))
+args, overrides = parser.parse_known_args()
+ctx = Context(cli.parser().parse_args(['status', '-D', str(args.device), *overrides]))
 modules = feeds.resolve(ctx)
 assert ctx.schema_version == 2
 assert list(ctx.profile_roots) == ['arch', 'soc', 'os', 'device']
 assert ctx.work.parts[-3:] == ('oneplus13t', 'ipados-17.7.11-21H461', 'oneplus13t')
-assert len(ctx.component_specs) == 15
+assert len(ctx.component_specs) == 18
 for spec in ctx.component_specs:
     module = modules[spec['kind'], spec['id']]
     assert module.path is not None
@@ -82,4 +82,4 @@ with tempfile.TemporaryDirectory() as directory:
     assert struct.unpack('<Q', chosen['dram-base']) == (0x980000000,)
     assert struct.unpack('<Q', chosen['dram-size']) == (0x180000000,)
     assert struct.unpack('<Q', chosen['darwinboot-memory-size']) == (0x100000000,)
-print('PASS: four profiles, 15 components, ordered archives, root policy and format-2 ADT contract')
+print('PASS: four profiles, 18 components, ordered archives, root policy and format-2 ADT contract')

@@ -63,6 +63,7 @@ jobs:
           python3 ../device/scripts/test-bootimg.py
           python3 ../device/scripts/test-stage6.py --tree "$UNIXNU_TREE" --openssl-prefix "$(brew --prefix openssl@3)"
           ASAN_OPTIONS=detect_leaks=0 python3 ../device/scripts/test-stage7.py --tree "$UNIXNU_TREE"
+          ASAN_OPTIONS=detect_leaks=0 python3 ../device/scripts/test-peripherals.py --tree "$UNIXNU_TREE"
           python3 ../device/scripts/test-ram-data.py
           python3 ../device/scripts/test-root-audit.py --tree "$UNIXNU_TREE"
           python3 "$UNIXNU_TREE/drivers/NativeKeyStoreEvents/test_closed_boundary.py"

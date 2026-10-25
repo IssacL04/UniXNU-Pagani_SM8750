@@ -71,6 +71,9 @@ int main(){
     now=timer->deadline;display.vsyncTick();assert(notifications==1 && timer->deadline==now+display.vsyncInterval);
     now+=display.vsyncInterval*4;display.vsyncTick();assert(notifications==2 && timer->deadline==now+display.vsyncInterval);
     display.clients(false);display.vsyncTick();assert(!display.vsyncArmed && notifications==2);
+    display.clients(true);display.displayOn=false;display.armVsync();assert(!display.vsyncArmed);
+    display.vsyncTick();assert(notifications==2);
+    display.displayOn=true;display.armVsync();assert(display.vsyncArmed && timer->deadline==now+display.vsyncInterval);
     uint64_t words[6]={};assert(display.getRefreshAttributes(words,false));
     assert(words[0]==(1ull<<32)/60 && words[2]==words[0] && words[3]==words[1] && words[4]==104);
     assert(!display.getRefreshAttributes(nullptr,false));

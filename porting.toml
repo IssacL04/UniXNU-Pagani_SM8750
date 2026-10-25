@@ -14,7 +14,7 @@ paths = ["board.toml", "feeds.toml", "configs/**", ".gitmodules", ".github/**", 
 inputs = ["Four layers: ARM64, pinned sm8750, ipados-17.7.11-21H461, OnePlus 13T. Arrays are complete replacements."]
 configuration = ["schema_version=2; soc_source=sm8750; complete component/fragment/archive arrays; configs/oneplus13t_defconfig."]
 procedure = ["From UniXNU: defconfig oneplus13t_defconfig -D ../UniXNU-Pagani_SM8750; fetch; status --json; tree; run scripts/test-format2.py with the main scripts on PYTHONPATH."]
-findings = ["Four layers: ARM64, pinned sm8750, ipados-17.7.11-21H461, OnePlus 13T. Arrays are complete replacements.", "Community sources share one gitlink; official module names are not substituted based only on a legacy name. CI creates the resolved logs directory before the first tee. Archive builders import the board-selected prelink library; the AES helper receives the community object directory and publishes the declared archive name. The main source pin includes the corrected format-2 IPSW path for the early boot logo. RAMBlock object selection and rebuild detection follow the configured archive path."]
+findings = ["Four profiles select 18 components. PaganiInput and PaganiPanel are embedded in the ABI-qualified display archive and depend on QcomGeniSpi plus Sm8750Platform. Historical build-46 evidence below covers the previous 15-component selection; the new source selection still needs a full kernel build."]
 completion = ["All source pins resolve; every selected component has a record; status shows the intended overrides and patch order."]
 limits = ["The main fork carries community catalog entries; stock upstream alone cannot resolve this selection."]
 next_action = ["Temporarily boot the exact migrated image only after separate authorization; record its image/source revisions and compare the affected runtime checkpoints with build 39."]
@@ -98,17 +98,18 @@ evidence = [
 
 [[area]]
 id = "display"
-status = "host-verified"
-components = ["NativeMobileDisplay"]
-paths = ["scripts/test-stage7.py", "scripts/prepare-boot-logo.py"]
-inputs = ["The firmware GOP is 1216x2640, 32 bpp, stride 4864 bytes. NativeLegacyDisplay supplies CPU presentation through the qualified original Legacy ABI."]
-configuration = ["native Legacy framebuffer and sheng-vsync=60; no Adreno component."]
-procedure = ["Run test-stage7.py; build the ABI-qualified display archive against the selected kernelcache; compare a fresh hardware UI capture."]
-findings = ["The firmware GOP is 1216x2640, 32 bpp, stride 4864 bytes. NativeLegacyDisplay supplies CPU presentation through the qualified original Legacy ABI.", "A 60 Hz software timer drives presentation; this does not provide GPU acceleration, brightness control or a native panel driver."]
+status = "implemented"
+components = ["NativeMobileDisplay", "PaganiPanel"]
+paths = ["scripts/test-stage7.py", "scripts/prepare-boot-logo.py", "package/PaganiPeripherals.h"]
+inputs = ["Firmware GOP: 1216x2640, 32 bpp, stride 4864. The active AA594_P_7_A0020 command-mode panel uses DSI0 at 0xae94000 and low-byte-first DCS brightness; normal max 0xdbb, initial level 0x599."]
+configuration = ["Native Legacy CPU framebuffer, sheng-vsync=60 and pagani-panel=1. Board constants are in PaganiPeripherals.h."]
+procedure = ["Run test-stage7.py and test-peripherals.py against the resolved tree; run build-pagani-peripherals.py --audit-only against the pinned kernelcache, then build the full display archive with XNU compiler records. After a separately authorized temporary boot, verify first brightness completion before testing slider and power transitions."]
+findings = ["PaganiPanel derives from the genuine original AppleARMBacklight class with qualified 0x370 storage and 169 virtual entries. It sends DCS 0x51/0x28/0x29 through the command FIFO and stops after a transport failure. The controller setup, DSC and panel timing stay as handed off by firmware.", "The 60 Hz software presentation timer pauses for logical display-off and resumes with a fresh deadline. Portable MMIO/timer tests and the original-image ABI audit pass locally; new IOKit objects have not completed a production compile/link."]
 completion = ["A known frame appears with correct geometry and colors, then userland presentation and backlight controls work."]
-limits = ["No touch, GPU acceleration or independent brightness control."]
-next_action = ["Temporarily boot the exact migrated image only after separate authorization; record its image/source revisions and compare the affected runtime checkpoints with build 39."]
+limits = ["No new hardware verification, physical refresh measurement, TE/vblank synchronization, high-refresh switching, brightness calibration, fade interpolation or full panel suspend/resume. CoreBrightness property access and coexistence with firmware scanout remain unverified."]
+next_action = ["Build the candidate with the provisioned macOS/XNU toolchain, then temporarily boot after authorization. Compare UI output with build 39, test brightness within the normal range, blank/unblank and inspect command errors. Measure TE cadence before adding physical refresh control."]
 evidence = [
+  { kind = "source", reference = "drivers/PaganiPanel/README.md", result = "DSI command transport, genuine backlight ancestry, timer PM integration and explicit runtime limits; not a complete-kernel or device result." },
   { kind = "host", reference = "https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/40174199304", command = "test-stage7.py; ./unixnu kernel -j 3", revision = "af2ba2975a5f0f6dcedfdcc719a1c646876f5804", result = "Display lifecycle checks and original Legacy ABI qualification passed; the CPU presentation archive compiled and linked. The migrated framebuffer has not been observed on hardware." },
   { kind = "source", reference = "board.toml", result = "Current format-2 selection and board policy." },
   { kind = "source", reference = "STAGE6.md", result = "Historical PKX110 observations through build 39; no claim of migrated-image hardware verification." },
@@ -116,17 +117,18 @@ evidence = [
 
 [[area]]
 id = "input"
-status = "planned"
-components = []
-paths = ["board.toml"]
-inputs = ["No PKX110 touch bus/controller driver has been selected; display output does not establish input support."]
-configuration = ["No driver is enabled for this subsystem."]
-procedure = ["Follow the subsystem guide to identify hardware, firmware and ABI inputs before enabling a component."]
-findings = ["No PKX110 touch bus/controller driver has been selected; display output does not establish input support."]
+status = "implemented"
+components = ["PaganiInput", "QcomGeniSpi"]
+paths = ["package/PaganiPeripherals.h", "scripts/test-peripherals.py"]
+inputs = ["S3910 HBP on GENI SPI QUP1 S4 at 0xa90000, wrapper 0xac0000, mode 0, maximum 19 MHz. GPIOs 48..51 carry SPI; reset 161 and ATTN 162 are active low. TLMM GPIO windows include the SM8750 0x100000 offset.", "SPMI v7 observer: PON SID 0 peripheral 0x13, bits 7/6 = Power/Volume Up; GPIO SID 1 peripheral 0x8d bit 0 active low = Volume Down."]
+configuration = ["pagani-touch=1 and pagani-buttons=1 select two original-ABI HID devices. Board wiring and timing are defined in PaganiPeripherals.h."]
+procedure = ["Run test-peripherals.py --tree <resolved-tree> and the original HID ABI audit; build the full archive. On hardware first check SPI protocol, ID/application status and LBP/configuration acknowledgements, then single contacts, coordinate orientation, simultaneous contacts, releases and physical key holds."]
+findings = ["The stock HBP driver exposes an LBP fallback through dynamic config 0x11=2. The new transport drains queued raw frames, installs and reads back a custom report format, filters palms and emits explicit releases with stable IDs. TouchComm CRC command suffixes are detected from identification.", "PMIC reads are bounded and keys use 32 ms debounce. Failed key reads release all keys; touch transport failure releases held contacts and disables further touch reads. ATTN is polled at 8 ms, keys at 16 ms. Portable tests and the exact original 207-slot HID ABI audit pass; IOKit compile/link and hardware input remain unverified."]
 completion = ["Touches map to the display, simultaneous contacts keep stable IDs, release events arrive, and buttons produce expected HID reports."]
-limits = ["No implemented or hardware-verified path is available for this subsystem."]
-next_action = ["Identify the touch controller, bus, GPIO/IRQ wiring and firmware from the stock DTB before implementing and calibrating the HID path."]
+limits = ["Retained regulator and GENI firmware state is required. No RPMh cold rail enable, GIC IRQ path, GPI DMA, TouchComm v2, oversized-command fragmentation, firmware recovery or system-sleep wake. Hardware must confirm LBP availability, FIFO access, coordinates and event routing. System edge gestures are not implemented."]
+next_action = ["Complete the full kernel build, then capture the first S3910 identification and application response during an authorized temporary boot. Use the reported failure stage to choose rail/microcode, FIFO or protocol work; do not treat display output as touch verification."]
 evidence = [
+  { kind = "source", reference = "drivers/PaganiInput/README.md", result = "Physical HID adapters, bounded TouchComm/SPMI paths, contact and key lifecycle tests; no hardware result claimed." },
 ]
 
 [[area]]
@@ -182,7 +184,7 @@ paths = ["patches/xnu/pagani-bootstrap.patch"]
 inputs = ["The component preserves the original Apple PMGR ABI and restricted boot-time operations."]
 configuration = ["XNU_SHENG_PMGR=y; sheng-pmgr=2; sleep-disabled=1."]
 procedure = ["Build the compatibility PMGR archive against the exact kernelcache; observe boot transitions before changing any firmware-owned vote."]
-findings = ["The component preserves the original Apple PMGR ABI and restricted boot-time operations.", "The old watchdog launch policy stays removed; the Data seed performs the qualified bring-up policy. Battery, charging, suspend and frequency scaling remain unverified."]
+findings = ["The existing PMGR compatibility behavior is unchanged. PaganiInput adds QUP1 S4 clock votes and GPIO reset while retaining firmware regulator state. PaganiPanel requests display blanking without turning off rails or replacing full suspend/resume.", "Battery, charging, suspend and frequency scaling remain unverified."]
 completion = ["Declared power controls and battery readings match observations; each claimed sleep/resume transition restores its dependent peripherals."]
 limits = ["Battery, charging, sleep and full regulator/clock control are unsupported."]
 next_action = ["Temporarily boot the exact migrated image only after separate authorization; record its image/source revisions and compare the affected runtime checkpoints with build 39."]

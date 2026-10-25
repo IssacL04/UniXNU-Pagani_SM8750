@@ -4,6 +4,8 @@ This community port uses UniXNU format 2: ARM64, the pinned SM8750 common reposi
 
 Build 39 reached the iPadOS UI on a OnePlus 13T. UFS root reads and CPU framebuffer presentation were observed. Data is a volatile RAM seed. Touch, GPU acceleration, network, audio and complete power management remain unfinished. The format-2 kernel, firmware, payload and boot image have passed host builds; the migrated image requires a new hardware boot. See [MIGRATION.md](MIGRATION.md) for the build-46 source revisions, artifacts and checks. See [porting.toml](porting.toml) for current scope and [STAGE6.md](STAGE6.md) for the original observations.
 
+The current source adds S3910 LBP touch, physical power/volume keys and DSI brightness/display blanking. Portable transport tests and the original HID/backlight ABI audit pass. These additions have not completed a production kernel build or a device boot. Touch currently polls ATTN and needs retained power/microcode; presentation remains a 60 Hz software timer. See the input/display sections of [porting.toml](porting.toml) for limits.
+
 ## Workspace and inputs
 
 Keep `UniXNU/`, `UniXNU-Pagani_SM8750/`, `UniXNU-Pagani-Drivers/`, `UniXNU-sm8750-common/` and `UEFI-Pagani_SM8750/` as sibling checkouts. `upstream.rev` pins the maintained main fork used by CI. Read [AGENTS.md](AGENTS.md) and the [migration guide](https://unixnu.com/porting/migration).
@@ -38,6 +40,7 @@ The physical root target is the existing 64 GiB **unixnu** partition, LUN 0, LBA
 export PYTHONPATH="$PWD/scripts"
 python3 ../UniXNU-Pagani_SM8750/scripts/test-format2.py
 python3 scripts/porting-record.py check --device ../UniXNU-Pagani_SM8750
+python3 ../UniXNU-Pagani_SM8750/scripts/test-peripherals.py --tree out/oneplus13t/ipados-17.7.11-21H461/oneplus13t/tree
 ```
 
 The kernel workflow also exercises storage command bounds, the source-kernel and boot-image contracts, display timer lifecycle, RAM Data preparation, root-audit values, DarwinBoot ADT validation and the volatile KeyStore boundary. Host results and hardware observations are recorded separately.
