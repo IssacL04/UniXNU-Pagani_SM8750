@@ -11,6 +11,7 @@ jobs:
         with:
           path: device
           fetch-depth: 0
+          submodules: recursive
       - name: Read the catalog pin
         id: main
         run: |
