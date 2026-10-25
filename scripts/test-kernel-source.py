@@ -12,9 +12,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from unixnu import cli, kernel
+from unixnu.config import ROOT
 from unixnu.util import Error
 
-spec = importlib.util.spec_from_file_location('arm_platform', Path(__file__).with_name('build-arm-platform.py'))
+spec = importlib.util.spec_from_file_location('arm_platform', ROOT / 'scripts/build-arm-platform.py')
 arm_platform = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(arm_platform)
 
@@ -57,18 +58,6 @@ int main(void) {
                                 f'-DXNU_EARLY_BOOT_PROGRESS={mode}', '-x', 'c', '-', '-o', str(binary)],
                                input=source, text=True, check=True)
                 subprocess.run([str(binary)], check=True)
-
-    def test_header_fetch_auth_stays_on_github_api(self):
-        read_url = runpy.run_path(str(Path(__file__).with_name('prepare-xnu-source.py')))['read_url']
-        for token in ('test-token', ''):
-            with patch.dict(os.environ, {'GITHUB_TOKEN': token}), patch('urllib.request.urlopen') as opened:
-                opened.return_value.read.return_value = b'headers'
-                for url in ('https://api.github.com/repos/apple-oss-distributions/xnu/contents',
-                            'https://raw.githubusercontent.com/apple-oss-distributions/xnu/tag/file.h',
-                            'https://api.github.com.example.org/file', 'http://api.github.com/file'):
-                    self.assertEqual(read_url(url), b'headers')
-                    expected = f'Bearer {token}' if token and url.startswith('https://api.github.com/') else None
-                    self.assertEqual(opened.call_args.args[0].get_header('Authorization'), expected)
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -126,7 +115,7 @@ int main(void) {
             arm_platform.compile_command({'file': 'missing', 'arguments': record['arguments']}, Path('a'), Path('b'))
 
     def test_disabled_legacy_display_has_no_link_reference(self):
-        path = Path(__file__).resolve().parents[1] / 'patches/xnu/offline-component-load-probes.patch'
+        path = ROOT / 'patches/xnu/offline-component-load-probes.patch'
         bsd_patch = path.read_text().split('--- a/iokit/')[0]
         source = '\n'.join(line[1:] for line in bsd_patch.splitlines()
                            if line.startswith('+') and not line.startswith('+++'))

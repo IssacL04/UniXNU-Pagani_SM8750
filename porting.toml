@@ -1,0 +1,220 @@
+schema_version = 1
+
+[device]
+name = "oneplus13t"
+soc = "SM8750"
+os_profile = "ipados-17.7.11-21H461"
+summary = "OnePlus 13T PKX110: format-2 migration of the single-core, read-only UFS root and CPU display port; volatile RAM Data."
+
+[[area]]
+id = "configuration"
+status = "implemented"
+components = ["PaganiArmDTPlatform", "NativeAES", "NativeKeyStoreEvents"]
+paths = ["board.toml", "feeds.toml", "configs/**", ".gitmodules", ".github/**", ".gitignore", "upstream.rev", "unixnu.lock", "drivers/*", "kits/*", "modules/*", "scripts/test-format2.py", "scripts/fixtures/**", "local.toml.example", "unixnu", "scripts/test-layout.py", "scripts/test-upstream.py", "scripts/prepare-xnu-source.py", "scripts/build-*.py", "scripts/build-*.sh", "scripts/audit-stage7-display.py", "scripts/original_stage7.py", "patches/unixnu-framework.patch"]
+inputs = ["Four layers: ARM64, pinned sm8750, ipados-17.7.11-21H461, OnePlus 13T. Arrays are complete replacements."]
+configuration = ["schema_version=2; soc_source=sm8750; complete component/fragment/archive arrays; configs/oneplus13t_defconfig."]
+procedure = ["From UniXNU: defconfig oneplus13t_defconfig -D ../UniXNU-Pagani_SM8750; fetch; status --json; tree; run scripts/test-format2.py with the main scripts on PYTHONPATH."]
+findings = ["Four layers: ARM64, pinned sm8750, ipados-17.7.11-21H461, OnePlus 13T. Arrays are complete replacements.", "Community sources share one gitlink; official module names are not substituted based only on a legacy name."]
+completion = ["All source pins resolve; every selected component has a record; status shows the intended overrides and patch order."]
+limits = ["The main fork carries community catalog entries; stock upstream alone cannot resolve this selection."]
+next_action = ["Build the migrated pinned sources, inspect host artifacts, then request a separate temporary-boot test and record its exact image revision."]
+evidence = [
+  { kind = "source", reference = "board.toml", result = "Current format-2 selection and board policy." },
+  { kind = "source", reference = "STAGE6.md", result = "Historical PKX110 observations through build 39; no claim of migrated-image hardware verification." },
+]
+
+[[area]]
+id = "firmware"
+status = "implemented"
+components = ["PaganiDarwinBoot"]
+paths = ["proprietary-files.txt", "patches/mu*", "patches/uefi*", "scripts/check-memory-map.py"]
+inputs = ["PKX110 ABL uses init_boot ramdisk during fastboot boot; embedded payload plus the BootPayload HOB remains necessary."]
+configuration = ["firmware.config=oneplus13t; firmware.packages points to PaganiDarwinBoot; bootimg.embed_payload=true."]
+procedure = ["From UniXNU after kernel inputs pass: build package; firmware; payload; bootimg using ignored local input paths."]
+findings = ["PKX110 ABL uses init_boot ramdisk during fastboot boot; embedded payload plus the BootPayload HOB remains necessary.", "UniXNURamDiskDxe, DiskIoDxe and FAT support the standard FDT handoff; firmware must be rebuilt."]
+completion = ["Firmware image builds, enters UniXNU, publishes the framebuffer and preserves the documented memory reservations."]
+limits = ["The migrated FD and new standard initrd driver have not been booted on hardware."]
+next_action = ["Build the migrated pinned sources, inspect host artifacts, then request a separate temporary-boot test and record its exact image revision."]
+evidence = [
+  { kind = "source", reference = "board.toml", result = "Current format-2 selection and board policy." },
+  { kind = "source", reference = "STAGE6.md", result = "Historical PKX110 observations through build 39; no claim of migrated-image hardware verification." },
+]
+
+[[area]]
+id = "cpu"
+status = "implemented"
+components = ["PaganiArmCpu"]
+paths = ["dts/**", "scripts/test-kernel-source.py"]
+inputs = ["Only MPIDR affinity 0 is enabled. GICD=0x16000000/0x10000, GICR=0x16080000/0x200000, stride=0x40000, CNTFRQ=19200000."]
+configuration = ["cpus=1; cpu0 status=okay; XNU_NATIVE_ARCH_TIMER and XNU_NATIVE_PAN enabled."]
+procedure = ["Compile the board DTS, compare the generated ADT, run test-stage6.py and test-kernel-source.py, then obtain a fresh boot log for CPU0/timer."]
+findings = ["Only MPIDR affinity 0 is enabled. GICD=0x16000000/0x10000, GICR=0x16080000/0x200000, stride=0x40000, CNTFRQ=19200000.", "The counter conversion uses the firmware CNTFRQ; the shared ARM64 patch preserves the Stage-6 timer correction."]
+completion = ["Every enabled CPU reaches its entry checkpoint and timer/IPI handling works on each enabled CPU."]
+limits = ["SMP, other CPU affinities and CPU frequency control are unverified."]
+next_action = ["Build the migrated pinned sources, inspect host artifacts, then request a separate temporary-boot test and record its exact image revision."]
+evidence = [
+  { kind = "source", reference = "board.toml", result = "Current format-2 selection and board policy." },
+  { kind = "source", reference = "STAGE6.md", result = "Historical PKX110 observations through build 39; no claim of migrated-image hardware verification." },
+]
+
+[[area]]
+id = "memory"
+status = "implemented"
+components = ["Sm8750Platform"]
+paths = ["dts/**", "scripts/check-memory-map.py"]
+inputs = ["The captured live DT has contiguous RAM at 0x980000000 of size 0x180000000. DarwinBoot requests 0x100000000 and rewrites chosen dram-base/size to its actual allocation."]
+configuration = ["payload.dram_size=0x180000000; payload.adt.owned_memory_size=0x100000000."]
+procedure = ["Run check-memory-map.py against the captured live.dtb and current UEFI map; inspect actual DarwinBoot allocation before allowing more RAM or DMA."]
+findings = ["The captured live DT has contiguous RAM at 0x980000000 of size 0x180000000. DarwinBoot requests 0x100000000 and rewrites chosen dram-base/size to its actual allocation.", "GIC register offsets remain unchanged; the common ADT converter rounds the arm-io window to 16 MiB. UFS uses the extracted SM8750 SMMU operations."]
+completion = ["All handoff regions are accounted for and each enabled DMA engine accesses its allocated range with the documented cache policy."]
+limits = ["Only the selected contiguous arena is handed to XNU; allocation size is a request. Other devices need their own RAM/reservation evidence."]
+next_action = ["Build the migrated pinned sources, inspect host artifacts, then request a separate temporary-boot test and record its exact image revision."]
+evidence = [
+  { kind = "source", reference = "board.toml", result = "Current format-2 selection and board policy." },
+  { kind = "source", reference = "STAGE6.md", result = "Historical PKX110 observations through build 39; no claim of migrated-image hardware verification." },
+]
+
+[[area]]
+id = "storage"
+status = "implemented"
+components = ["NativeUfs", "NativeVirtioBlock", "NativeRamBlock", "PaganiVerifiedRoot"]
+paths = ["scripts/*ufs*", "scripts/test-stage6.py", "scripts/*storage*", "scripts/*root*", "scripts/prepare-ram-data.py", "scripts/test-ram-data.py", "scripts/prepare-original-trust.py"]
+inputs = ["The physical root is unixnu on LUN 0, 4096-byte LBAs 44928768..61705983; runtime UFS writes are disabled."]
+configuration = ["userdata.partition=unixnu; XNU_NATIVE_UFS, OWNER_ROOT_AUDIT, TRUST_CACHE_RUNTIME, OWNER_UNION_SYSTEMOS, NATIVE_RAM_BLOCK enabled."]
+procedure = ["Prepare UFS policy archives and original trust; prepare RAM Data on macOS; run test-stage6.py and test-root-audit.py; build the kernel."]
+findings = ["The physical root is unixnu on LUN 0, 4096-byte LBAs 44928768..61705983; runtime UFS writes are disabled.", "Read-only OS/SystemOS windows use the original APFS/AMFI path. Data is a 1 GiB RAM seed and loses changes on reboot. Virtio is an ABI dependency, not tested 13T hardware."]
+completion = ["Host: register, clock, link and SMMU facts match the board inventory.", "Reads: SCSI capacity, GPT and known blocks are correct; OS/SystemOS windows stay within userdata.", "Root: the configured volume mounts and launchd starts. Persistence: writes survive reboot within the allocated Data region."]
+limits = ["Physical writes and persistent Data are unsupported. Never deploy the historical userdata-root.img filename to Android userdata."]
+next_action = ["Build the migrated pinned sources, inspect host artifacts, then request a separate temporary-boot test and record its exact image revision."]
+evidence = [
+  { kind = "source", reference = "board.toml", result = "Current format-2 selection and board policy." },
+  { kind = "source", reference = "STAGE6.md", result = "Historical PKX110 observations through build 39; no claim of migrated-image hardware verification." },
+]
+
+[[area]]
+id = "display"
+status = "implemented"
+components = ["NativeMobileDisplay"]
+paths = ["scripts/test-stage7.py", "scripts/prepare-boot-logo.py"]
+inputs = ["The firmware GOP is 1216x2640, 32 bpp, stride 4864 bytes. NativeLegacyDisplay supplies CPU presentation through the qualified original Legacy ABI."]
+configuration = ["native Legacy framebuffer and sheng-vsync=60; no Adreno component."]
+procedure = ["Run test-stage7.py; build the ABI-qualified display archive against the selected kernelcache; compare a fresh hardware UI capture."]
+findings = ["The firmware GOP is 1216x2640, 32 bpp, stride 4864 bytes. NativeLegacyDisplay supplies CPU presentation through the qualified original Legacy ABI.", "A 60 Hz software timer drives presentation; this does not provide GPU acceleration, brightness control or a native panel driver."]
+completion = ["A known frame appears with correct geometry and colors, then userland presentation and backlight controls work."]
+limits = ["No touch, GPU acceleration or independent brightness control."]
+next_action = ["Build the migrated pinned sources, inspect host artifacts, then request a separate temporary-boot test and record its exact image revision."]
+evidence = [
+  { kind = "source", reference = "board.toml", result = "Current format-2 selection and board policy." },
+  { kind = "source", reference = "STAGE6.md", result = "Historical PKX110 observations through build 39; no claim of migrated-image hardware verification." },
+]
+
+[[area]]
+id = "input"
+status = "planned"
+components = []
+paths = ["board.toml"]
+inputs = ["No PKX110 touch bus/controller driver has been selected; display output does not establish input support."]
+configuration = ["No driver is enabled for this subsystem."]
+procedure = ["Follow the subsystem guide to identify hardware, firmware and ABI inputs before enabling a component."]
+findings = ["No PKX110 touch bus/controller driver has been selected; display output does not establish input support."]
+completion = ["Touches map to the display, simultaneous contacts keep stable IDs, release events arrive, and buttons produce expected HID reports."]
+limits = ["No implemented or hardware-verified path is available for this subsystem."]
+next_action = ["Identify touch controller/bus/IRQ and capture contact reports on PKX110."]
+evidence = [
+]
+
+[[area]]
+id = "gpu"
+status = "planned"
+components = []
+paths = ["board.toml"]
+inputs = ["Adreno 830/SM8750 differs from the catalog A740/SM8550 implementation; no GPU component is selected."]
+configuration = ["No driver is enabled for this subsystem."]
+procedure = ["Follow the subsystem guide to identify hardware, firmware and ABI inputs before enabling a component."]
+findings = ["Adreno 830/SM8750 differs from the catalog A740/SM8550 implementation; no GPU component is selected."]
+completion = ["GPU submissions complete, mapping/fence handling is correct, a known image renders, and the selected Metal client presents it."]
+limits = ["No implemented or hardware-verified path is available for this subsystem."]
+next_action = ["Identify Adreno 830 firmware, GMU/SMMU ownership and submission ABI before selecting code."]
+evidence = [
+]
+
+[[area]]
+id = "network"
+status = "planned"
+components = []
+paths = ["board.toml"]
+inputs = ["No verified Wi-Fi or cellular path is selected for PKX110."]
+configuration = ["No driver is enabled for this subsystem."]
+procedure = ["Follow the subsystem guide to identify hardware, firmware and ABI inputs before enabling a component."]
+findings = ["No verified Wi-Fi or cellular path is selected for PKX110."]
+completion = ["Scanning, association, address configuration and sustained receive/transmit traffic pass with the selected firmware."]
+limits = ["No implemented or hardware-verified path is available for this subsystem."]
+next_action = ["Identify the wireless bus, firmware and interrupts; capture a minimal boot/association trace."]
+evidence = [
+]
+
+[[area]]
+id = "audio"
+status = "planned"
+components = []
+paths = ["board.toml"]
+inputs = ["DSP/codec firmware interfaces, routes and playback/capture remain unimplemented."]
+configuration = ["No driver is enabled for this subsystem."]
+procedure = ["Follow the subsystem guide to identify hardware, firmware and ABI inputs before enabling a component."]
+findings = ["DSP/codec firmware interfaces, routes and playback/capture remain unimplemented."]
+completion = ["Each declared route carries the selected audio format through playback or capture and handles start/stop correctly."]
+limits = ["No implemented or hardware-verified path is available for this subsystem."]
+next_action = ["Map DSP/codec/clock ownership and firmware inputs before a playback test."]
+evidence = [
+]
+
+[[area]]
+id = "power"
+status = "implemented"
+components = ["ShengPlatformPower"]
+paths = ["patches/xnu/pagani-bootstrap.patch"]
+inputs = ["The component preserves the original Apple PMGR ABI and restricted boot-time operations."]
+configuration = ["XNU_SHENG_PMGR=y; sheng-pmgr=2; sleep-disabled=1."]
+procedure = ["Build the compatibility PMGR archive against the exact kernelcache; observe boot transitions before changing any firmware-owned vote."]
+findings = ["The component preserves the original Apple PMGR ABI and restricted boot-time operations.", "The old watchdog launch policy stays removed; the Data seed performs the qualified bring-up policy. Battery, charging, suspend and frequency scaling remain unverified."]
+completion = ["Declared power controls and battery readings match observations; each claimed sleep/resume transition restores its dependent peripherals."]
+limits = ["Battery, charging, sleep and full regulator/clock control are unsupported."]
+next_action = ["Build the migrated pinned sources, inspect host artifacts, then request a separate temporary-boot test and record its exact image revision."]
+evidence = [
+  { kind = "source", reference = "board.toml", result = "Current format-2 selection and board policy." },
+  { kind = "source", reference = "STAGE6.md", result = "Historical PKX110 observations through build 39; no claim of migrated-image hardware verification." },
+]
+
+[[area]]
+id = "packaging"
+status = "implemented"
+components = ["NativePrelink"]
+paths = ["scripts/test-bootimg.py", "scripts/test-adt.py", "scripts/*adt*", "scripts/fixtures/**", "patches/xnu/series"]
+inputs = ["Kernel ABI and IPSW stay at 21H461. NativePrelink stays pinned in the community bundle; the OS series selects its matching patches."]
+configuration = ["kernel.prelink roots preserve the previously qualified subset; payload.adt.root_match_volume_uuid=04769D26-2CA0-4825-B443-E2E5F88300F2."]
+procedure = ["Run ipsw fetch, kernel, build package, firmware, payload, bootimg in order; inspect payload.json and the ADT in FAT."]
+findings = ["Kernel ABI and IPSW stay at 21H461. NativePrelink stays pinned in the community bundle; the OS series selects its matching patches.", "Four byte-qualified userspace fixups now come from the shared OS profile and common validated-page implementation. Board root UUID and PackedRAMDisk/TrustCache placeholders are preserved.", "Android boot v4 packages gzip(BootShim+3 MiB FD+160 MiB FAT) followed by all stock DTBs; Android ramdisk remains empty."]
+completion = ["Kernel and prelink succeed, payload contains all declared inputs, and the boot image matches the bootloader format and size limit."]
+limits = ["Host construction does not establish runtime equivalence to build 39."]
+next_action = ["Build the migrated pinned sources, inspect host artifacts, then request a separate temporary-boot test and record its exact image revision."]
+evidence = [
+  { kind = "source", reference = "board.toml", result = "Current format-2 selection and board policy." },
+  { kind = "source", reference = "STAGE6.md", result = "Historical PKX110 observations through build 39; no claim of migrated-image hardware verification." },
+]
+
+[[area]]
+id = "diagnostics"
+status = "implemented"
+components = ["BootProgress", "Stage7Probe"]
+paths = ["patches/xnu/**", "scripts/test-kernel-source.py", "scripts/backup*", "scripts/p13-f2fs-shrink.c", "scripts/audit-original-pmgr.py", "scripts/test-root-audit.py"]
+inputs = ["Early framebuffer, root checkpoints and panic rendering remain enabled. Source-only diagnostics are separate from the prelinked userspace kernel."]
+configuration = ["XNU_BOOT_PROGRESS=y; XNU_EARLY_BOOT_PROGRESS=y; optional native-root-audit triggers the binding report."]
+procedure = ["Run the panic/ADT/boot container checks; preserve old run artifacts; capture the last completed checkpoint in a future explicitly authorized temporary boot."]
+findings = ["Early framebuffer, root checkpoints and panic rendering remain enabled. Source-only diagnostics are separate from the prelinked userspace kernel.", "Build 39 reached the iPadOS UI; see STAGE6.md. Migrated sources have host checks and still require a newly built image and hardware run."]
+completion = ["Each claimed milestone has a reproducible command, a matching source/image revision and an accessible result."]
+limits = ["No device command is issued by the migration. Older observations are identified separately."]
+next_action = ["Build the migrated pinned sources, inspect host artifacts, then request a separate temporary-boot test and record its exact image revision."]
+evidence = [
+  { kind = "source", reference = "board.toml", result = "Current format-2 selection and board policy." },
+  { kind = "source", reference = "STAGE6.md", result = "Historical PKX110 observations through build 39; no claim of migrated-image hardware verification." },
+]

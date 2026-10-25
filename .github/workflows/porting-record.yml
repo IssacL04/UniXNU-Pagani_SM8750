@@ -1,0 +1,36 @@
+name: Device documentation
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  porting-record:
+    name: Porting record
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: device
+          fetch-depth: 0
+      - name: Read the catalog pin
+        id: main
+        run: |
+          revision=$(cat device/upstream.rev)
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: IssacL04/UniXNU_Enc3l
+          ref: ${{ steps.main.outputs.revision }}
+          path: tools
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate structure and changed areas
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [[ -n "$BASE" && ! "$BASE" =~ ^0+$ ]]; then
+            python3 tools/scripts/porting-record.py check --device device --base "$BASE"
+          else
+            python3 tools/scripts/porting-record.py check --device device
+          fi

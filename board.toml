@@ -1,40 +1,39 @@
+schema_version = 2
+
 [board]
 name = "oneplus13t"
 soc = "SM8750"
+soc_source = "sm8750"
+os_profile = "ipados-17.7.11-21H461"
 description = "OnePlus 13T PKX110: Stage 7 early userspace and CPU display"
 kit = "oneplus13t"
 
-# iPadOS root-image source; hardware identity remains the OnePlus 13T.
 [ipsw]
-url = "https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw"
-product = "iPad7,1"
-version = "17.7.11"
-build = "21H461"
-device_class = "j120ap"
-chip_id = 0x8011
-board_id = 12
 fetch = ["AppleLogo", "KernelCache", "DeviceTree", "StaticTrustCache", "Cryptex1,SystemTrustCache"]
 
 [ipsw.sha256]
 "applelogo@2732~ipad.im4p" = "de55e7b7a4eff459118f8a4ec9af79b017cfdbfec4c5b079346e414c68ff1fba"
-"044-76040-038.dmg" = "3f99b859c9728379110b66657c7b15285bcb1925ad8b5726542e2cdcf8b1028d"
-"044-76034-038.dmg" = "b4908cde41d23e6bc05e6af51a2c9eeb00cf0f863a6a18b1600c96a3fd70414f"
+
+[components]
+include = ["BootProgress", "NativeAES", "NativeKeyStoreEvents", "NativeMobileDisplay", "NativeRamBlock", "NativeUfs", "NativeVirtioBlock", "PaganiArmCpu", "PaganiArmDTPlatform", "PaganiDarwinBoot", "ShengPlatformPower", "Stage7Probe", "NativePrelink", "PaganiVerifiedRoot", "Sm8750Platform"]
 
 [kernel]
+config_fragments = ["arch:configs/common.config", "soc:configs/sm8750.config", "os:configs/ipados.config"]
+patch_series = ["arch:patches/xnu/series", "soc:patches/xnu/series", "os:patches/xnu/pagani-series", "device:patches/xnu/series"]
 defconfig = "oneplus13t_defconfig"
 archives = [
   "build-corecrypto-14.py",
   "build-corecrypto-14.py --namespace",
   "build-libpthread-kernel.py",
-  "build-arm-platform.py",
-  "build-native-aes.py",
-  "build-native-ufs.py --root-windows",
-  "build-ufs-storage-bindings.py --kernelcache ../../ipsw/21H461/kernelcache.decompressed",
-  "build-native-ufs.py --component NativeVirtioBlock --root-windows",
-  "build-native-ufs.py --component NativeRamBlock --root-windows",
-  "build-sheng-platform-power.py --kernelcache ../../ipsw/21H461/kernelcache.decompressed",
-  "build-verified-root-probe.py --component os --include-systemos",
-  "build-stage7-display.py --kernelcache ../../ipsw/21H461/kernelcache.decompressed",
+  "component:PaganiArmCpu",
+  "component:NativeAES",
+  "component:NativeUfs",
+  "build-ufs-storage-bindings.py --kernelcache ../../../../ipsw/21H461/kernelcache.decompressed",
+  "component:NativeVirtioBlock",
+  "component:NativeRamBlock",
+  "component:ShengPlatformPower",
+  "build-pagani-verified-root-probe.py --component os --include-systemos",
+  "component:NativeMobileDisplay"
 ]
 
 [kernel.prelink]
@@ -58,7 +57,7 @@ volume = "UNIXNU13T"
 size_mib = 160
 loader = "firmware"
 title = "OnePlus 13T Stage 7: early userspace"
-dram_size = "0x100000000"
+dram_size = "0x180000000"
 timeout = 10
 kernel_args = ["-v", "serial=0", "debug=0x14e", "cpus=1", "kt_fixed_zones=240", "native-ufs-root=1", "native-ufs-diagnostics=1", "sheng-pmgr=2", "offline-apfs-load=1", "startup_debug=0", "-no_corpses", "sheng-vsync=60", "sheng-vsync-fixed=1", "offline-mobile-graphics-load=1", "offline-legacy-register=1", "offline-legacy-phase=4", "offline-legacy-gop=1", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-key-events=1", "sheng-aks=1"]
 trust_cache_sha256 = ["7416ca4f8377146626bb284e2133c76bee6cb4e3ee0af5d648b186235a7323a7"]
@@ -68,9 +67,7 @@ ipad_identity = true
 unique_chip_id = "required"
 chip_id = "0x8011"
 packed_data_ramdisk = true
-tool = "scripts/make-oneplus13t-adt.py"
 owned_memory_size = "0x100000000"
-cpu_regs = "0"
 # OS IOMedia UUID confirmed by the mode 12 hardware report.
 root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
 
@@ -105,7 +102,7 @@ packages = [
   "{uefi}",
   "{uefi}/Platforms/OnePlus",
   "{tree}/package",
-  "{tree}/drivers/DarwinBoot",
+  "{tree}/drivers/PaganiDarwinBoot",
   "{edk2}",
   "{uefi}/Common/Mu",
   "{uefi}/Common/Mu_OEM_Sample",
@@ -119,3 +116,30 @@ ENABLE_SECUREBOOT = "1"
 MEMORY_PROTECTION = "TRUE"
 SHIP_MODE = "FALSE"
 BUILDID_STRING = "oneplus13t-xnu-early-progress-20261021"
+
+[device_tree]
+source = "device:dts/oneplus13t.dts"
+include_dirs = ["soc:dts"]
+
+[adt.chosen.u32]
+display-scale = 2
+display-rotation = 0
+
+[adt.defaults.u32]
+sleep-disabled = 1
+
+[adt.product.string]
+model = "PKX110"
+
+[adt.product.u32]
+thin-bezel = 1
+
+[adt.buttons.string]
+compatible = "buttons"
+device_type = "buttons"
+
+[adt.buttons.strings]
+button-names = ["hold", "voldown", "volup"]
+
+[adt.buttons.u32]
+home-button-type = 2

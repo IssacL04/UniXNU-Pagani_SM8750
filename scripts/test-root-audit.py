@@ -10,8 +10,7 @@ import tempfile
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--tree', type=Path, required=True)
 args = parser.parse_args()
-patch = (args.tree / 'patches/xnu/offline-owner-root-binding-audit.patch').read_text()
-added = '\n'.join(line[1:] for line in patch.splitlines() if line.startswith('+') and not line.startswith('+++'))
+added = (args.tree / '.cache/xnu-work/bsd/kern/bsd_init.c').read_text()
 function = added[added.index('void\nnative_owner_root_checkpoint('):]
 function = function[:function.index('\n}\n') + 3]
 # Strip the compiler checkpoint, which deliberately uses target-specific registers.

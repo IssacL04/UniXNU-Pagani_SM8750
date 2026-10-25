@@ -186,7 +186,7 @@ def prepare(tree, source, systemos, output, config):
         header = stream.read(4096)
     if image.stat().st_size != DATA_BYTES or header[32:36] != b'NXSB':
         raise ValueError('Unexpected APFS seed geometry')
-    pack = runpy.run_path(str(tree / 'drivers/DarwinBoot/Test/packed_ramdisk.py'))['pack']
+    pack = runpy.run_path(str(tree / 'drivers/PaganiDarwinBoot/Test/packed_ramdisk.py'))['pack']
     packed = pack(image, output / 'data.dbrdisk')
     report = dict(volume_uuid=identity, packed=packed, source_regular_files=count,
                   source_regular_bytes=total, guest_mutable=True, persistent=False,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the actual compatibility function and display timer with host stubs."""
+"""Exercise the actual display timer lifecycle with host stubs."""
 import argparse
 from pathlib import Path
 import runpy
@@ -9,69 +9,6 @@ import tempfile
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--tree', type=Path, required=True)
 tree = parser.parse_args().tree
-patch = (tree / 'patches/xnu/native-stage7-userspace-compat.patch').read_text()
-added = ''.join(line[1:] for line in patch.splitlines(True)
-                if line.startswith('+') and not line.startswith('+++'))
-compat = added[added.index('/* 21H461'):added.index('    return written;') + len('    return written;\n}\n')]
-compat = compat.replace('#include <pexpert/device_tree.h>', '')
-assert 'validated == VMP_CS_ALL_TRUE && tainted == VMP_CS_ALL_FALSE' in added
-assert 'cache_sync_page(VM_PAGE_GET_PHYS_PAGE(page))' in added
-c = r'''
-#include <assert.h>
-#include <stdint.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <string.h>
-typedef uint64_t memory_object_offset_t;
-typedef void *DTEntry;
-struct vnode {const char *v_name;};
-#define NULLVP NULL
-#define PAGE_SIZE 4096
-#define kSuccess 0
-#define STARTUP(...)
-#define os_atomic_inc(p, order) (++*(p))
-static uint32_t property=1;
-static unsigned property_size=4;
-static int SecureDTLookupEntry(void *unused,const char *path,DTEntry *entry) {
-    (void)unused;assert(!strcmp(path,"/chosen"));*entry=NULL;return 0;
-}
-static int SecureDTGetProperty(DTEntry entry,const char *key,const void **value,unsigned *size) {
-    (void)entry;assert(!strcmp(key,"ephemeral-storage"));*value=&property;*size=property_size;return 0;
-}
-''' + compat + r'''
-int main(void) {
-    unsigned char page[PAGE_SIZE],expected[PAGE_SIZE];
-    struct vnode wrong={"unrelated"};
-    property=0;native_stage7_compat_init();assert(!native_stage7_compat_enabled);
-    property=1;property_size=8;native_stage7_compat_init();assert(!native_stage7_compat_enabled);
-    property_size=4;native_stage7_compat_init();assert(native_stage7_compat_enabled);
-    assert(!native_stage7_compat_page(NULL,0,page));
-    for(unsigned i=0;i<sizeof(native_stage7_fixups)/sizeof(native_stage7_fixups[0]);++i) {
-        const struct native_stage7_fixup *f=&native_stage7_fixups[i];
-        const uint64_t offset=f->offset & ~(uint64_t)(PAGE_SIZE-1);
-        const size_t within=(size_t)(f->offset-offset);
-        struct vnode file={f->name};
-        memset(page,0xa5,sizeof page);memcpy(page+within,f->original,f->length);
-        memcpy(expected,page,sizeof page);
-        assert(!native_stage7_compat_page(&wrong,offset,page));
-        assert(!native_stage7_compat_page(&file,offset+PAGE_SIZE,page));
-        assert(!native_stage7_compat_page(&file,UINT64_MAX,page));
-        native_stage7_compat_enabled=false;
-        assert(!native_stage7_compat_page(&file,offset,page));
-        native_stage7_compat_enabled=true;
-        assert(!memcmp(expected,page,sizeof page));
-        assert(native_stage7_compat_page(&file,offset,page)==1);
-        memcpy(expected+within,f->replacement,f->length);
-        assert(!memcmp(expected,page,sizeof page));
-        assert(!native_stage7_compat_page(&file,offset,page));
-        printf("%s %llx ",f->name,(unsigned long long)f->offset);
-        for(unsigned j=0;j<f->length;++j)printf("%02x",f->original[j]);
-        putchar('\n');
-    }
-    assert(native_stage7_compat_applied==4);
-    return 0;
-}
-'''
 display = (tree / 'drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp').read_text()
 timer = display[display.index('    IOTimerEventSource *vsyncTimer'):display.index('public:', display.index('    IOTimerEventSource *vsyncTimer'))]
 refresh = display[display.index('    bool getRefreshAttributes('):display.index('    // A swap the client')]
@@ -142,7 +79,7 @@ int main(){
 '''
 with tempfile.TemporaryDirectory(prefix='stage7-check-') as temporary:
     folder = Path(temporary)
-    for name, text, compiler, standard in [('compat.c', c, 'cc', 'c11'), ('refresh.cpp', cpp, 'c++', 'c++17')]:
+    for name, text, compiler, standard in [('refresh.cpp', cpp, 'c++', 'c++17')]:
         source = folder / name
         source.write_text(text)
         binary = source.with_suffix('')

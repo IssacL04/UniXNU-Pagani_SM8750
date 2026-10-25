@@ -18,7 +18,7 @@ class View(ctypes.Structure):
 
 
 def prepare(tree, inputs, openssl):
-    kit = tree / 'kits/VerifiedRoot'
+    kit = tree / 'kits/PaganiVerifiedRoot'
     host = tree / 'build/verified-root-host'
     # Reuse the real parser/signature/block tests and their private local build key.
     subprocess.run(['python3', kit / 'tests/check.py', '--output', host,

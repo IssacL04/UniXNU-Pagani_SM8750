@@ -1,0 +1,9 @@
+# Optional development overrides; leave local.toml absent for pinned builds.
+[[source]]
+name = "sm8750"
+kind = "soc"
+local = "../UniXNU-sm8750-common"
+
+[local]
+drivers = "../UniXNU-Pagani-Drivers/drivers"
+kits = "../UniXNU-Pagani-Drivers/kits"

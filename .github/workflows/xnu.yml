@@ -1,15 +1,11 @@
 name: Pagani SM8750 XNU (OnePlus 13T)
-
 on:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
   group: oneplus13t-xnu-${{ github.ref }}
   cancel-in-progress: false
-
 jobs:
   build:
     runs-on: macos-15
@@ -17,106 +13,100 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: device
     steps:
-      - name: Check out the 13T configuration
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           path: device
           submodules: recursive
           persist-credentials: false
-
+      - name: Read the maintained main fork pin
+        id: main
+        run: |
+          revision=$(cat device/upstream.rev)
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: IssacL04/UniXNU_Enc3l
+          ref: ${{ steps.main.outputs.revision }}
+          path: main
+          submodules: recursive
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-
-      - name: Prepare the isolated UniXNU source and check the board
-        run: |
-          python3 scripts/test-upstream.py
-          python3 scripts/test-ram-data.py
-          BASE=$(./unixnu --prepare)
-          export PYTHONPATH="$BASE/scripts"
-          echo "PYTHONPATH=$PYTHONPATH" >> "$GITHUB_ENV"
-          ./unixnu tree
-          TREE="$PWD/out/oneplus13t/tree"
-          echo "UNIXNU_TREE=$TREE" >> "$GITHUB_ENV"
-          python3 scripts/test-layout.py --tree "$TREE"
-          python3 scripts/test-stage7.py --tree "$TREE"
-          python3 "$TREE/scripts/test-kernel-source.py"
-          python3 "$TREE/scripts/test-bootimg.py"
-          python3 scripts/test-adt.py AdtTest.test_tree_contract AdtTest.test_invalid_window AdtTest.test_media_window AdtTest.test_userspace_memory_window AdtTest.test_root_volume_matching AdtTest.test_invalid_root_uuid AdtTest.test_trust_cache_binding AdtTest.test_packed_data_binding AdtTest.test_ipad_identity
-          python3 scripts/test-root-audit.py --tree "$TREE"
-          python3 "$TREE/drivers/NativeKeyStoreEvents/test_closed_boundary.py"
-          python3 "$TREE/drivers/DarwinBoot/Test/test-adt.py"
-          cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
-            -I "$TREE/drivers/DarwinBoot/DarwinBootPkg/Driver" \
-            drivers/BootProgress/Test/console.c -o /tmp/boot-progress-test
-          ASAN_OPTIONS=detect_leaks=0 /tmp/boot-progress-test
-
+          python-version: '3.12'
       - name: Install host tools and check the SDK
         run: |
-          brew install cmake ninja unifdef llvm mtools openssl@3
+          brew install cmake ninja unifdef llvm mtools openssl@3 dtc
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-path
-          df -h .
-
-      - name: Check the read-only SM8750 storage path
+      - name: Resolve the four profiles and fetch pinned sources
+        working-directory: main
         run: |
-          python3 scripts/test-stage6.py --tree "$UNIXNU_TREE" --openssl-prefix "$(brew --prefix openssl@3)"
-
-      - name: Fetch the kernel sources
-        run: |
-          mkdir -p out/oneplus13t/logs
-          ./unixnu defconfig oneplus13t_defconfig
-          ./unixnu fetch xnu libplatform libdispatch AvailabilityVersions libpthread corecrypto-2023 IOStorageFamily 2>&1 | tee out/oneplus13t/logs/actions-fetch.log
-          cp unixnu.lock out/oneplus13t/unixnu.lock
-
-      - name: Prepare the pinned root-window policies
-        run: |
-          ./unixnu ipsw fetch AppleLogo KernelCache OS Cryptex1,SystemOS StaticTrustCache Cryptex1,SystemTrustCache 2>&1 | tee out/oneplus13t/logs/actions-ipsw.log
+          ./unixnu defconfig oneplus13t_defconfig -D ../device
+          ./unixnu fetch xnu libplatform libdispatch AvailabilityVersions libpthread corecrypto-2023 IOStorageFamily
           ./unixnu tree
-          python3 out/oneplus13t/tree/scripts/audit-stage7-display.py out/ipsw/21H461/kernelcache.decompressed
-          python3 scripts/prepare-ufs-policies.py --tree out/oneplus13t/tree \
-            --inputs out/ipsw/21H461 --openssl-prefix "$(brew --prefix openssl@3)" \
-            2>&1 | tee out/oneplus13t/logs/actions-policies.log
-          python3 scripts/prepare-original-trust.py --tree "$UNIXNU_TREE" \
-            --inputs out/ipsw/21H461 --output out/oneplus13t/original-static-system.bundle \
-            2>&1 | tee out/oneplus13t/logs/actions-trust.log
-
-      - name: Prepare volatile Data from the original var tree
+          OUTPUT="$PWD/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t"
+          echo "UNIXNU_OUTDIR=$OUTPUT" >> "$GITHUB_ENV"
+          echo "UNIXNU_TREE=$OUTPUT/tree" >> "$GITHUB_ENV"
+          echo "PYTHONPATH=$PWD/scripts" >> "$GITHUB_ENV"
+          ./unixnu status --json > "$OUTPUT/status.json"
+          cp ../device/unixnu.lock "$OUTPUT/unixnu.lock"
+      - name: Check configuration and production contracts
+        working-directory: main
         run: |
-          sudo "$(command -v python3)" scripts/prepare-ram-data.py --tree "$UNIXNU_TREE" \
-            --source out/ipsw/21H461/044-76040-038.dmg \
-            --systemos out/ipsw/21H461/044-76034-038.dmg \
-            --output out/oneplus13t/ram-data --config out/oneplus13t/.config \
-            2>&1 | tee out/oneplus13t/logs/actions-ram-data.log
-
-      - name: Build XNU and the FAT payload
+          python3 ../device/scripts/test-format2.py --device ../device
+          python3 scripts/porting-record.py check --device ../device
+          python3 ../device/scripts/test-kernel-source.py
+          python3 ../device/scripts/test-bootimg.py
+          python3 ../device/scripts/test-stage6.py --tree "$UNIXNU_TREE" --openssl-prefix "$(brew --prefix openssl@3)"
+          ASAN_OPTIONS=detect_leaks=0 python3 ../device/scripts/test-stage7.py --tree "$UNIXNU_TREE"
+          python3 ../device/scripts/test-ram-data.py
+          python3 ../device/scripts/test-root-audit.py --tree "$UNIXNU_TREE"
+          python3 "$UNIXNU_TREE/drivers/NativeKeyStoreEvents/test_closed_boundary.py"
+          python3 "$UNIXNU_TREE/drivers/PaganiDarwinBoot/Test/test-adt.py"
+          cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+            -I "$UNIXNU_TREE/drivers/PaganiDarwinBoot/DarwinBootPkg/Driver" \
+            "$UNIXNU_TREE/drivers/BootProgress/Test/console.c" -o /tmp/boot-progress-test
+          ASAN_OPTIONS=detect_leaks=0 /tmp/boot-progress-test
+      - name: Prepare original ABI inputs, trust and root-window policies
+        working-directory: main
+        run: |
+          ./unixnu ipsw fetch AppleLogo KernelCache OS Cryptex1,SystemOS StaticTrustCache Cryptex1,SystemTrustCache 2>&1 | tee "$UNIXNU_OUTDIR/logs/actions-ipsw.log"
+          python3 "$UNIXNU_TREE/scripts/audit-stage7-display.py" out/ipsw/21H461/kernelcache.decompressed
+          python3 ../device/scripts/prepare-ufs-policies.py --tree "$UNIXNU_TREE" \
+            --inputs out/ipsw/21H461 --openssl-prefix "$(brew --prefix openssl@3)" \
+            2>&1 | tee "$UNIXNU_OUTDIR/logs/actions-policies.log"
+          python3 ../device/scripts/prepare-original-trust.py --tree "$UNIXNU_TREE" \
+            --inputs out/ipsw/21H461 --output "$UNIXNU_OUTDIR/original-static-system.bundle" \
+            2>&1 | tee "$UNIXNU_OUTDIR/logs/actions-trust.log"
+      - name: Prepare volatile Data from the original var tree
+        working-directory: main
+        run: |
+          sudo "$(command -v python3)" ../device/scripts/prepare-ram-data.py --tree "$UNIXNU_TREE" \
+            --source out/ipsw/21H461/044-76040-038.dmg --systemos out/ipsw/21H461/044-76034-038.dmg \
+            --output "$UNIXNU_OUTDIR/ram-data" --config "$UNIXNU_OUTDIR/.config" \
+            2>&1 | tee "$UNIXNU_OUTDIR/logs/actions-ram-data.log"
+      - name: Build XNU and prelink
+        working-directory: main
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          export UNIXNU_UNIQUE_CHIP_ID="$(python3 -c 'import secrets; print(secrets.token_hex(8))')"
-          ./unixnu build kernel payload -j 3 --trust-cache out/oneplus13t/original-static-system.bundle \
-            --data-ramdisk out/oneplus13t/ram-data/data.dbrdisk \
-            2>&1 | tee out/oneplus13t/logs/actions-build.log
-
-      - name: Check the native panic argument path
-        run: |
-          python3 drivers/BootProgress/Test/panic-entry.py out/oneplus13t/tree/.cache/xnu-work \
-            --font "$UNIXNU_TREE/drivers/DarwinBoot/DarwinBootPkg/Driver"
-
-      - name: Upload the kernel, payload and logs
+          ./unixnu kernel -j 3 2>&1 | tee "$UNIXNU_OUTDIR/logs/actions-build.log"
+          python3 "$UNIXNU_TREE/drivers/BootProgress/Test/panic-entry.py" "$UNIXNU_TREE/.cache/xnu-work" \
+            --font "$UNIXNU_TREE/drivers/PaganiDarwinBoot/DarwinBootPkg/Driver"
+      - name: Upload kernel and inputs for local firmware and image assembly
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: oneplus13t-xnu-${{ github.run_number }}
+          name: oneplus13t-format2-${{ github.run_number }}
           path: |
-            device/out/oneplus13t/kernel/**
-            device/out/oneplus13t/payload/**
-            device/out/oneplus13t/logs/**
-            device/out/oneplus13t/unixnu.lock
-            device/out/oneplus13t/ram-data/seed.json
-            device/out/oneplus13t/ram-data/data.dbrdisk
+            main/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t/kernel/**
+            main/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t/logs/**
+            main/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t/status.json
+            main/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t/unixnu.lock
+            main/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t/ram-data/**
+            main/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t/original-static-system.bundle
           if-no-files-found: warn
           retention-days: 7

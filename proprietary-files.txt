@@ -1,0 +1,10 @@
+# External inputs stay local. No vendor firmware, Apple image or private seed is committed.
+# OnePlus PKX110 CN / OP60F5L1: full stock boot DTB bundle, extracted for bootimg.
+# sha256 c63c09d164e7ed488157e76abea05a0b8a479887e981c78e6b0666502b48c1ff
+# sysinfo/live.dtb: Android runtime DT, used only to verify shared and board hardware values.
+# sha256 d00767f2068d0df73fc2a077de750bba66a5420c77414db1441ff09f6f3ec223
+# Apple iPad7,1, iPadOS 17.7.11 / 21H461: URL and content hashes in selected OS profile.
+# kernelcache.decompressed sha256 f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7
+# Original static system trust bundle sha256 7416ca4f8377146626bb284e2133c76bee6cb4e3ee0af5d648b186235a7323a7
+# Data seed: prepare-ram-data.py from verified OS and SystemOS; seed.json records image and UUID.
+# unique_chip_id: per-device nonzero private 64-bit value in ignored main unixnu.local.toml.

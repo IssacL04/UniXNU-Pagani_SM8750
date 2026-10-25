@@ -16,7 +16,7 @@ from unittest.mock import patch
 def check_arm64_asm(device, tree, work):
     """Compile the actual multi-instruction templates with Apple's assembler syntax."""
     functions, expected = [], Counter()
-    sources = (tree / 'drivers/ArmCpu/ArmCpu.cpp', tree / 'drivers/NativeUfs/NativeUfs.cpp',
+    sources = (tree / 'drivers/PaganiArmCpu/ArmCpu.cpp', tree / 'drivers/NativeUfs/NativeUfs.cpp',
                device / 'drivers/BootProgress/BootProgress.c')
 
     def instruction(text):
@@ -55,18 +55,12 @@ def check_arm64_asm(device, tree, work):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--tree', type=Path)
+    parser.add_argument('--tree', type=Path, required=True)
     parser.add_argument('--openssl-prefix', type=Path, default=Path('/usr'))
     parser.add_argument('--captured', type=Path, help='Directory with locally captured GPT and first block')
     args = parser.parse_args()
     device = Path(__file__).resolve().parents[1]
-    if args.tree:
-        tree = args.tree
-    else:
-        subprocess.run([str(device / 'unixnu'), 'tree'], check=True)
-        tree = Path(os.environ.get('UNIXNU_OUT', device / 'out')) / 'oneplus13t/tree'
-        base = Path(subprocess.check_output([str(device / 'unixnu'), '--prepare'], text=True).strip())
-        sys.path.insert(0, str(base / 'scripts'))
+    tree = args.tree
     sys.path.insert(0, str(tree / 'scripts'))
     from unixnu import userdata
     from unixnu.util import Error
@@ -103,7 +97,7 @@ def main():
         for name in ('Sm8750', 'LunDiscovery', 'RootCommands', 'RootDiagnostics', 'RootLayout', 'SmmuTakeover', 'RootWindowRead', 'TransferPoll'):
             binary = Path(directory) / name
             command = [os.environ.get('CXX', 'c++'), '-std=c++17', '-Wall', '-Wextra', '-Werror',
-                       '-fsanitize=address,undefined', '-g', '-DNATIVE_UFS_SM8750=1', '-DNATIVE_UFS_READ_ONLY=1',
+                       '-fsanitize=address,undefined', '-g', '-I' + str(tree / 'kits'), '-DNATIVE_UFS_SM8750=1', '-DUFS_ROOT_PARTITION=\"unixnu\"', '-DNATIVE_UFS_READ_ONLY=1',
                        str(source / (name + '.cpp')), '-o', str(binary)]
             if name == 'RootLayout':
                 command += ['-I' + str(args.openssl_prefix / 'include'), '-L' + str(args.openssl_prefix / 'lib'), '-lcrypto']

@@ -8,7 +8,7 @@ import unittest
 import zlib
 from pathlib import Path
 
-spec = importlib.util.spec_from_file_location('adt', Path(__file__).with_name('make-oneplus13t-adt.py'))
+spec = importlib.util.spec_from_file_location('adt', Path(__file__).parent / 'fixtures/make-oneplus13t-adt-v1.py')
 adt = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(adt)
 

@@ -32,3 +32,10 @@ CONFIG_XNU_VERIFIED_ROOT_ARCHIVE="{tree}/build/verified-root-os-xnu-bundle/libVe
 CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y
 CONFIG_XNU_BOOT_PROGRESS=y
 CONFIG_XNU_EARLY_BOOT_PROGRESS=y
+
+# Use the retained community archive names; official components keep their own defaults.
+CONFIG_XNU_NATIVE_UFS_ARCHIVE="{tree}/build/native-ufs/libNativeUfs.a"
+CONFIG_XNU_NATIVE_AES_ARCHIVE="{tree}/build/native-aes/libNativeAES.a"
+CONFIG_XNU_NATIVE_VIRTIO_BLOCK_ARCHIVE="{tree}/build/native-virtio-block/libNativeVirtioBlock.a"
+CONFIG_XNU_NATIVE_RAM_BLOCK_ARCHIVE="{tree}/build/native-ram-block/libNativeRamBlock.a"
+# CONFIG_XNU_SOURCE_MOCKFS is not set

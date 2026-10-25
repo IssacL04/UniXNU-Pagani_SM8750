@@ -1,0 +1,12 @@
+/dts-v1/;
+/include/ "sm8750.dtsi"
+/ {
+    model = "OnePlus 13T PKX110";
+    compatible = "oneplus,pkx110", "qcom,sm8750";
+    // Contiguous high RAM from sysinfo/live.dtb; DarwinBoot allocates its own 4 GiB window.
+    memory@980000000 {
+        device_type = "memory";
+        reg = <9 0x80000000 1 0x80000000>;
+    };
+};
+&cpu0 { status = "okay"; };

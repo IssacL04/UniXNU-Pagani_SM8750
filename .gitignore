@@ -11,3 +11,16 @@ __pycache__/
 *.a
 *.log
 local.toml
+
+# Private inputs and generated firmware
+*.fd
+*.dtb
+*.dmg
+*.ipsw
+*.im4p
+*.dbr
+*.dbrdisk
+*.pem
+*.key
+.env
+unixnu.local.toml

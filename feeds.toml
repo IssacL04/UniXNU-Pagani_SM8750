@@ -1,0 +1,5 @@
+[[source]]
+name = "sm8750"
+kind = "soc"
+git = "https://github.com/IssacL04/UniXNU-sm8750-common.git"
+commit = "895f2996e713d5e4d261b1cc6b3d24439638fdf8"
