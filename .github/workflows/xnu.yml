@@ -48,6 +48,7 @@ jobs:
           ./unixnu fetch xnu libplatform libdispatch AvailabilityVersions libpthread corecrypto-2023 IOStorageFamily
           ./unixnu tree
           OUTPUT="$PWD/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t"
+          mkdir -p "$OUTPUT/logs"
           echo "UNIXNU_OUTDIR=$OUTPUT" >> "$GITHUB_ENV"
           echo "UNIXNU_TREE=$OUTPUT/tree" >> "$GITHUB_ENV"
           echo "PYTHONPATH=$PWD/scripts" >> "$GITHUB_ENV"

@@ -14,7 +14,7 @@ paths = ["board.toml", "feeds.toml", "configs/**", ".gitmodules", ".github/**", 
 inputs = ["Four layers: ARM64, pinned sm8750, ipados-17.7.11-21H461, OnePlus 13T. Arrays are complete replacements."]
 configuration = ["schema_version=2; soc_source=sm8750; complete component/fragment/archive arrays; configs/oneplus13t_defconfig."]
 procedure = ["From UniXNU: defconfig oneplus13t_defconfig -D ../UniXNU-Pagani_SM8750; fetch; status --json; tree; run scripts/test-format2.py with the main scripts on PYTHONPATH."]
-findings = ["Four layers: ARM64, pinned sm8750, ipados-17.7.11-21H461, OnePlus 13T. Arrays are complete replacements.", "Community sources share one gitlink; official module names are not substituted based only on a legacy name."]
+findings = ["Four layers: ARM64, pinned sm8750, ipados-17.7.11-21H461, OnePlus 13T. Arrays are complete replacements.", "Community sources share one gitlink; official module names are not substituted based only on a legacy name. CI creates the resolved logs directory before the first tee; status alone does not create it."]
 completion = ["All source pins resolve; every selected component has a record; status shows the intended overrides and patch order."]
 limits = ["The main fork carries community catalog entries; stock upstream alone cannot resolve this selection."]
 next_action = ["Build the migrated pinned sources, inspect host artifacts, then request a separate temporary-boot test and record its exact image revision."]
