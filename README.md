@@ -2,7 +2,7 @@
 
 This community port uses UniXNU format 2: ARM64, the pinned SM8750 common repository, iPadOS 17.7.11 (21H461), and this device profile. The source drivers remain together in [UniXNU-Pagani-Drivers](https://github.com/IssacL04/UniXNU-Pagani-Drivers); `modules/Pagani` pins one commit. Community component metadata and recipes live in the maintained [main fork](https://github.com/IssacL04/UniXNU_Enc3l).
 
-Build 39 reached the iPadOS UI on a OnePlus 13T. UFS root reads and CPU framebuffer presentation were observed. Data is a volatile RAM seed. Touch, GPU acceleration, network, audio and complete power management remain unfinished. The migrated sources require a new hardware boot. See [porting.toml](porting.toml) for current scope and [STAGE6.md](STAGE6.md) for the original observations.
+Build 39 reached the iPadOS UI on a OnePlus 13T. UFS root reads and CPU framebuffer presentation were observed. Data is a volatile RAM seed. Touch, GPU acceleration, network, audio and complete power management remain unfinished. The format-2 kernel, firmware, payload and boot image have passed host builds; the migrated image requires a new hardware boot. See [MIGRATION.md](MIGRATION.md) for the build-46 source revisions, artifacts and checks. See [porting.toml](porting.toml) for current scope and [STAGE6.md](STAGE6.md) for the original observations.
 
 ## Workspace and inputs
 
