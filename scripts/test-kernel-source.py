@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Source-kernel publication and compile-record regression checks (no Xcode)."""
 import importlib.util
+import hashlib
+import json
 import os
 import runpy
 import struct
@@ -21,6 +23,28 @@ spec.loader.exec_module(arm_platform)
 
 
 class SourceKernelTest(unittest.TestCase):
+    def test_ram_object_follows_the_selected_archive_directory(self):
+        script = (ROOT / 'scripts/build-xnu-4k-baseline.sh').read_text()
+        section = script.split('  if [ "$NATIVE_RAM_BLOCK" = 1 ]; then', 1)[1].split('  if [ "${XNU_SOURCE_PTHREAD:-0}" = 1 ]; then', 1)[0]
+        archives = []
+        for component in ('NativeVirtioBlock', 'NativeRamBlock'):
+            directory = Path(self.temp.name) / component
+            directory.mkdir()
+            obj = directory / (component + '.o')
+            obj.write_bytes(component.encode())
+            archive = directory / ('lib' + component + '.a')
+            archive.touch()
+            archive.with_name('bindings.json').write_text(json.dumps({
+                'compiled_object_sha256': hashlib.sha256(obj.read_bytes()).hexdigest(),
+                'bindings': {'original_method': '0x1234'}}))
+            archives.append(archive)
+        env = dict(os.environ, ROOT=str(self.ctx.tree), NATIVE_RAM_BLOCK='1', XNU_NATIVE_VIRTIO_BLOCK='1',
+                   VIRTIO_ARCHIVE=str(archives[0]), XNU_NATIVE_RAM_BLOCK_ARCHIVE=str(archives[1]),
+                   KERNEL_EXTRA_ARCHIVES='', KERNEL_ARCHIVE_DEPENDENCIES='')
+        command = 'set -eu\nif true; then\n' + section + '\nprintf "%s\\n" "$KERNEL_EXTRA_ARCHIVES"\n'
+        result = subprocess.check_output(['bash'], input=command, text=True, env=env)
+        self.assertEqual(result.strip(), str(archives[1].with_name('NativeRamBlock.o')))
+
     def test_early_framebuffer_page_tables_cover_vm_bootstrap(self):
         path = Path(__file__).resolve().parents[1] / 'patches/xnu/zzzzzzz-early-framebuffer-page-tables.patch'
         body = '\n'.join(line[1:] for line in path.read_text().splitlines()
