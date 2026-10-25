@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the actual display timer lifecycle with host stubs."""
 import argparse
+import ast
 from pathlib import Path
 import runpy
 import subprocess
@@ -9,6 +10,15 @@ import tempfile
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--tree', type=Path, required=True)
 tree = parser.parse_args().tree
+builder=ast.parse((tree/'scripts/build-stage7-driver.py').read_text())
+definition=next(node for node in builder.body if isinstance(node,ast.FunctionDef) and node.name=='c_command')
+scope={};exec(compile(ast.Module(body=[definition],type_ignores=[]),'build-stage7-driver.py','exec'),scope)
+for language in (['-xc++'],['-x','c++']):
+    command=scope['c_command'](['clang',*language,'input.c','--driver-mode=g++','-std=gnu++17',
+        '-fsized-deallocation','-fno-c++-static-destructors','-fapple-kext','-mkernel','-D','KERNEL',
+        '--target=arm64-apple-ios17.0.0','-c','-o','input.o'])
+    assert command==['clang','--driver-mode=gcc','-x','c','-std=gnu11','input.c','-mkernel','-D','KERNEL',
+        '--target=arm64-apple-ios17.0.0','-c','-o','input.o'],command
 display = (tree / 'drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp').read_text()
 timer = display[display.index('    IOTimerEventSource *vsyncTimer'):display.index('public:', display.index('    IOTimerEventSource *vsyncTimer'))]
 refresh = display[display.index('    bool getRefreshAttributes('):display.index('    // A swap the client')]
@@ -93,4 +103,4 @@ with tempfile.TemporaryDirectory(prefix='stage7-check-') as temporary:
             rules = runpy.run_path(str(Path(__file__).with_name('prepare-ram-data.py')))['COMPAT_FIXUPS']
             expected = [f'{Path(path).name} {offset:x} {original}' for _, path, offset, original in rules]
             assert result.splitlines() == expected, 'Build-time byte checks must match all kernel rules'
-print('PASS: volatile-only exact byte fixups, post-validation hook, display timer lifetime and fixed refresh cadence')
+print('PASS: C language selection, display timer lifetime and fixed refresh cadence')
