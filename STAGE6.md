@@ -1,8 +1,8 @@
 # Stage 6–7：一加 13T 存储、用户态与系统界面
 
-更新：2026-10-27。**第 50 版已获真机确认：跳过 Setup 进入锁屏，电源键短按亮灭屏、长按打开关机界面；触控初始化失败。** 第 51 版修正 SPI 读法并加入 TouchComm v2，完成构建及临时启动后，用户反馈首次 SPI 读取超时，触控仍无响应。下一版补齐 GENI 超时前的寄存器现场，定位 FIFO 和完成状态。
+更新：2026-10-27。**第 50 版已获真机确认：跳过 Setup 进入锁屏，电源键短按亮灭屏、长按打开关机界面；触控初始化失败。** 第 51 版首次 SPI 读取超时，触控仍无响应。第 53 版已完成构建、镜像回验及临时启动，新增两行 GENI 超时前寄存器现场，等待手机读数以定位 FIFO 和完成状态。
 
-当前测试镜像为 `out/oneplus13t/boot/stage7-run-51/boot.img`，构建使用设备源码 `9d9726f`。第 50 版镜像保留为锁屏和电源键的实测基线；桌面应用交互、亮度及长期稳定性仍未验证。当前概况见 [README](README.md)，分项证据见 [porting.toml](porting.toml)。下文按时间保留各轮诊断与后续修复，最新结果见末尾。
+当前测试镜像为 `out/oneplus13t/boot/stage7-run-53/boot.img`，构建使用设备源码 `c5edbf3`。第 50、51 版镜像继续保留；桌面应用交互、亮度及长期稳定性仍未验证。当前概况见 [README](README.md)，分项证据见 [porting.toml](porting.toml)。下文按时间保留各轮诊断与后续修复，最新结果见末尾。
 
 ## iPadOS 输入
 
@@ -705,3 +705,11 @@ RAM Data 生成步骤在新卷已挂载时，合入上游 `seed-data-skip-setup.
 [第 52 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/40358763110) 通过配置、输入回归及输入对象编译，但在最终 XNU 编译调用早期控制台构建时被现有检查拦截：`BootProgress.o` 新增 `_bzero` 依赖。状态行从三行增至五行后，局部副本由 240 字节变成 400 字节；启用自动栈清零的 ARM64 编译会为该数组生成外部清零调用。该检查限制早期控制台在内核服务可用前调用运行时助手，未因此生成新的可启动内核。
 
 修正把状态行副本改为逐行 80 字节，每次复制仍检查显示交接、busy 与 panic 状态。使用实际函数、ARM64 Apple 目标、自动栈初始化和相同 freestanding 限制，在旧函数上复现 `_bzero`，修改后确认没有 `_bzero/_memset/_memcpy` 调用；ASan/UBSan 显示边界和 panic 保护检查也通过。保留自动初始化及生产依赖检查，等待第 53 次完整构建。
+
+### 第 53 次：SPI 超时现场镜像与临时启动
+
+[第 53 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/40361680754) 全部成功，包括修正后的早期控制台运行时依赖检查。源码固定为设备 `c5edbf3617dd5effd63b74f915218539adca1476`、主仓库 `335699bffbe0958f66f316c29dc8db499e7116d3`、驱动 `4f8206071a7188b283846f973a16f0cf0df9b7c2`；SM8750 公共包保持原版本。18 个组件、输入和存储回归、原版及编译后对象 ABI 检查、完整链接与预链接均通过。实际内核含两条新增 SPI 诊断格式，大小 127,799,296 字节，SHA-256 为 `6ed39dd4e001197a1d08ca46d0ca5d38b7c38fec48e4d0b593244c08c8d42b6f`。
+
+同次 RAM Data UUID 为 `A117890E-4D7A-4B21-8D46-CE0494D928B0`，与内核一致；1 GiB 逻辑哈希和打包格式通过，独立 APFS 读回确认五组 Setup 偏好、migration、防自动暗屏、UID/GID 501 与 0600 权限。使用同次内核、信任缓存和 Data，执行 `./unixnu payload`、`./unixnu bootimg`，生成 `out/oneplus13t/boot/stage7-run-53/boot.img`，87,953,408 字节，SHA-256 为 `ca75c2fc6953c92e30eb1897d95589756a85b5ce93666dcd70d62c52abd1149d`。Android v4、空 ramdisk、未变的 UEFI、160 MiB FAT 及其中实际内核、信任缓存、Data、ADT 身份、根 UUID、4 GiB 请求和四个外设参数回验通过。
+
+2026-10-27（北京时间），在用户已恢复 Fastboot 后核对设备 `3B15BB01BAT00000`、`product: sun` 和 `is-userspace: no`，临时启动上述镜像。发送 85,892 KB 用时 2.010 秒，Booting 用时 0.336 秒，均为 OKAY，总计 2.677 秒，未刷写分区；日志保存在该镜像目录的 `fastboot-boot.log`。等待 `TOUCH` 和两行 `SPI` 读数。本版仅补齐失败现场，尚未更改 FIFO/DMA 选择或 IRQ 路由，也未确认触控恢复。
