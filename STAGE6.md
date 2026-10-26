@@ -699,3 +699,9 @@ RAM Data 生成步骤在新卷已挂载时，合入上游 `seed-data-skip-setup.
 对照现有 Sheng 探测实现、T733 和 data-a-live：不同板型分别采用保留顶层 IRQ 使能的 SE DMA、FIFO PIO 或 GPI DMA。当前缺少 13T 的 `GENI_IF_DISABLE_RO`、完成状态和 FIFO 现场，尚不能确定应修改哪一条路径。下一候选仅把 `QcomGeniSpi` 已在取消命令前保存的 `status/irq/txfs/rxfs` 连同初始化时的 `firmware/if_disable` 显示为两条 `SPI` 行；失败后继续停止触控并释放触点。保持现有 GPIO、时钟、IRQ 路由和传输模式，避免恢复后的寄存器覆盖故障现场。
 
 主机测试执行实际读写回调，验证超时快照传递、成功时不发布错误、后续传输清除旧快照标记及读参数边界；既有 v1/v2、触点、按键与 GENI 回归通过。显示测试确认新增两行位于摄像头下方，保持图像边界、开关和 panic 保护。完整内核构建与寄存器真机读数待下一轮记录。
+
+### 第 52 次：早期控制台编译检查与修正
+
+[第 52 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/40358763110) 通过配置、输入回归及输入对象编译，但在最终 XNU 编译调用早期控制台构建时被现有检查拦截：`BootProgress.o` 新增 `_bzero` 依赖。状态行从三行增至五行后，局部副本由 240 字节变成 400 字节；启用自动栈清零的 ARM64 编译会为该数组生成外部清零调用。该检查限制早期控制台在内核服务可用前调用运行时助手，未因此生成新的可启动内核。
+
+修正把状态行副本改为逐行 80 字节，每次复制仍检查显示交接、busy 与 panic 状态。使用实际函数、ARM64 Apple 目标、自动栈初始化和相同 freestanding 限制，在旧函数上复现 `_bzero`，修改后确认没有 `_bzero/_memset/_memcpy` 调用；ASan/UBSan 显示边界和 panic 保护检查也通过。保留自动初始化及生产依赖检查，等待第 53 次完整构建。

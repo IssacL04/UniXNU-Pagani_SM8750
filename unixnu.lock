@@ -7,22 +7,22 @@ commit = "933f9360f1b70dfbda5548386a3d65e0358b4f7d"
 commit = "e45fbe30a7879e0b16e26dddb78538f1b00e0bff"
 
 [source."PaganiArmCpu"]
-commit = "ca800d5da2aac70d04c98c6cd20c5f94002d9719"
+commit = "4f8206071a7188b283846f973a16f0cf0df9b7c2"
 
 [source."PaganiArmDTPlatform"]
-commit = "ca800d5da2aac70d04c98c6cd20c5f94002d9719"
+commit = "4f8206071a7188b283846f973a16f0cf0df9b7c2"
 
 [source."PaganiDarwinBoot"]
-commit = "ca800d5da2aac70d04c98c6cd20c5f94002d9719"
+commit = "4f8206071a7188b283846f973a16f0cf0df9b7c2"
 
 [source."PaganiInput"]
-commit = "ca800d5da2aac70d04c98c6cd20c5f94002d9719"
+commit = "4f8206071a7188b283846f973a16f0cf0df9b7c2"
 
 [source."PaganiPanel"]
-commit = "ca800d5da2aac70d04c98c6cd20c5f94002d9719"
+commit = "4f8206071a7188b283846f973a16f0cf0df9b7c2"
 
 [source."PaganiVerifiedRoot"]
-commit = "ca800d5da2aac70d04c98c6cd20c5f94002d9719"
+commit = "4f8206071a7188b283846f973a16f0cf0df9b7c2"
 
 [source."QcomGeniSpi"]
 commit = "eac47baefe6a5d2368a70351e6ad1b6361bedbe2"
