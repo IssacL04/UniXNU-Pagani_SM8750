@@ -1,8 +1,8 @@
 # Stage 6–7：一加 13T 存储、用户态与系统界面
 
-更新：2026-10-27。**第 50 版已获真机确认：跳过 Setup 进入锁屏，电源键短按亮灭屏、长按打开关机界面；触控初始化失败。** 第 51 版首次 SPI 读取超时，触控仍无响应。第 53 版已完成构建、镜像回验及临时启动，实机读数确认 FIFO 接口关闭，首次 SPI 传输仍超时。当前源码接入 SE DMA 候选，待完整构建及实机验证。
+更新：2026-10-27。**第 50 版已获真机确认：跳过 Setup 进入锁屏，电源键短按亮灭屏、长按打开关机界面；触控初始化失败。** 第 51 版首次 SPI 读取超时，触控仍无响应。第 53 版已完成构建、镜像回验及临时启动，实机读数确认 FIFO 接口关闭，首次 SPI 传输仍超时。第 54 版 SE DMA 候选已通过完整构建、镜像回验及临时启动，等待 DMA 和触摸读数。
 
-当前测试镜像为 `out/oneplus13t/boot/stage7-run-53/boot.img`，构建使用设备源码 `c5edbf3`。第 50、51 版镜像继续保留；桌面应用交互、亮度及长期稳定性仍未验证。当前概况见 [README](README.md)，分项证据见 [porting.toml](porting.toml)。下文按时间保留各轮诊断与后续修复，最新结果见末尾。
+当前测试镜像为 `out/oneplus13t/boot/stage7-run-54/boot.img`，构建使用设备源码 `fba1472`。第 50、51、53 版镜像继续保留；桌面应用交互、亮度及长期稳定性仍未验证。当前概况见 [README](README.md)，分项证据见 [porting.toml](porting.toml)。下文按时间保留各轮诊断与后续修复，最新结果见末尾。
 
 ## iPadOS 输入
 
@@ -732,3 +732,12 @@ SPI FIFO tx=0 rx=0
 SE 内部状态生成保持开启，ArmCpu 已在 GIC 初始化时屏蔽未使用的 SPI，中断仍未接入处理函数。DMA 失败显示状态及 TX/RX length-in 计数。由于该板的 DMA reset 完成尚未验收，暴露给硬件的 8 KiB 缓冲区保留到重启，避免错误路径释放仍可能被访问的内存。
 
 本地 ASan/UBSan 的协议、实际读写适配器、PIO/SE DMA 模型、两种 SMMU 构建配置及显示/panic 回归通过。完整对象编译和这条 DMA 路径的实机行为尚未验证；触控不能标为可用。
+
+
+### 第 54 次：SE DMA 候选构建与临时启动
+
+[第 54 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/40369222494) 全部成功。源码固定为设备 `fba147283bead8e3e9f7c3ce9edc36f012bb1ec9`、主仓库 `1397e2ddbea6fd052897a92047c8ed56f8afd7f9`、驱动 `26a32f52812c9b4cf76da4a668a68bd0997589d7`、SM8750 公共包 `b6706a5d941808e81851e783de450913f33d5f8a`。18 个组件、配置和生产约束、UFS/触控回归、原版及编译后 HID/背光 ABI、早期控制台运行时检查、完整内核链接和预链接均通过。实际内核含 DMA 与 SMMU 诊断格式，大小 127,799,296 字节，SHA-256 为 `1491d7140e11c84157732bb33b9d4ed9cadf3b0dfe978db7901d3c814988dfc6`。
+
+同次 RAM Data UUID 为 `A2F3B373-709F-4496-991A-9627B4EA1FAA`，与内核一致；完整 1 GiB 逻辑哈希和打包格式通过，独立 APFS 读回确认五组偏好及 UID/GID 501、0600 权限。配套镜像为 `out/oneplus13t/boot/stage7-run-54/boot.img`，87,953,408 字节，SHA-256 为 `04bb97f75226933ff612847ba851b77d807dac27e581e60c6f6b6b4ab4af70dc`。Android v4、空 ramdisk、未变 UEFI、160 MiB FAT 及其中实际内核、信任缓存、Data、ADT 身份、根 UUID、4 GiB 请求和四个外设参数回验通过。第 53 版镜像保留。
+
+用户回复“#54 已连接”后，核对序列号 `3B15BB01BAT00000`、`product: sun`、`is-userspace: no` 和镜像哈希，执行 `fastboot boot`。Sending 用时 2.009 秒、Booting 用时 0.338 秒，均为 OKAY，总计 2.673 秒，未刷写分区。日志位于镜像目录的 `fastboot-boot.log`。等待本版 `TOUCH` 与 `SPI DMA` 或 `SMMU` 读数；这些主机与传输结果尚未证明 DMA 已在手机上完成数据搬运，也未证明触控恢复。
