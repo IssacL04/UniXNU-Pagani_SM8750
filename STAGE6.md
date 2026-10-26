@@ -654,8 +654,19 @@ README 已汇总当前全部已支持的启动、运行、存储、显示、诊�
 
 按用户要求拉取并合并官方 UniXNU `ae68700`，参考[跳过 Setup](https://unixnu.com/zh/guide/skip-setup)和[输入移植](https://unixnu.com/zh/porting/input)指南继续准备候选。上游的 J120AP / product-id 身份、嵌套 ADT 节点及 XNU 补丁与本地 13T 组件共同保留；格式 2 检查已确认补丁可以顺序应用，既有硬件 compatible 和 4 GiB handoff 请求仍在。
 
-RAM Data 生成步骤在新卷已挂载时，合入上游 `seed-data-skip-setup.py` 的五组偏好，标记 Setup 完成，关闭 mini-buddy、云配置入口和自动暗屏，保留原有无关键、mobile 所有权与 0600 文件权限。`ram-data/seed.json` 将记录 `setup_skipped=true`。这一步发生在 macOS 的种子准备阶段，因此 Linux 本地封装可直接使用同次构建的成品种子；此路径没有调用 payload 的 `--skip-setup` 二次编辑选项。原始 OS/SystemOS 镜像仍只读，Data 仍随重启恢复。
+RAM Data 生成步骤在新卷已挂载时，合入上游 `seed-data-skip-setup.py` 的五组偏好，标记 Setup 完成，关闭 mini-buddy、云配置入口和自动暗屏，保留原有无关键、mobile 所有权与 0600 文件权限。`ram-data/seed.json` 记录 `setup_skipped=true`。这一步发生在 macOS 的种子准备阶段，因此 Linux 本地封装可直接使用同次构建的成品种子；此路径没有调用 payload 的 `--skip-setup` 二次编辑选项。原始 OS/SystemOS 镜像仍只读，Data 仍随重启恢复。
 
 触控设备的报告描述符改为上游已实测的键盘集合在前、触控集合在后，实际触点仍来自 S3910。该排列用于原版通用 HID 事件驱动的匹配，不代表已确认这就是 13T 无触摸的唯一原因。候选还开启 `pagani-peripheral-status=1`：系统画面顶部保留 `KEYS`、`TOUCH`、`PANEL` 三行，显示初始化阶段、十六进制结果 `r`、十六进制采样值 `v` 和十进制成功报告或 DSI 命令数 `n`。状态每秒以及每次系统画面复制后刷新；普通启动日志继续遵守显示交接，panic 画面不受覆盖。
 
-主机检查已通过 Setup 偏好合并及权限、HID 应用集合顺序和报告长度、触点释放、按键消抖、SPMI/GCC/DSI 模型，以及状态绘制的边界、开关和 panic 保护。完整内核编译、macOS APFS 种子生成及直接进入 SpringBoard 的效果仍待下一次云端构建和真机启动验证。
+主机检查已通过 Setup 偏好合并及权限、HID 应用集合顺序和报告长度、触点释放、按键消抖、SPMI/GCC/DSI 模型，以及状态绘制的边界、开关和 panic 保护。完整构建和镜像读回结果见下面的第 50 次记录；直接进入 SpringBoard 及外设响应仍需真机观察。
+
+
+### 第 50 次：跳过 Setup 与外设状态候选
+
+[第 50 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/40337200766) 全部成功。源码固定为设备 `1e98cc4c10c86904d7cafc6cb98dc4a29538628d`、主仓库 `7394044ed7d3e55c94a74890866b085c48f5cde3`、驱动 `a7501893746fea0ab61e7e6541565b56b7d3726b`；SM8750 公共包仍为 `9e90b16861612c0251c453ccbf6cf10592ea87e2`。18 个组件、格式 2 与 UFS 回归、输入和显示对象的原版 ABI 绑定检查、完整内核编译及预链接均通过。内核为 `out/oneplus13t/actions/run-50/kernel/kernel.macho`，127,782,912 字节，SHA-256 为 `c4852b897e2400416ece72e8fd76b8daa9c6ba45c8fd82d71b375ce22d1448ae`。
+
+同次生成的 RAM Data UUID 为 `2B96615F-06A6-42D2-8831-00359E87D78C`，1 GiB 逻辑镜像打包为 1,032,304 字节。打包格式和完整逻辑哈希通过检查；独立 APFS 读回确认五组 Setup 偏好、21H461 migration 标记、防自动暗屏、UID/GID 501 和 0600 权限，内核中的 Data UUID 也一致。`seed.json` 的 `setup_skipped=true` 与实际内容相符。`payload.json` 中 `skip_setup=false` 仅表示本地未使用二次编辑选项，已在云端写好的偏好保留在实际镜像中。
+
+使用同次内核、信任缓存和 Data，复用未变的 UEFI，执行 `./unixnu payload` 和 `./unixnu bootimg`。最终镜像位于 `out/oneplus13t/boot/stage7-run-50/boot.img`，87,949,312 字节，SHA-256 为 `2ff4b9bfc572c85940cac96490dbca24c4c75121c451c3f488202831de8497c8`。Android v4、空 Android ramdisk、160 MiB 内嵌 FAT 读回通过；实际负载的内核、信任缓存、Data、ADT、4 GiB 内存请求、根 UUID、J120AP/product-id 和四个外设启动参数均与报告及配置一致。第 49 次镜像继续保留。
+
+2026-10-26，在已连接的 `3B15BB01BAT00000` 上读取到 `product: sun` 和 `is-userspace: no` 后，用 `fastboot boot` 临时启动第 50 次镜像。发送 85,888 KB 用时 1.979 秒，Booting 用时 0.337 秒，均为 OKAY，总计 2.579 秒，没有刷写分区。输出保存在该镜像目录的 `fastboot-boot.log`。这确认引导器接受了镜像；是否进入 SpringBoard，以及 `KEYS / TOUCH / PANEL` 状态和实际外设响应，等待手机观察反馈。
