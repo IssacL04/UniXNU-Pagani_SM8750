@@ -637,4 +637,13 @@ README 已汇总当前全部已支持的启动、运行、存储、显示、诊�
 
 代码先读取 doorbell 和完成状态，再检查截止时间；两者之间若发生调度延迟，旧代码会依据先前的忙状态直接返回超时。照片中的前后状态与这条竞态路径一致。失败快照采集晚于轮询，也不是原子的；现场没有调度跟踪，尚不能确认是哪段执行造成了长间隔。SMMU 的 `cb=400->400` 没有显示这次请求新增的该位错误，不能单凭这个已有状态判定 SMMU 是根因。
 
-驱动提交 `7ae6c0283f590d6f82ddacee103fa11dc96c3ec5` 在发现到期后再进行一次完整状态采样。确认 doorbell 已清除、OCS 有效后，仍走原有响应、任务标记、LUN、长度和数据校验；仍被控制器占用、未接受或报告硬件错误的请求继续隔离。新增用例先在旧代码上复现误超时，再在修复后通过。`TransferPoll` 和实际 `RootCommands` 的 ASan/UBSan 检查通过，覆盖 SM8750 只读路径及共享实现的其他编译配置。格式 2 的 18 个组件、版本固定及 ADT 检查通过；完整 `test-stage6.py` 也通过，包括 21 处生产 ARM64 汇编检查、队列与协议边界、根窗口读取和 SMMU 测试。修复尚未完成新内核构建或真机复测，三个新增外设也尚未通过硬件验收。
+驱动提交 `7ae6c0283f590d6f82ddacee103fa11dc96c3ec5` 在发现到期后再进行一次完整状态采样。确认 doorbell 已清除、OCS 有效后，仍走原有响应、任务标记、LUN、长度和数据校验；仍被控制器占用、未接受或报告硬件错误的请求继续隔离。新增用例先在旧代码上复现误超时，再在修复后通过。`TransferPoll` 和实际 `RootCommands` 的 ASan/UBSan 检查通过，覆盖 SM8750 只读路径及共享实现的其他编译配置。格式 2 的 18 个组件、版本固定及 ADT 检查通过；完整 `test-stage6.py` 也通过，包括 21 处生产 ARM64 汇编检查、队列与协议边界、根窗口读取和 SMMU 测试。随后已完成第 49 次内核构建（见下一节），真机复测仍待进行，三个新增外设尚未通过硬件验收。
+
+
+### 第 49 次：UFS 完成状态复查候选已构建
+
+[第 49 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/40327493773) 全部成功。源码固定为设备 `be18db0025fbde66ffd0a55302f9c1bc0fe3c122`、主仓库 `0853a79ade7da1611e3f757f384cd43d1d7852f2`、驱动 `7ae6c0283f590d6f82ddacee103fa11dc96c3ec5`。18 个组件、UFS 回归、原版接口绑定、完整内核编译与预链接均通过。内核位于 `out/oneplus13t/actions/run-49/kernel/kernel.macho`，127,778,816 字节，SHA-256 为 `ee6a0a0b5d1806965c263b6067c32b77af86e8f858e476f0e33a7c0d4fe4c3fe`。
+
+使用同次构建的信任缓存及 RAM Data，复用未变的 UEFI 固件，执行 `./unixnu payload` 和 `./unixnu bootimg`。最终镜像为 `out/oneplus13t/boot/stage7-run-49/boot.img`，87,945,216 字节，SHA-256 为 `5bceb7c3cac31cafde66d8b349c0fec547684aa16e7266645af544a7ae20564f`。Android v4、空 Android ramdisk、160 MiB 内嵌 FAT 与 stock DTB 的封装回验通过；FAT 读回核对了内核、信任缓存、Data、三个外设启动参数及 ADT 的 4 GiB 请求、根 UUID 和内存映射占位项。
+
+第 48 次镜像和启动日志继续保留。第 49 次尚未真机启动，不能据此宣称 UFS 长时间运行已经稳定，或触摸、按键、亮度控制已经修复。

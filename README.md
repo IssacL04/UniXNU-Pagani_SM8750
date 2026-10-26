@@ -6,7 +6,7 @@ Builds 39 and 48 reached the iPadOS UI on a OnePlus 13T. UFS root reads and CPU 
 
 The current source adds S3910 LBP touch, physical power/volume keys and DSI brightness/display blanking. [Actions build 48](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/40183635568) passed the portable transport tests, original and compiled HID/backlight ABI checks, full kernel link and prelink. Touch currently polls ATTN and needs retained power/microcode; presentation remains a 60 Hz software timer. See the input/display sections of [porting.toml](porting.toml) for limits.
 
-The matching kernel is at `out/oneplus13t/actions/run-48/kernel/kernel.macho` (127,778,816 bytes). Its complete Android v4 image is at `out/oneplus13t/boot/stage7-run-48/boot.img` (87,945,216 bytes), assembled locally with the unchanged UEFI firmware. Image unpacking and FAT readback verified its inputs. Hardware testing reached the UI, but touch, volume/power keys and brightness controls did not respond before the UFS panic. The source now rechecks completion after the polling deadline; regression tests pass, while a new kernel build and hardware retest remain pending.
+The latest candidate is [Actions build 49](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/40327493773), including the UFS completion recheck. The kernel is at `out/oneplus13t/actions/run-49/kernel/kernel.macho` (127,778,816 bytes), and the complete Android v4 image is at `out/oneplus13t/boot/stage7-run-49/boot.img` (87,945,216 bytes). Cloud regressions, full kernel link/prelink, local image unpacking and FAT readback passed. Build 49 has not been booted on hardware; the input and brightness failures observed with build 48 remain unresolved.
 
 ## Workspace and inputs
 
