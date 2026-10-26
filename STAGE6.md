@@ -670,3 +670,14 @@ RAM Data 生成步骤在新卷已挂载时，合入上游 `seed-data-skip-setup.
 使用同次内核、信任缓存和 Data，复用未变的 UEFI，执行 `./unixnu payload` 和 `./unixnu bootimg`。最终镜像位于 `out/oneplus13t/boot/stage7-run-50/boot.img`，87,949,312 字节，SHA-256 为 `2ff4b9bfc572c85940cac96490dbca24c4c75121c451c3f488202831de8497c8`。Android v4、空 Android ramdisk、160 MiB 内嵌 FAT 读回通过；实际负载的内核、信任缓存、Data、ADT、4 GiB 内存请求、根 UUID、J120AP/product-id 和四个外设启动参数均与报告及配置一致。第 49 次镜像继续保留。
 
 2026-10-26，在已连接的 `3B15BB01BAT00000` 上读取到 `product: sun` 和 `is-userspace: no` 后，用 `fastboot boot` 临时启动第 50 次镜像。发送 85,888 KB 用时 1.979 秒，Booting 用时 0.337 秒，均为 OKAY，总计 2.579 秒，没有刷写分区。输出保存在该镜像目录的 `fastboot-boot.log`。这确认引导器接受了镜像；是否进入 SpringBoard，以及 `KEYS / TOUCH / PANEL` 状态和实际外设响应，等待手机观察反馈。
+
+
+### 第 50 次锁屏与触控故障定位
+
+用户照片确认第 50 次已显示壁纸、日期时间和底部手势条，进入锁屏，跳过 Setup 生效。照片第一行显示 `PMIC sample r=0 ... n=8`，用户观察到音量键和电源键操作会增加计数，并进一步确认电源键短按可亮灭屏、长按可打开关机界面。音量变化的实际系统效果尚未单独确认。触控行停在 `TouchComm start r=ffffffb9 ... n=0`；`ffffffb9` 对应适配层的 `-71`，表示协议校验失败，尚未进入 HID 触点上报。`v` 被摄像头遮住，用户也无法读出。第三行记录 `DSI disabled r=e00002d8`；按用户要求，本轮只处理触控。
+
+对照用户指定的 [data-a-live S3910P 代码](https://github.com/ShueiTsuki/data-a-live/blob/ba094818ed915cd3689937180a6f619c0e9c86ef/wsl/pandora_touch.c)、[OnePlus S3910 HBP 原厂实现](https://github.com/OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8750/tree/6a196f79f77acd55cf302e1696c038e4cad99254/vendor/oplus/kernel/tp/hbp/hbp/chips/synaptics/s3910)，并检查 UniXNU 列表中的 [T733](https://github.com/RigoLigoRLC/unixnu-sm-t733/blob/7ec704db1f60d99ea8606aabada919ed2dcbae1b/package/T733Touch.cpp) 与 [pong](https://github.com/Chengdong-Yu/UniXNU-pong/tree/ab74f075320fe54eee24d5d150386e5b0f0f427f)。T733 使用 FocalTech、pong 使用 Goodix；data-a-live 的 S3910P 协议最接近，但其 SM8850 GPI、电源引脚和 Xiaomi 原始帧矩阵与 13T 不同。
+
+源码中确认两处兼容性缺口：13T 读 SPI 时未像原厂一样同时发送全 `0xff` 字节；协议层只接受 v1 的 `0xa5` 标记，不能处理 v2。实际失败报头尚未取得，因此这两处缺口仍是本次故障的候选原因。新实现修正全双工读法，在通过报头校验后选择 v1/v2；v2 核对 CRC6/CRC16，按芯片公布的上限分片，处理 ACK/RETRY，并在命令重发时保留序列位。原有 LBP 设置、报告格式读回及触点生命周期继续使用 13T 路径。复位后的等待对齐 OnePlus S3910 的 100 ms，命令等待采用最多 300 次、间隔 10 ms 的轮询。未加入其他机型的 GPIO、RPMh/GPI 或触摸矩阵配置。
+
+诊断行下移四个文字行，避开摄像头；触控错误显示 `T<协议版本> <命令> <阶段>`。版本 0 表示尚未识别到有效协议报头；`header/continued` 的 `v` 按小端保存收到的前四字节，其他校验阶段保存失败的长度、状态或数值。主机回归先在旧的实际 `readTouch` 回调上复现缺少 `0xff` 发送数据，再验证修改后通过；v1/v2 报文、固定命令字节、独立 CRC、分片、延迟响应、重试、损坏报文及有界原始帧排空均通过 ASan/UBSan。状态绘制的保护范围、camera 区域保留、显示交接和 panic 保护也通过。完整内核构建及新候选的真机触摸效果待后续验证。

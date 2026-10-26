@@ -10,7 +10,9 @@ The current source adds S3910 LBP touch, physical power/volume keys and DSI brig
 
 The latest candidate is [Actions build 50](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/40337200766). It merges official UniXNU through `ae68700`, prepares RAM Data to skip Setup and keep the display awake, and adopts the upstream keyboard-first HID layout for the touch device. `pagani-peripheral-status=1` retains initialization results and report/command counts in three screen rows. Cloud regressions, compiled HID/backlight ABI checks, full kernel link/prelink and local image readback passed. Independent APFS readback confirmed all five Setup preference groups and their ownership/modes; the original OS inputs remain read-only.
 
-The kernel is at `out/oneplus13t/actions/run-50/kernel/kernel.macho` (127,782,912 bytes), and the complete Android v4 image is at `out/oneplus13t/boot/stage7-run-50/boot.img` (87,949,312 bytes). It was sent with `fastboot boot`; Sending and Booting returned `OKAY`, without flashing a partition. SpringBoard entry, touch, keys and brightness still require runtime observation. See [STAGE6.md](STAGE6.md) for exact revisions and checks.
+The kernel is at `out/oneplus13t/actions/run-50/kernel/kernel.macho` (127,782,912 bytes), and the complete Android v4 image is at `out/oneplus13t/boot/stage7-run-50/boot.img` (87,949,312 bytes). It was sent with `fastboot boot`; Sending and Booting returned `OKAY`, without flashing a partition. The phone reached the lock screen; the user confirmed short power presses switch the screen off/on and a long press opens the shutdown UI. Volume presses advance the key-report counter. Touch failed at TouchComm startup with no reports, and brightness remains unqualified. See [STAGE6.md](STAGE6.md) for exact revisions and checks.
+
+The next touch candidate aligns SPI reads with the stock `0xff` full-duplex transfer, detects TouchComm v1/v2, validates v2 CRC and continuation traffic, and moves detailed protocol diagnostics below the camera cutout. Portable tests pass; a full build and hardware retest are pending.
 
 ## Workspace and inputs
 
