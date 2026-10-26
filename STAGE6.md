@@ -1,6 +1,6 @@
 # Stage 6–7：一加 13T 存储、用户态与系统界面
 
-更新：2026-10-27。**第 50 版已获真机确认：跳过 Setup 进入锁屏，电源键短按亮灭屏、长按打开关机界面；触控初始化失败。** 第 51 版首次 SPI 读取超时，触控仍无响应。第 53 版已完成构建、镜像回验及临时启动，新增两行 GENI 超时前寄存器现场，等待手机读数以定位 FIFO 和完成状态。
+更新：2026-10-27。**第 50 版已获真机确认：跳过 Setup 进入锁屏，电源键短按亮灭屏、长按打开关机界面；触控初始化失败。** 第 51 版首次 SPI 读取超时，触控仍无响应。第 53 版已完成构建、镜像回验及临时启动，实机读数确认 FIFO 接口关闭，首次 SPI 传输仍超时。当前源码接入 SE DMA 候选，待完整构建及实机验证。
 
 当前测试镜像为 `out/oneplus13t/boot/stage7-run-53/boot.img`，构建使用设备源码 `c5edbf3`。第 50、51 版镜像继续保留；桌面应用交互、亮度及长期稳定性仍未验证。当前概况见 [README](README.md)，分项证据见 [porting.toml](porting.toml)。下文按时间保留各轮诊断与后续修复，最新结果见末尾。
 
@@ -713,3 +713,22 @@ RAM Data 生成步骤在新卷已挂载时，合入上游 `seed-data-skip-setup.
 同次 RAM Data UUID 为 `A117890E-4D7A-4B21-8D46-CE0494D928B0`，与内核一致；1 GiB 逻辑哈希和打包格式通过，独立 APFS 读回确认五组 Setup 偏好、migration、防自动暗屏、UID/GID 501 与 0600 权限。使用同次内核、信任缓存和 Data，执行 `./unixnu payload`、`./unixnu bootimg`，生成 `out/oneplus13t/boot/stage7-run-53/boot.img`，87,953,408 字节，SHA-256 为 `ca75c2fc6953c92e30eb1897d95589756a85b5ce93666dcd70d62c52abd1149d`。Android v4、空 ramdisk、未变的 UEFI、160 MiB FAT 及其中实际内核、信任缓存、Data、ADT 身份、根 UUID、4 GiB 请求和四个外设参数回验通过。
 
 2026-10-27（北京时间），在用户已恢复 Fastboot 后核对设备 `3B15BB01BAT00000`、`product: sun` 和 `is-userspace: no`，临时启动上述镜像。发送 85,892 KB 用时 2.010 秒，Booting 用时 0.336 秒，均为 OKAY，总计 2.677 秒，未刷写分区；日志保存在该镜像目录的 `fastboot-boot.log`。等待 `TOUCH` 和两行 `SPI` 读数。本版仅补齐失败现场，尚未更改 FIFO/DMA 选择或 IRQ 路由，也未确认触控恢复。
+
+
+### 第 53 版反馈：FIFO 关闭，接入 SE DMA 候选
+
+用户抄录的现场为：
+
+```text
+TOUCH T0 00 header r=ffffff92 v=0 n=0
+SPI fw=102 if=1 st=41 irq=0
+SPI FIFO tx=0 rx=0
+```
+
+触控仍无响应。`if` 的 bit 0 确认 FIFO 接口关闭；`st` 的 bit 0 表示主引擎仍忙。FIFO 状态为空，首次四字节读取没有完成，尚未进入 TouchComm 协议识别。`st=0x41` 不表示 secondary engine 活跃，该位在 bit 12。
+
+当前候选在 FIFO 关闭时使用现有 QcomGeniSpi 的 SE DMA 分支。13T 实际 DTB 给出 QUP stream `0xa3`、apps SMMU `0x15000000/0x100000`；GPI 的 stream 不用于这条路径。驱动分配独立的 4 KiB TX/RX 页，显式维护缓存，并复用现有 SMMU 规划器寻找独占 VA64 bypass bank。UFS 映射保持原样；已有翻译、共享、掩码、重复映射或固件 bank 0 会被拒绝，屏幕显示对应 SMR/S2CR，不扩大固件映射接管范围。
+
+SE 内部状态生成保持开启，ArmCpu 已在 GIC 初始化时屏蔽未使用的 SPI，中断仍未接入处理函数。DMA 失败显示状态及 TX/RX length-in 计数。由于该板的 DMA reset 完成尚未验收，暴露给硬件的 8 KiB 缓冲区保留到重启，避免错误路径释放仍可能被访问的内存。
+
+本地 ASan/UBSan 的协议、实际读写适配器、PIO/SE DMA 模型、两种 SMMU 构建配置及显示/panic 回归通过。完整对象编译和这条 DMA 路径的实机行为尚未验证；触控不能标为可用。
