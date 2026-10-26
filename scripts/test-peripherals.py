@@ -13,7 +13,7 @@ spi=tree/'drivers/QcomGeniSpi'
 with tempfile.TemporaryDirectory(prefix='pagani-peripherals-') as folder:
     binary=Path(folder)/'peripherals'
     adapter=(source/'PaganiInput.cpp').read_text()
-    read=adapter[adapter.index('    static int readTouch('):adapter.index('    static int writeTouch(')]
+    read=adapter[adapter.index('    int transferTouch('):adapter.index('    static void sleepTouch(')]
     (Path(folder)/'PaganiReadTouch.inc').write_text(read)
     objects=[]
     for path in (source/'S3910.c',spi/'GeniSpi.c'):

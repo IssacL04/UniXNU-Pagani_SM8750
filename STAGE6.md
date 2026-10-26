@@ -1,6 +1,6 @@
 # Stage 6–7：一加 13T 存储、用户态与系统界面
 
-更新：2026-10-27。**第 50 版已获真机确认：跳过 Setup 进入锁屏，电源键短按亮灭屏、长按打开关机界面；触控初始化失败。** 第 51 版修正 SPI 读法并加入 TouchComm v2，已完成云端构建、镜像回验和临时启动，触控效果等待手机反馈。
+更新：2026-10-27。**第 50 版已获真机确认：跳过 Setup 进入锁屏，电源键短按亮灭屏、长按打开关机界面；触控初始化失败。** 第 51 版修正 SPI 读法并加入 TouchComm v2，完成构建及临时启动后，用户反馈首次 SPI 读取超时，触控仍无响应。下一版补齐 GENI 超时前的寄存器现场，定位 FIFO 和完成状态。
 
 当前测试镜像为 `out/oneplus13t/boot/stage7-run-51/boot.img`，构建使用设备源码 `9d9726f`。第 50 版镜像保留为锁屏和电源键的实测基线；桌面应用交互、亮度及长期稳定性仍未验证。当前概况见 [README](README.md)，分项证据见 [porting.toml](porting.toml)。下文按时间保留各轮诊断与后续修复，最新结果见末尾。
 
@@ -691,3 +691,11 @@ RAM Data 生成步骤在新卷已挂载时，合入上游 `seed-data-skip-setup.
 最终镜像为 `out/oneplus13t/boot/stage7-run-51/boot.img`，87,953,408 字节，SHA-256 为 `3c1017d97dfdc3014a3770fa9e1223e98ead65882f47fbaf0b641f8be94b080e`。Android v4、空 ramdisk、内嵌 UEFI 和 160 MiB FAT 回验通过；从 FAT 实际提取的内核、信任缓存、Data、ADT、4 GiB 请求、根 UUID、J120AP/product-id 及四个外设参数均匹配。第 50 版镜像继续保留。
 
 2026-10-27（北京时间），对设备 `3B15BB01BAT00000` 只读核对 `product: sun`、`is-userspace: no` 后执行 `fastboot boot`。发送 85,892 KB 用时 2.025 秒，Booting 用时 0.338 秒，均为 OKAY，总计 2.649 秒；日志为该镜像目录的 `fastboot-boot.log`。没有刷写分区。引导器接受镜像后，触控响应及 `T0/T1/T2` 状态等待用户观察；本次只修正触控兼容性和诊断位置，亮度问题暂未处理。
+
+### 第 51 次真机：首次 SPI 传输超时
+
+用户确认点击仍无反应，状态为 `TOUCH T0 00 header r=ffffff92 v=0 n=0`。`ffffff92` 对应 `-110`；此处 `s3910_start()` 的第一次 `message()` 尚未发送识别命令，4 字节读回调就从 `geni_spi_transfer()` 返回超时。`v` 在调用读回调前清零，传输成功后才写入报头，因此不能把本次 `v=0` 解释为芯片返回全零，也不能据此判定 TouchComm v1/v2。
+
+对照现有 Sheng 探测实现、T733 和 data-a-live：不同板型分别采用保留顶层 IRQ 使能的 SE DMA、FIFO PIO 或 GPI DMA。当前缺少 13T 的 `GENI_IF_DISABLE_RO`、完成状态和 FIFO 现场，尚不能确定应修改哪一条路径。下一候选仅把 `QcomGeniSpi` 已在取消命令前保存的 `status/irq/txfs/rxfs` 连同初始化时的 `firmware/if_disable` 显示为两条 `SPI` 行；失败后继续停止触控并释放触点。保持现有 GPIO、时钟、IRQ 路由和传输模式，避免恢复后的寄存器覆盖故障现场。
+
+主机测试执行实际读写回调，验证超时快照传递、成功时不发布错误、后续传输清除旧快照标记及读参数边界；既有 v1/v2、触点、按键与 GENI 回归通过。显示测试确认新增两行位于摄像头下方，保持图像边界、开关和 panic 保护。完整内核构建与寄存器真机读数待下一轮记录。
