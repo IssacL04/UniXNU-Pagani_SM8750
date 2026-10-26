@@ -646,4 +646,16 @@ README 已汇总当前全部已支持的启动、运行、存储、显示、诊�
 
 使用同次构建的信任缓存及 RAM Data，复用未变的 UEFI 固件，执行 `./unixnu payload` 和 `./unixnu bootimg`。最终镜像为 `out/oneplus13t/boot/stage7-run-49/boot.img`，87,945,216 字节，SHA-256 为 `5bceb7c3cac31cafde66d8b349c0fec547684aa16e7266645af544a7ae20564f`。Android v4、空 Android ramdisk、160 MiB 内嵌 FAT 与 stock DTB 的封装回验通过；FAT 读回核对了内核、信任缓存、Data、三个外设启动参数及 ADT 的 4 GiB 请求、根 UUID 和内存映射占位项。
 
-第 48 次镜像和启动日志继续保留。第 49 次尚未真机启动，不能据此宣称 UFS 长时间运行已经稳定，或触摸、按键、亮度控制已经修复。
+第 48 次镜像和启动日志继续保留。构建与封装通过时，第 49 次尚未上机；随后的实测见下一节。
+
+### 第 49 次真机与后续输入测试候选
+
+2026-10-26，用户授权后，以 `fastboot -s 3B15BB01BAT00000 boot` 临时启动上述第 49 次镜像。发送 85,884 KB，用时 2.012 秒；Booting 用时 0.337 秒，均返回 OKAY，总计 2.674 秒，没有刷写分区。启动后设备退出 fastboot，日志为 `out/oneplus13t/boot/stage7-run-49/fastboot-boot.log`。用户反馈“不再panic了，但是这些功能依然不可用”。本次据此记录为观察期间未复现第 48 次的 panic；未取得持续时长或完整运行日志，触摸、音量键、电源键短按和亮度仍未通过实测。
+
+按用户要求拉取并合并官方 UniXNU `ae68700`，参考[跳过 Setup](https://unixnu.com/zh/guide/skip-setup)和[输入移植](https://unixnu.com/zh/porting/input)指南继续准备候选。上游的 J120AP / product-id 身份、嵌套 ADT 节点及 XNU 补丁与本地 13T 组件共同保留；格式 2 检查已确认补丁可以顺序应用，既有硬件 compatible 和 4 GiB handoff 请求仍在。
+
+RAM Data 生成步骤在新卷已挂载时，合入上游 `seed-data-skip-setup.py` 的五组偏好，标记 Setup 完成，关闭 mini-buddy、云配置入口和自动暗屏，保留原有无关键、mobile 所有权与 0600 文件权限。`ram-data/seed.json` 将记录 `setup_skipped=true`。这一步发生在 macOS 的种子准备阶段，因此 Linux 本地封装可直接使用同次构建的成品种子；此路径没有调用 payload 的 `--skip-setup` 二次编辑选项。原始 OS/SystemOS 镜像仍只读，Data 仍随重启恢复。
+
+触控设备的报告描述符改为上游已实测的键盘集合在前、触控集合在后，实际触点仍来自 S3910。该排列用于原版通用 HID 事件驱动的匹配，不代表已确认这就是 13T 无触摸的唯一原因。候选还开启 `pagani-peripheral-status=1`：系统画面顶部保留 `KEYS`、`TOUCH`、`PANEL` 三行，显示初始化阶段、十六进制结果 `r`、十六进制采样值 `v` 和十进制成功报告或 DSI 命令数 `n`。状态每秒以及每次系统画面复制后刷新；普通启动日志继续遵守显示交接，panic 画面不受覆盖。
+
+主机检查已通过 Setup 偏好合并及权限、HID 应用集合顺序和报告长度、触点释放、按键消抖、SPMI/GCC/DSI 模型，以及状态绘制的边界、开关和 panic 保护。完整内核编译、macOS APFS 种子生成及直接进入 SpringBoard 的效果仍待下一次云端构建和真机启动验证。

@@ -56,28 +56,47 @@ class RamDataPolicyTest(unittest.TestCase):
             disable(self.root, self.daemons)
         self.assertFalse((self.root / 'db').exists())
 
-    def test_userspace_keeps_setup_and_unrelated_preferences(self):
+    def test_userspace_skips_setup_and_preserves_unrelated_preferences(self):
         preferences = self.root / 'mobile/Library/Preferences'
         preferences.mkdir(parents=True)
         setup = preferences / 'com.apple.purplebuddy.plist'
-        original = plistlib.dumps({'SetupDone': False})
+        original = plistlib.dumps({'SetupDone': False, 'ExistingPreference': 9})
         setup.write_bytes(original)
         springboard = preferences / 'com.apple.springboard.plist'
         springboard.write_bytes(plistlib.dumps({'ExistingPreference': 7}))
         cache = preferences / 'com.apple.MobileGestalt.plist'
         cache.write_bytes(plistlib.dumps({'DeviceClass': 'iPod'}))
         prepare_userspace(self.root)
-        self.assertEqual(setup.read_bytes(), original)
+        values = plistlib.loads(setup.read_bytes())
+        self.assertTrue(values['SetupDone'] and values['SetupFinishedAllSteps'])
+        self.assertEqual(values['SetupVersion'], 11)
+        self.assertFalse(values['daemonizeNeedsToRun'])
+        self.assertEqual(values['ExistingPreference'], 9)
+        mini = plistlib.loads((preferences / 'com.apple.purplebuddy.notbackedup.plist').read_bytes())
+        self.assertEqual(len(mini), 7)
+        self.assertTrue(all(value is False for value in mini.values()))
+        managed = plistlib.loads((preferences / 'com.apple.managedconfiguration.notbackedup.plist').read_bytes())
+        self.assertFalse(managed['LockdownActivationIndicatesCloudConfigurationAvailable'])
         self.assertFalse(cache.exists())
         values = plistlib.loads(springboard.read_bytes())
         self.assertEqual(values['ExistingPreference'], 7)
         self.assertTrue(values['SBDisableAutoDim'] and values['SBDisableIdleSleep'])
+        self.assertTrue(values['SBDontDimOrLockOnAC'] and values['BKNoWatchdogs'])
+        self.assertEqual(values['FBLaunchWatchdogExceptions'], {'com.apple.purplebuddy': 100.0})
+        self.assertFalse(values['MCForceShowCloudConfigurationUI'])
         self.assertEqual(springboard.stat().st_mode & 0o777, 0o600)
         self.assertTrue((self.root / 'containers/Shared/SystemGroup').is_dir())
         migration = plistlib.loads((preferences / 'com.apple.migration.plist').read_bytes())
         self.assertEqual(migration['LastSystemVersion'], '21H461')
         self.assertEqual(migration['DMUserDataDisposition']['buildVersion'], '21H461')
         self.assertFalse(migration['DMUserDataDisposition']['SyntheticDidUpgrade'])
+        owner = (self.root / 'mobile').stat()
+        for path in preferences.glob('*.plist'):
+            self.assertEqual((path.stat().st_uid, path.stat().st_gid), (owner.st_uid, owner.st_gid))
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        before = {path.name: path.read_bytes() for path in preferences.glob('*.plist')}
+        prepare_userspace(self.root)
+        self.assertEqual({path.name: path.read_bytes() for path in preferences.glob('*.plist')}, before)
 
     def test_compatibility_checks_original_bytes(self):
         for volume, relative, offset, original in module['COMPAT_FIXUPS']:

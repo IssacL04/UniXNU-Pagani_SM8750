@@ -56,6 +56,8 @@ jobs:
           cp ../device/unixnu.lock "$OUTPUT/unixnu.lock"
       - name: Check configuration and production contracts
         working-directory: main
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           python3 ../device/scripts/test-format2.py --device ../device
           python3 scripts/porting-record.py check --device ../device

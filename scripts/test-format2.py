@@ -6,11 +6,12 @@ import runpy
 import struct
 import subprocess
 import tempfile
+import tomllib
 from pathlib import Path
 from unittest import mock
 
 from unixnu import cli, components, devicetree, feeds, kernel, patches
-from unixnu.config import Context
+from unixnu.config import Context, ROOT
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--device', type=Path, default=Path(__file__).resolve().parents[1])
@@ -71,6 +72,9 @@ with tempfile.TemporaryDirectory() as directory:
     actual = decode(devicetree.generate(dtb, ctx.board, unique_chip_id='123456789abcdef', data=True, trust=True))
     for path, properties in expected.items():
         for key, value in properties.items():
+            if path == '/device-tree' and key == 'compatible':
+                assert actual[path][key] == b'J120AP\0' + value
+                continue
             if path == '/device-tree/arm-io' and key == 'ranges':
                 assert actual[path][key] == struct.pack('<QQQ', 0, 0x16000000, 0x1000000)
                 continue
@@ -82,4 +86,19 @@ with tempfile.TemporaryDirectory() as directory:
     assert struct.unpack('<Q', chosen['dram-base']) == (0x980000000,)
     assert struct.unpack('<Q', chosen['dram-size']) == (0x180000000,)
     assert struct.unpack('<Q', chosen['darwinboot-memory-size']) == (0x100000000,)
+    assert actual['/device-tree/product']['product-id'] == bytes.fromhex('e9fefef6e6f9d12a5ba1a2551866cbbd749f0ec3')
+    assert actual['/device-tree/product/audio']['wireless-splitter'] == struct.pack('<I', 1)
+
+validate = runpy.run_path(str(ROOT / 'scripts/porting-record.py'))['validate']
+foreign = tomllib.loads((ctx.device / 'porting.toml').read_text())
+for area in foreign['area']:
+    area['components'] = ['NativeMobileDisplay'] if area['id'] == 'display' else []
+board = dict(ctx.board, components={'include': ['NativeMobileDisplay']})
+validate(foreign, board, 'foreign snapshot', allow_custom_components=True)
+try:
+    validate(foreign, board, 'local selection')
+except ValueError as error:
+    assert 'components without an area' in str(error)
+else:
+    raise AssertionError('Local records must cover the selected component dependencies')
 print('PASS: four profiles, 18 components, ordered archives, root policy and format-2 ADT contract')

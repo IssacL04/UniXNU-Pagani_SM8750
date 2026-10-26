@@ -59,21 +59,31 @@ def prepare_userspace(target):
         'mobile/Library/Preferences/com.apple.mobilegestalt.plist',
     ):
         (target / relative).unlink(missing_ok=True)
-    path = preferences / 'com.apple.springboard.plist'
-    values = plistlib.loads(path.read_bytes()) if path.exists() else {}
-    values.update(SBDisableAutoDim=True, SBDontDimOrLockOnAC=True, SBDisableIdleSleep=True)
-    path.write_bytes(plistlib.dumps(values, fmt=plistlib.FMT_BINARY))
     owner = (target / 'mobile').stat()
-    os.chown(path, owner.st_uid, owner.st_gid)
-    path.chmod(0o600)
-    # Fresh 21H461 data needs no upgrade migration; keep Setup's completion flags untouched.
-    migration = preferences / 'com.apple.migration.plist'
-    values = plistlib.loads(migration.read_bytes()) if migration.exists() else {}
-    values.update(LastSystemVersion='21H461',
-                  DMUserDataDisposition={'SyntheticDidUpgrade': False, 'buildVersion': '21H461'})
-    migration.write_bytes(plistlib.dumps(values, fmt=plistlib.FMT_BINARY))
-    os.chown(migration, owner.st_uid, owner.st_gid)
-    migration.chmod(0o600)
+    # UniXNU's seed-data-skip-setup.py preferences, applied while our new Data volume is already mounted.
+    settings = {
+        'com.apple.springboard': dict(
+            SBDisableAutoDim=True, SBDontDimOrLockOnAC=True, SBDisableIdleSleep=True,
+            BKNoWatchdogs=True, FBLaunchWatchdogExceptions={'com.apple.purplebuddy': 100.0},
+            MCForceShowCloudConfigurationUI=False),
+        'com.apple.migration': dict(LastSystemVersion='21H461',
+            DMUserDataDisposition={'SyntheticDidUpgrade': False, 'buildVersion': '21H461'}),
+        'com.apple.purplebuddy': dict(SetupDone=True, SetupFinishedAllSteps=True,
+            SetupVersion=11, daemonizeNeedsToRun=False),
+        'com.apple.purplebuddy.notbackedup': dict.fromkeys((
+            'ShouldRunDiagnosticsMiniBuddy', 'ShouldRunHSA2MiniBuddy', 'ShouldRunKeychainSyncMiniBuddy',
+            'ShouldRunMesaMiniBuddy', 'ShouldRunPaymentMiniBuddy', 'ShouldRunStandardMiniBuddy',
+            'SilentICDPUpgrade'), False),
+        'com.apple.managedconfiguration.notbackedup': dict(
+            LockdownActivationIndicatesCloudConfigurationAvailable=False),
+    }
+    for name, additions in settings.items():
+        path = preferences / (name + '.plist')
+        values = plistlib.loads(path.read_bytes()) if path.exists() else {}
+        values.update(additions)
+        path.write_bytes(plistlib.dumps(values, fmt=plistlib.FMT_BINARY))
+        os.chown(path, owner.st_uid, owner.st_gid)
+        path.chmod(0o600)
 
 
 def prepare_launch_policy(target, daemons):
@@ -132,7 +142,7 @@ def prepare(tree, source, systemos, output, config):
             raise ValueError('SystemOS input hash mismatch')
     output.mkdir(parents=True)
     image = output / 'data.cdr'
-    # shortcut: 1 GiB sparse volatile Data for Setup and caches; qualify persistent storage separately.
+    # shortcut: 1 GiB sparse volatile Data for SpringBoard and caches; qualify persistent storage separately.
     subprocess.run(['hdiutil', 'create', '-size', f'{DATA_BYTES // 1024**2}m', '-layout', 'NONE', '-fs', 'APFS',
                     '-volname', 'OwnerData', '-type', 'UDTO', str(image)], check=True)
     original, target = output / 'os', output / 'data'
@@ -192,7 +202,7 @@ def prepare(tree, source, systemos, output, config):
                   source_regular_bytes=total, guest_mutable=True, persistent=False,
                   bringup_disabled_jobs=disabled_jobs,
                   userspace_compat_original_instructions_verified=True,
-                  mobilegestalt_cache_cleared=True, setup_skipped=False, auto_dim_disabled=True,
+                  mobilegestalt_cache_cleared=True, setup_skipped=True, auto_dim_disabled=True,
                   ownership_preserved=True, os_inputs_modified=False, hardware_tested=False)
     (output / 'seed.json').write_text(json.dumps(report, indent=2) + '\n')
     lines = [line for line in config.read_text().splitlines()
