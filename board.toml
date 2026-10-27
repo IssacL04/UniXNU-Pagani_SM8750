@@ -60,7 +60,7 @@ loader = "firmware"
 title = "OnePlus 13T Stage 7: early userspace"
 dram_size = "0x180000000"
 timeout = 10
-kernel_args = ["-v", "serial=0", "debug=0x14e", "cpus=1", "kt_fixed_zones=240", "native-ufs-root=1", "native-ufs-diagnostics=1", "sheng-pmgr=2", "offline-apfs-load=1", "startup_debug=0", "-no_corpses", "sheng-vsync=60", "sheng-vsync-fixed=1", "offline-mobile-graphics-load=1", "offline-legacy-register=1", "offline-legacy-phase=4", "offline-legacy-gop=1", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-key-events=1", "sheng-aks=1", "pagani-buttons=1", "pagani-touch=1", "pagani-panel=1", "pagani-peripheral-status=1"]
+kernel_args = ["-v", "serial=0", "debug=0x14e", "cpus=8", "sheng-smp=1", "sheng-smp-gic=1", "armcpu-self-ipi=1", "kt_fixed_zones=240", "native-ufs-root=1", "native-ufs-diagnostics=1", "sheng-pmgr=2", "offline-apfs-load=1", "startup_debug=0", "-no_corpses", "sheng-vsync=60", "sheng-vsync-fixed=1", "offline-mobile-graphics-load=1", "offline-legacy-register=1", "offline-legacy-phase=4", "offline-legacy-gop=1", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-key-events=1", "sheng-aks=1", "pagani-buttons=1", "pagani-touch=1", "pagani-panel=1", "pagani-platform-status=1"]
 trust_cache_sha256 = ["7416ca4f8377146626bb284e2133c76bee6cb4e3ee0af5d648b186235a7323a7"]
 
 [payload.adt]

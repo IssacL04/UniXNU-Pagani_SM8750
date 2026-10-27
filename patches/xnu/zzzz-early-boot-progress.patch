@@ -69,12 +69,13 @@
  1:
  	MSR_VBAR_EL1_X0
  
-@@ -771,6 +805,18 @@
+@@ -771,6 +805,28 @@
  	cmp		x0, x1
  	bne		.
  #endif /* !VMAPPLE */
 +
 +#if XNU_EARLY_BOOT_PROGRESS
++	cbnz x21, Lsecondary_progress_vectors
 +	adrp x0, EXT(early_boot_progress_vectors)@page
 +	add x0, x0, EXT(early_boot_progress_vectors)@pageoff
 +	add x0, x0, x22
@@ -84,6 +85,15 @@
 +	mov x28, lr
 +	bl EXT(early_boot_progress_mmu_on)
 +	mov lr, x28
++	b Lprogress_vectors_ready
++Lsecondary_progress_vectors:
++	adrp x0, EXT(ExceptionVectorsBase)@page
++	add x0, x0, EXT(ExceptionVectorsBase)@pageoff
++	add x0, x0, x22
++	sub x0, x0, x23
++	msr VBAR_EL1, x0
++	isb
++Lprogress_vectors_ready:
 +#endif
  
  #if (!CONFIG_KERNEL_INTEGRITY || (CONFIG_KERNEL_INTEGRITY && !defined(KERNEL_INTEGRITY_WT)))
