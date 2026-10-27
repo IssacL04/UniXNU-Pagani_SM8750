@@ -21,7 +21,7 @@ for language in (['-xc++'],['-x','c++']):
         '--target=arm64-apple-ios17.0.0','-c','-o','input.o'],command
 display = (tree / 'drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp').read_text()
 timer = display[display.index('    IOTimerEventSource *vsyncTimer'):display.index('public:', display.index('    IOTimerEventSource *vsyncTimer'))]
-refresh = display[display.index('    bool getRefreshAttributes('):display.index('    // A swap the client')]
+refresh = display[display.index('    bool isTimingEnabled('):display.index('    // A swap the client')]
 cpp = r'''
 #include <cassert>
 #include <cstdint>
@@ -59,6 +59,7 @@ struct IOWorkLoop {
 };
 #define OSSafeReleaseNULL(p) do {if(p)(p)->release();(p)=nullptr;} while(0)
 struct IOMobileFramebufferLegacy:OSObject {
+    virtual bool isTimingEnabled()=0;
     virtual bool getRefreshAttributes(uint64_t *words,bool){if(!words)return false;for(unsigned i=0;i<6;++i)words[i]=100+i;return true;}
 };
 class NativeLegacyDisplay:public IOMobileFramebufferLegacy {
@@ -72,6 +73,10 @@ public:
 };
 int main(){
     NativeLegacyDisplay display;
+    assert(display.isTimingEnabled());
+    display.primary=false;assert(!display.isTimingEnabled());display.primary=true;
+    display.bootMapping=false;assert(!display.isTimingEnabled());display.bootMapping=true;
+    display.displayOn=false;assert(!display.isTimingEnabled());display.displayOn=true;
     addFails=true;display.startVsync();assert(!display.vsyncTimer && !liveTimers);addFails=false;
     rate=241;display.startVsync();assert(!display.vsyncTimer);rate=60;
     display.startVsync();assert(display.vsyncTimer && !display.vsyncArmed && liveTimers==1);
@@ -103,4 +108,4 @@ with tempfile.TemporaryDirectory(prefix='stage7-check-') as temporary:
             rules = runpy.run_path(str(Path(__file__).with_name('prepare-ram-data.py')))['COMPAT_FIXUPS']
             expected = [f'{Path(path).name} {offset:x} {original}' for _, path, offset, original in rules]
             assert result.splitlines() == expected, 'Build-time byte checks must match all kernel rules'
-print('PASS: C language selection, display timer lifetime and fixed refresh cadence')
+print('PASS: C language selection, logical timing state, display timer lifetime and fixed refresh cadence')

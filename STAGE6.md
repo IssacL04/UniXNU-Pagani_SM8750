@@ -2,7 +2,7 @@
 
 更新：2026-10-27。**第 50 版已获真机确认：跳过 Setup 进入锁屏，电源键短按亮灭屏、长按打开关机界面；触控初始化失败。** 第 51 版首次 SPI 读取超时，触控仍无响应。第 53 版已完成构建、镜像回验及临时启动，实机读数确认 FIFO 接口关闭，首次 SPI 传输仍超时。第 54 版 SE DMA 候选已通过完整构建、镜像回验及临时启动，实机首次读取返回全零协议头并报 `-71`，触摸 HID 尚未启动。第 55 版实测确认首个四字节 SE DMA 读取完成，返回值仍全零，协议报 `-71`，触控仍无响应。Android 只读基线已取得：两路触控电源启用、存在有效 `a5` 数据，原厂片选延时为 50。第 56 版已补齐电源请求及片选延时，通过主机回归、云端完整构建和本地产物核对。用户随后连接 fastboot，配套启动镜像已组装并回验，临时启动的 Sending/Booting 均返回 OKAY，未刷写分区；实测已读到有效 TouchComm v1 报头，按下/抬起会改变触点掩码，HID 报告返回 0；上下滑动和关机界面的“取消”均无响应。第 57 版已改为独立触屏身份并补齐限定匹配、绑定检查和事件分发诊断，主机回归、云端完整编译与本地产物核验通过，内核已下载；临时启动后用户确认触摸可用。用户随后连接 fastboot，配套第 57 版镜像已完成组装和回验，临时启动 Sending/Booting 均为 OKAY；用户反馈“触摸可以了”，具体诊断读数尚未提供，未刷写分区。
 
-第 59、60 版八核测试均发生调度器 ticket-lock panic。第 60 版完整调用栈定位到 Clutch 跨调度集合取任务后重复加锁；第 62 版让全部八核共享一个调度集合，保留真实硬件拓扑。完整构建与实际二进制核验已通过，配套镜像 `out/oneplus13t/boot/stage7-run-62/boot.img` 已组装并回验。用户连接 fastboot 后，Sending/Booting 均返回 OKAY，系统启动、八核在线数量及持续交互表现待反馈。已确认基本触摸可用的第 57 版和各轮诊断镜像继续保留；亮度及长期稳定性仍未验证。当前概况见 [README](README.md)，分项证据见 [porting.toml](porting.toml)。下文按时间保留各轮诊断与后续修复，最新结果见末尾。
+第 59、60 版八核测试均发生调度器 ticket-lock panic。第 60 版完整调用栈定位到 Clutch 跨调度集合取任务后重复加锁；第 62 版让全部八核共享一个调度集合，保留真实硬件拓扑。完整构建与实际二进制核验已通过，配套镜像 `out/oneplus13t/boot/stage7-run-62/boot.img` 已组装并回验。用户连接 fastboot 后，Sending/Booting 均返回 OKAY，随后实测在显示 slot 345 处 panic；原版调用点位于交换等待五秒超时后的 TimingEnable 查询。接管争锁回归已复现并修复，完整构建待完成，八核在线数量及持续交互仍未验证。已确认基本触摸可用的第 57 版和各轮诊断镜像继续保留；亮度及长期稳定性仍未验证。当前概况见 [README](README.md)，分项证据见 [porting.toml](porting.toml)。下文按时间保留各轮诊断与后续修复，最新结果见末尾。
 
 ## iPadOS 输入
 
@@ -1004,3 +1004,16 @@ SoC 的 `sm8750-smp.patch` 将 Clutch 的 `multiple_psets_enabled` 设为 `FALSE
 启动前只读确认序列号 `3B15BB01BAT00000`、`product: sun`、`is-userspace: no`。再次确认镜像哈希后执行 `fastboot boot`，Sending 用时 2.020 秒、Booting 用时 0.337 秒，均返回 OKAY，总计 2.671 秒。日志为镜像目录中的 `fastboot-boot.log`。未刷写任何分区。
 
 这证明临时加载请求成功。尚待用户反馈是否进入系统、`reg/online/T/I` 的实际值、触摸及持续交互表现；不能据 fastboot 返回值宣称八核稳定。若再次 panic，应使用本轮第 62 版内核符号表分析新的完整调用栈。
+
+
+## 第 62 版显示超时与 slot 345 修复候选（2026-10-27）
+
+用户报告再次 panic，并确认照片文字为 `display slot 345 object 0xfffffff9e67f9000 caller -0xfffffff00578c1cc @Stage7Probe.cpp:78`。屏幕保护入口为 `SM8750 unsupported display slot`；此处保留用户抄写的 caller 前导符号，实际地址按 `0xfffffff00578c1cc` 分析。未取得 `reg/online/T/I` 数值，不能据这次运行确认八核全部在线或调度长期稳定。
+
+固定 21H461 原版二进制在 `0xfffffff00578c1c8` 调用 vtable slot 345，返回地址与照片一致。它位于 `swap_wait_gated` 的 `CommandWake didn't happen even after 5 seconds` 超时分支，返回值按布尔位打印为 `TimingEnable`。另外两处调用也只传入 self 并检查返回值 bit 0。因此该 guard 解释了直接 panic，但此前已经有一次交换未在五秒内结束。
+
+源码中存在能使交换失去后续处理的 SMP 分支：`BootProgress` 的普通日志使用 try-lock；`boot_progress_display_handoff()` 也复用此入口，遇到另一 CPU 正在写控制台便返回失败。显示 `kickOnce()` 随即退出，没有安排重试，软件刷新定时器也不会重新处理这次交换。确定性测试在一次争锁失败后模拟另一 CPU 立即释放锁，旧代码仍然返回失败并触发断言。修复后接管等待当前有界写入结束；检测到 panic 则立即退出，避免等待已停止的控制台持有者。普通日志仍保持非阻塞。
+
+slot 345 改为已核准的 `bool isTimingEnabled()`，返回主显示、GOP 映射及本驱动逻辑电源状态的组合。主仓构建脚本核对三处原版调用、布尔结果和超时字符串，并继续验证完整 358 项 vtable；未伪造面板硬件时序、硬件 vblank 或交换完成。现有主机显示测试覆盖主显示、映射及开关状态；控制台回归覆盖争锁接管成功、panic 时立即失败及原有显示边界，ASan/UBSan 通过。
+
+这些证据确认了直接 panic 的接口和一个可复现的丢交换机制；照片没有记录争锁事件，尚不能认定它是这次真机超时的唯一原因。候选保留第 62 版 Clutch 单集合、全部八个 CPU affinity、4 GiB 内存及现有触摸实现。完整补丁链、18 个组件契约、八核 ADT、实际复位/恢复汇编及共享 Clutch 调度集合回归通过。完整云端编译及新的真机结果尚待取得，本轮未再次启动手机或刷写分区。
