@@ -2,7 +2,7 @@
 
 更新：2026-10-27。**第 50 版已获真机确认：跳过 Setup 进入锁屏，电源键短按亮灭屏、长按打开关机界面；触控初始化失败。** 第 51 版首次 SPI 读取超时，触控仍无响应。第 53 版已完成构建、镜像回验及临时启动，实机读数确认 FIFO 接口关闭，首次 SPI 传输仍超时。第 54 版 SE DMA 候选已通过完整构建、镜像回验及临时启动，实机首次读取返回全零协议头并报 `-71`，触摸 HID 尚未启动。第 55 版实测确认首个四字节 SE DMA 读取完成，返回值仍全零，协议报 `-71`，触控仍无响应。Android 只读基线已取得：两路触控电源启用、存在有效 `a5` 数据，原厂片选延时为 50。第 56 版已补齐电源请求及片选延时，通过主机回归、云端完整构建和本地产物核对。用户随后连接 fastboot，配套启动镜像已组装并回验，临时启动的 Sending/Booting 均返回 OKAY，未刷写分区；实测已读到有效 TouchComm v1 报头，按下/抬起会改变触点掩码，HID 报告返回 0；上下滑动和关机界面的“取消”均无响应。第 57 版已改为独立触屏身份并补齐限定匹配、绑定检查和事件分发诊断，主机回归、云端完整编译与本地产物核验通过，内核已下载；临时启动后用户确认触摸可用。用户随后连接 fastboot，配套第 57 版镜像已完成组装和回验，临时启动 Sending/Booting 均为 OKAY；用户反馈“触摸可以了”，具体诊断读数尚未提供，未刷写分区。
 
-第 59、60 版八核测试均发生调度器 ticket-lock panic。第 60 版完整调用栈定位到 Clutch 跨调度集合取任务后重复加锁；第 62 版让全部八核共享一个调度集合，保留真实硬件拓扑。完整构建与实际二进制核验已通过，配套镜像 `out/oneplus13t/boot/stage7-run-62/boot.img` 已组装并回验。用户连接 fastboot 后，Sending/Booting 均返回 OKAY，随后实测在显示 slot 345 处 panic；原版调用点位于交换等待五秒超时后的 TimingEnable 查询。接管争锁回归已复现并修复，第 63 版完整构建、最终显示 vtable 与配套产物核验均通过，内核已下载；尚未临时启动，八核在线数量及持续交互仍未验证。已确认基本触摸可用的第 57 版和各轮诊断镜像继续保留；亮度及长期稳定性仍未验证。当前概况见 [README](README.md)，分项证据见 [porting.toml](porting.toml)。下文按时间保留各轮诊断与后续修复，最新结果见末尾。
+第 59、60 版八核测试均发生调度器 ticket-lock panic。第 60 版完整调用栈定位到 Clutch 跨调度集合取任务后重复加锁；第 62 版让全部八核共享一个调度集合，保留真实硬件拓扑。完整构建与实际二进制核验已通过，配套镜像 `out/oneplus13t/boot/stage7-run-62/boot.img` 已组装并回验。用户连接 fastboot 后，Sending/Booting 均返回 OKAY，随后实测在显示 slot 345 处 panic；原版调用点位于交换等待五秒超时后的 TimingEnable 查询。接管争锁回归已复现并修复，第 63 版完整构建、最终显示 vtable 与配套产物核验均通过；新启动镜像已组装并回验，fastboot 临时启动 Sending/Booting 均为 OKAY，总计 2.791s，系统画面、八核在线数量及持续交互待用户反馈。已确认基本触摸可用的第 57 版和各轮诊断镜像继续保留；亮度及长期稳定性仍未验证。当前概况见 [README](README.md)，分项证据见 [porting.toml](porting.toml)。下文按时间保留各轮诊断与后续修复，最新结果见末尾。
 
 ## iPadOS 输入
 
@@ -1028,3 +1028,14 @@ slot 345 改为已核准的 `bool isTimingEnabled()`，返回主显示、GOP 映
 实际 Mach-O 中，358 项显示 vtable 的 slot 345 指向 `NativeLegacyDisplay::isTimingEnabled()`，旧 `opaque345()` guard 已消失；显示接管函数包含争锁重试的 `yield`。Clutch 的 `multiple_psets_enabled` 仍为 0，两个调度回调保持预期绑定。因此这轮显示修复与此前的单集合策略均已进入最终产物。
 
 本轮完成源码修复、完整编译、下载及产物验证，未组装或临时启动第 63 版 `boot.img`，未刷写分区。当前第 62 版启动输入和旧镜像继续保留。显示超时是否完全消失、八核在线数量及持续触摸交互需要新的真机结果；逻辑 TimingEnable 查询不等于面板硬件时序验证，内存继续为 4 GiB。
+
+
+## 第 63 版显示接管修复镜像临时启动（2026-10-27）
+
+用户要求生成新内核并通过 fastboot 测试。使用已完成完整编译和二进制核验的第 63 版内核，以及同轮 trust cache、RAM Data，执行 `./unixnu payload`、`./unixnu bootimg`，生成 `out/oneplus13t/boot/stage7-run-63/boot.img`：87,957,504 字节，SHA-256 `af6090c46e4b56a5d83d201273a2bb67466bd13457c44921a3d9e56cd7b41149`。旧版镜像保留，当前本地启动输入更新为第 63 版。
+
+回验通过 Android v4、空 ramdisk、与既有镜像相同的 3 MiB UEFI、160 MiB FAT；FAT 内实际内核、trust cache 和 RAM Data 与本轮构建逐一匹配，Data UUID 为 `1726EAC0-2168-4118-AFD6-19E12FE306E7`。实际 ADT 保留八个 CPU affinity、running/waiting 状态、19.2 MHz timebase、PSCI SMC 和 4 GiB 窗口；SMP、远端 GICR、自 IPI 与 CPU/RAM 状态开关匹配，触摸日志默认关闭。最终内核包含已验证的 slot 345 逻辑查询、争锁接管重试和 Clutch 单调度集合。
+
+启动前只读确认序列号 `3B15BB01BAT00000`、`product: sun`、`is-userspace: no`。再次核对镜像哈希后执行 `fastboot boot`，Sending 用时 2.016 秒、Booting 用时 0.337 秒，均返回 OKAY，总计 2.791s。日志保存在镜像目录的 `fastboot-boot.log`。未刷写任何分区。
+
+这证明临时加载请求被接受。系统界面、`reg/online/T/I`、触摸及持续交互仍待用户反馈；fastboot 成功不能证明显示超时已消失或八核全部在线。若出现新 panic，应使用本轮第 63 版内核符号表定位。
