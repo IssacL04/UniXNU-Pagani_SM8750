@@ -982,3 +982,14 @@ SoC 的 `sm8750-smp.patch` 将 Clutch 的 `multiple_psets_enabled` 设为 `FALSE
 
 
 第 61 次构建（[40505475023](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/40505475023)，设备源码 `0922d28`）在新增主机回归的编译阶段停止：macOS SDK 已定义 `__unused`，测试再次定义导致 `-Werror,-Wmacro-redefined`。完整补丁链已经应用，尚未开始内核编译，也没有本轮可用内核。测试现以 `#ifndef __unused` 保留系统定义；SoC 的实际调度策略补丁不变。下一次完整构建继续验证同一八核修复。
+
+
+## 第 62 版八核共享调度集合构建结果（2026-10-27）
+
+[第 62 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/40505777459) 全部步骤通过，耗时 21 分 29 秒。设备源码 `c87bced3d8fba74f11c9f91ed6494fb741f29f90`、主仓库 `d967069e51b2c086d7eec496fa2e001b8ab8cc21`、驱动 `3ba7f19c70da0bddb2623936d8dddc72d900aaee`、SoC `37ccfbe5870fc079a4362d1972afba8cd6efb589`。macOS 上的实际 Clutch/pset 回归、完整补丁链、18 个组件契约、九项内核源码检查、现有外设与控制台回归、原始及编译对象 ABI 检查、最终链接和预链接均通过。
+
+下载目录为 `out/oneplus13t/actions/run-62/`。内核 `kernel/kernel.macho` 为 127,803,392 字节，SHA-256 `671d5cc0c9b60b594b481914d3a5874d88e78ebac906834e78577618cfe6629e`。配套 RAM Data UUID 为 `9E72E6D9-AC74-428E-A275-E8A25FD3264C`，已核对其嵌入本轮内核；压缩 Data 和完整原始 APFS 数据一致，源码版本、八核参数、平台状态开关及 4 GiB 窗口全部匹配。
+
+二进制检查使用实际 Mach-O 的符号表、段映射和 XNU 调度表布局读取 Clutch 策略。第 60 版的 `multiple_psets_enabled` 为 1，第 62 版为 0，steal 启用判断与 Clutch 回调地址仍对应预期函数。因此单集合修复已经进入最终内核。断言与八层调用栈诊断均保留，若出现其他 panic 仍可继续定位。
+
+这轮完成源码修复、完整编译及产物验证。未组装或临时启动第 62 版 `boot.img`，未刷写分区；原第 57、59、60 版镜像和当前第 60 版启动输入继续保留。下一次获准临时启动需使用同一第 62 版内核、trust cache 和 RAM Data，确认 `reg=8`、`online=8`、`T=ff`、`I=ff`，并观察持续系统交互。单一调度集合保留八核与真实硬件集群，集群容量感知调度及更大内存窗口仍未验证。
