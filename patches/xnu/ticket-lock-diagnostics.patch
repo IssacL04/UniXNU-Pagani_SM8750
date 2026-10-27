@@ -1,0 +1,35 @@
+--- a/osfmk/kern/lock_ticket.c
++++ b/osfmk/kern/lock_ticket.c
+@@ -30,6 +30,8 @@
+ #define LOCK_PRIVATE 1
+ #include <stdint.h>
+ #include <kern/thread.h>
++#include <kern/backtrace.h>
++#include <kern/cpu_number.h>
+ #include <kern/locks_internal.h>
+ #include <kern/locks.h>
+ #include <kern/lock_stat.h>
+@@ -139,6 +141,22 @@
+ __lck_ticket_owned_panic(const lck_ticket_t *lck)
+ {
+ 	thread_t self = current_thread();
++	uint32_t owner = lck->lck_ticket_owner, tickets = lck->tu.lck_value;
++	uintptr_t bt[8] = {0};
++	backtrace_info_t info = BTI_NONE;
++	unsigned int count = backtrace(bt, 8, NULL, &info);
+ 
+-	panic("Ticket lock %p is unexpectedly owned by thread %p", lck, self);
++	panic("Ticket lock %p is unexpectedly owned by thread %p\n"
++	    "cpu=%d ctid=%x owner=%x tickets=%x\n"
++	    "BT count=%u flags=%x\n"
++	    "0=%016lx 1=%016lx\n"
++	    "2=%016lx 3=%016lx\n"
++	    "4=%016lx 5=%016lx\n"
++	    "6=%016lx 7=%016lx",
++	    lck, self, cpu_number(), self->ctid, owner, tickets,
++	    count, (unsigned int)info,
++	    (unsigned long)bt[0], (unsigned long)bt[1],
++	    (unsigned long)bt[2], (unsigned long)bt[3],
++	    (unsigned long)bt[4], (unsigned long)bt[5],
++	    (unsigned long)bt[6], (unsigned long)bt[7]);
+ }

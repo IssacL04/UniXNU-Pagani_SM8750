@@ -2,7 +2,7 @@
 
 更新：2026-10-27。**第 50 版已获真机确认：跳过 Setup 进入锁屏，电源键短按亮灭屏、长按打开关机界面；触控初始化失败。** 第 51 版首次 SPI 读取超时，触控仍无响应。第 53 版已完成构建、镜像回验及临时启动，实机读数确认 FIFO 接口关闭，首次 SPI 传输仍超时。第 54 版 SE DMA 候选已通过完整构建、镜像回验及临时启动，实机首次读取返回全零协议头并报 `-71`，触摸 HID 尚未启动。第 55 版实测确认首个四字节 SE DMA 读取完成，返回值仍全零，协议报 `-71`，触控仍无响应。Android 只读基线已取得：两路触控电源启用、存在有效 `a5` 数据，原厂片选延时为 50。第 56 版已补齐电源请求及片选延时，通过主机回归、云端完整构建和本地产物核对。用户随后连接 fastboot，配套启动镜像已组装并回验，临时启动的 Sending/Booting 均返回 OKAY，未刷写分区；实测已读到有效 TouchComm v1 报头，按下/抬起会改变触点掩码，HID 报告返回 0；上下滑动和关机界面的“取消”均无响应。第 57 版已改为独立触屏身份并补齐限定匹配、绑定检查和事件分发诊断，主机回归、云端完整编译与本地产物核验通过，内核已下载；临时启动后用户确认触摸可用。用户随后连接 fastboot，配套第 57 版镜像已完成组装和回验，临时启动 Sending/Booting 均为 OKAY；用户反馈“触摸可以了”，具体诊断读数尚未提供，未刷写分区。
 
-最新第 59 版八核候选已完成完整构建与下载，尚未组装启动镜像或进行真机启动。当前实测镜像为 `out/oneplus13t/boot/stage7-run-57/boot.img`，构建使用设备源码 `ad6ed2d`。第 50、51、53、54、55、56 版镜像继续保留；桌面应用交互、亮度及长期稳定性仍未验证。当前概况见 [README](README.md)，分项证据见 [porting.toml](porting.toml)。下文按时间保留各轮诊断与后续修复，最新结果见末尾。
+最新第 59 版八核候选已完成完整构建、下载、镜像组装及回验；用户连接 fastboot 后，临时启动 Sending/Booting 均返回 OKAY，随后用户照片确认在 affinity `0x200` 上发生调度器 ticket-lock panic。尚未取得八核在线和系统界面验证。当前送测镜像为 `out/oneplus13t/boot/stage7-run-59/boot.img`，构建使用设备源码 `859dbce`；已确认基本触摸可用的第 57 版镜像继续保留。第 50、51、53、54、55、56 版镜像继续保留；桌面应用交互、亮度及长期稳定性仍未验证。当前概况见 [README](README.md)，分项证据见 [porting.toml](porting.toml)。下文按时间保留各轮诊断与后续修复，最新结果见末尾。
 
 ## iPadOS 输入
 
@@ -915,3 +915,25 @@ XY in=.../... out=.../... mask=...
 - `status.json` 的 18 个组件、四个源码版本、`cpus=8`、SMP/GIC/自 IPI 参数、平台状态开关及 4 GiB 窗口均与配置一致。默认参数没有触摸状态显示开关，内核已包含 CPU/RAM 两行格式。
 
 本轮仅编译、下载和校验，未组装第 59 版 `boot.img`，未临时启动或刷写分区。第 57 版实测镜像及其配套内核、trust cache、RAM Data 继续保留。后续获准启动时须使用同一第 59 版内核与配套输入，确认 `reg=8`、`online=8`、`T=ff`、`I=ff` 并观察持续交互；这些运行结果目前尚未取得。内存申请仍为 4 GiB，5 GiB 或更大窗口尚未在 UEFI/XNU 中实测。
+
+
+## 第 59 版八核候选临时启动（2026-10-27）
+
+用户确认 fastboot 已连接并授权测试。使用第 59 次 Actions 的内核、信任缓存和 RAM Data 执行 `./unixnu payload`、`./unixnu bootimg`，得到 `out/oneplus13t/boot/stage7-run-59/boot.img`：87,957,504 字节，SHA-256 `a58808d933c713e5a32c068f36791d09d2917d2216c7b788250a5a8bafcca349`。第 57 版镜像保留。
+
+回验确认 Android v4、空 ramdisk、与第 57 版相同的 3 MiB UEFI、160 MiB 内嵌 FAT，以及 FAT 内实际内核、trust cache、RAM Data 与第 59 次构建完全匹配。实际 ADT 含八个预期 CPU affinity、正确的 running/waiting 状态、19.2 MHz timebase 与 PSCI SMC；启动参数含 `cpus=8`、SMP/GIC/自 IPI 和平台状态开关，默认没有触摸日志开关。内存窗口仍为 4 GiB。
+
+启动前确认目标序列号 `3B15BB01BAT00000`、`product: sun`、`is-userspace: no`，再次确认镜像哈希后执行 `fastboot boot`。Sending 用时 2.008 秒、Booting 用时 0.336 秒，均为 OKAY，总计 2.680 秒；日志为镜像目录下的 `fastboot-boot.log`。没有刷写任何分区。Fastboot 接受镜像只证明临时加载请求成功；是否进入系统、触摸表现、CPU 在线数量、每核定时器/IPI 及 RAM 实际读数仍待用户反馈。
+
+
+## 第 59 版实测 panic 与 CPU 调用栈诊断（2026-10-27）
+
+临时启动后，用户报告 kernel panic 并提供照片。屏幕显示 MPIDR `0x0000000080000200`、锁地址 `0xfffffff00c0a9a00`，消息为 `Ticket lock ... is unexpectedly owned by thread ... @lock_ticket.c:143`。最后记录的阶段是 `stage7: IOHIDEventDriver matching`，该阶段文字不等同于故障调用方。
+
+用本次下载内核的符号表核对，锁地址为 `_pset0 + 0x100`，对应调度器的 `sched_lock`。源码检查条件是当前线程的 compact thread ID 与锁记录的 owner 相等；消息中的 thread 指针指向当前线程。现有照片没有调用栈或两个 ID 的实际值，因此只能确认锁所有权断言触发，尚不能区分递归加锁、线程身份或状态损坏。IRQ/FIQ 屏蔽源码同时覆盖两类中断，未找到漏屏蔽证据。
+
+重新读取 [Hummer 仓库 CPU 记录](https://github.com/2426120557/UniXNU-hummer/blob/25da260cd970459dab36257d7d776130ecbd106b/GSI-PORT-PLAN.md) 及其内核补丁。该版本记录六核 `processor_count=6`、`avail=6`，依赖 SMP 开关、启动核预先准备目标 GICR，以及副核 MMU 启用后切换正常异常向量。第 59 版已具备这些机制；参考记录明确没有完成 Aff2 Prime 核适配，也没有这次 ticket-lock panic 的修复。
+
+设备补丁 `ticket-lock-diagnostics.patch` 仅扩展这条失败路径：保留原有断言，附加当前/持锁 compact ID、ticket 原始值，以及 XNU 自带有栈边界检查的 `backtrace()` 返回的最多八个地址和截断标志。未填充的地址置零；正常锁操作和八核启动参数不变。源码回归执行实际新增函数，覆盖 0–8 个返回地址、格式和锁状态保持。下一次测试需取得完整 `ctid/owner/tickets` 和 `BT 0–7`，再针对具体调用路径修复。
+
+本轮继续保留 4 GiB 窗口、第 57 版触摸基线和已有启动镜像。CPU 诊断版的完整构建与下载待完成；尚未再次启动手机或刷写分区。

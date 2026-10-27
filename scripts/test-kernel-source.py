@@ -4,6 +4,7 @@ import importlib.util
 import hashlib
 import json
 import os
+import re
 import runpy
 import struct
 import subprocess
@@ -23,6 +24,63 @@ spec.loader.exec_module(arm_platform)
 
 
 class SourceKernelTest(unittest.TestCase):
+    def test_ticket_panic_preserves_lock_and_formats_bounded_trace(self):
+        path = Path(__file__).resolve().parents[1] / 'patches/xnu/ticket-lock-diagnostics.patch'
+        body = '\n'.join(line[1:] for line in path.read_text().splitlines()
+                         if line.startswith((' ', '+')) and not line.startswith('+++'))
+        function = re.search(r'__lck_ticket_owned_panic\(.*?\n\}', body, re.S).group()
+        source = r'''
+#include <assert.h>
+#include <stdint.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+typedef struct { uint32_t ctid; } test_thread_t, *thread_t;
+typedef struct { uint32_t lck_ticket_owner; struct { uint32_t lck_value; } tu; } lck_ticket_t;
+typedef unsigned backtrace_info_t;
+#define BTI_NONE 0
+static test_thread_t thread = {0x1234};
+static unsigned frames;
+static char message[1024];
+static thread_t current_thread(void) { return &thread; }
+static int cpu_number(void) { return 2; }
+static unsigned backtrace(uintptr_t *bt, unsigned count, void *ctl, backtrace_info_t *info) {
+    assert(count == 8 && !ctl);
+    for (unsigned i = 0; i < frames; i++) bt[i] = 0xfffffff00bf00000ULL + i;
+    *info = frames == 8 ? 3 : 1;
+    return frames;
+}
+static void panic(const char *format, ...) __attribute__((format(printf, 1, 2)));
+static void panic(const char *format, ...) {
+    va_list args; va_start(args, format);
+    int n = vsnprintf(message, sizeof(message), format, args); va_end(args);
+    assert(n > 0 && (unsigned)n < sizeof(message));
+}
+static void
+''' + function + r'''
+int main(void) {
+    lck_ticket_t lock = {0x1234, {0xaabbccdd}}, original = lock;
+    for (frames = 0; frames <= 8; frames++) {
+        __lck_ticket_owned_panic(&lock);
+        assert(!memcmp(&lock, &original, sizeof(lock)) && thread.ctid == 0x1234);
+        assert(strstr(message, "is unexpectedly owned by thread"));
+        assert(strstr(message, "cpu=2 ctid=1234 owner=1234 tickets=aabbccdd"));
+        char expected[80];
+        snprintf(expected, sizeof(expected), "BT count=%u flags=%x", frames, frames == 8 ? 3 : 1);
+        assert(strstr(message, expected));
+        for (unsigned i = 0; i < 8; i++) {
+            snprintf(expected, sizeof(expected), "%u=%016lx", i,
+                     (unsigned long)(i < frames ? 0xfffffff00bf00000ULL + i : 0));
+            assert(strstr(message, expected));
+        }
+    }
+}
+'''
+        binary = Path(self.temp.name) / 'ticket-panic'
+        subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-x', 'c', '-', '-o', str(binary)],
+                       input=source, text=True, check=True)
+        subprocess.run([str(binary)], check=True)
+
     def test_ram_object_follows_the_selected_archive_directory(self):
         script = (ROOT / 'scripts/build-xnu-4k-baseline.sh').read_text()
         section = script.split('  if [ "$NATIVE_RAM_BLOCK" = 1 ]; then', 1)[1].split('  if [ "${XNU_SOURCE_PTHREAD:-0}" = 1 ]; then', 1)[0]
