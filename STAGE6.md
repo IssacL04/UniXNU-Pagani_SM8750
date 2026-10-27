@@ -957,3 +957,25 @@ XY in=.../... out=.../... mask=...
 回验确认 Android v4、空 ramdisk、与既有镜像相同的 3 MiB UEFI、160 MiB FAT，以及实际内核、trust cache 和 RAM Data 与第 60 次构建匹配；Data UUID 为 `E81D6D67-C2F6-4CAC-9FF9-100EDFF76900`。实际 ADT 保留八个 affinity、19.2 MHz timebase、PSCI SMC 和 4 GiB 窗口，内核含新增 ticket-lock 调用栈格式，启动参数仍启用 SMP/远端 GICR/自 IPI 和 CPU/RAM 两行状态。
 
 启动前通过 fastboot 只读确认序列号 `3B15BB01BAT00000`、`product: sun` 和 `is-userspace: no`。再次校验镜像哈希后执行 `fastboot boot`，Sending 1.984 秒、Booting 0.336 秒，均返回 OKAY，总计 2.659 秒；日志为镜像目录中的 `fastboot-boot.log`。未刷写分区。该结果仅确认镜像临时加载请求成功，系统启动、八核在线状态和新 panic 的调用栈仍待用户观察。
+
+
+## 第 60 版调用栈与 Clutch 调度集合修复（2026-10-27）
+
+用户在第 60 版临时启动后再次报告 panic，并提供完整诊断照片。实际值为逻辑 CPU `2`、MPIDR `0x80000200`、`ctid=f1d34`、`owner=f1d34`、`tickets=b0ae0144`，锁仍为 `0xfffffff00c0a9a00`（`_pset0 + 0x100`）。使用第 60 版自身内核的符号表和调用指令，八个返回地址对应如下：
+
+| 帧 | 返回地址 | 函数及偏移 |
+| --- | --- | --- |
+| 0 | `0xfffffff00bfaca94` | `__lck_ticket_owned_panic + 0x48` |
+| 1 | `0xfffffff00b899450` | `lck_ticket_contended + 0xb0` |
+| 2 | `0xfffffff00b8b0bec` | `thread_select + 0x84c` |
+| 3 | `0xfffffff00b8b02ec` | `thread_block_reason + 0xe8` |
+| 4 | `0xfffffff00b8d2990` | `thread_terminate_self + 0x3c4` |
+| 5 | `0xfffffff00b8d6fa4` | `thread_apc_ast + 0x64` |
+| 6 | `0xfffffff00bfb6564` | `thread_terminate.cold.2 + 0x24` |
+| 7 | `0xfffffff00b8d6f14` | `thread_terminate + 0x58` |
+
+`thread_select()` 的返回位置正是跨调度集合取任务后的 `pset_lock()`。其调用约定要求 `steal_thread()` 释放原集合锁，再由调用方重新获取。但所选 Clutch 的 `sched_clutch_steal_thread()` 是单集群空实现，只返回 `THREAD_NULL`，没有释放锁。Clutch 的表项同时声明 `multiple_psets_enabled=TRUE`；Prime 硬件集群登记成第二个 pset 后，节点位图有两位，`sched_steal_thread_enabled()` 开始返回真。当前线程因而再次获取自己持有的锁，与照片中的 ID、锁地址和调用位置一致。实际第 60 版 Mach-O 中的 Clutch 函数指针也指向这两个函数。最后的 HID matching 阶段只是最近进度记录。
+
+SoC 的 `sm8750-smp.patch` 将 Clutch 的 `multiple_psets_enabled` 设为 `FALSE`。XNU 现有 `pset_create()` 据此返回启动核所在集合，所有八核共用运行队列；八个 affinity、Aff1 核编号、Aff2 集群编号、8 CPU / 2 hardware cluster 容量、PSCI 与 GIC 路径全部保留。集群和容量感知调度需要后续单独适配 Edge。内存继续为 4 GiB，锁断言和第 60 版调用栈诊断均保留。
+
+`test-format2.py` 从实际选定的 XNU 源码提取 `pset_create()`、steal 启用判断和 Clutch steal 函数，用第二个硬件集群触发调用约定回归。旧策略复现同一线程二次加锁断言；新策略通过，并确认没有分配第二个 pset、Prime 返回 `pset0` 且节点位图仍为 1。完整补丁链、18 个组件、八核 ADT、实际复位/恢复汇编和九项内核源码回归通过。第 61 次完整构建尚待完成；这些主机证据尚不能证明八核真机稳定。未再次启动手机或刷写分区。

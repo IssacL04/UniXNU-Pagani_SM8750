@@ -152,6 +152,77 @@ with tempfile.TemporaryDirectory() as directory:
                     '-x', 'assembler-with-cpp', '-c', '-', '-o', str(Path(directory)/'smp-reset.o')],
                    input=asm, text=True, check=True)
 
+# Exercise the selected Clutch/pset contract with a second hardware cluster.
+clutch = (xnu / 'osfmk/kern/sched_clutch.c').read_text()
+dispatch = clutch.split('const struct sched_dispatch_table sched_clutch_dispatch = {', 1)[1].split('};', 1)[0]
+multiple = re.search(r'\.multiple_psets_enabled\s*=\s*(TRUE|FALSE)', dispatch).group(1)
+processor = (xnu / 'osfmk/kern/processor.c').read_text()
+create = re.search(r'processor_set_t\npset_create\(.*?\n\}', processor, re.S).group()
+sched = (xnu / 'osfmk/kern/sched_prim.c').read_text()
+enabled = re.search(r'bool\nsched_steal_thread_enabled\(.*?\n\}', sched, re.S).group()
+steal = re.search(r'static thread_t\nsched_clutch_steal_thread\([^;]*?\)\n\{.*?\n\}', clutch, re.S).group()
+source = r'''
+#include <assert.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stddef.h>
+#define TRUE 1
+#define FALSE 0
+#define __unused __attribute__((unused))
+typedef int pset_cluster_type_t;
+typedef void *thread_t;
+#define THREAD_NULL NULL
+typedef struct processor_set *processor_set_t;
+typedef struct node *pset_node_t;
+struct node { processor_set_t psets; uint64_t pset_map; } node;
+struct processor_set {
+    pset_cluster_type_t pset_cluster_type;
+    uint32_t pset_cluster_id;
+    int pset_id;
+    processor_set_t pset_list;
+    pset_node_t node;
+    unsigned owner;
+} pset0 = {.node = &node}, spare;
+struct { processor_set_t pset; } boot = {&pset0}, *master_processor = &boot;
+#define processor_pset(p) ((p)->pset)
+#define PROCESSOR_SET_NULL NULL
+static struct { bool multiple_psets_enabled; } policy = {SELECTED_MULTIPLE};
+#define SCHED(f) (policy.f)
+static unsigned allocations;
+#define zalloc_permanent_type(type) (allocations++, &spare)
+static int pset_node_lock;
+static void lck_spin_lock(int *lock) { (void)lock; }
+static void lck_spin_unlock(int *lock) { (void)lock; }
+static void pset_init(processor_set_t pset, pset_node_t target) {
+    pset->node = target; target->pset_map |= 1ULL << pset->pset_id;
+}
+static unsigned bit_count(uint64_t bits) { return __builtin_popcountll(bits); }
+static void pset_lock(processor_set_t pset) {
+    assert(pset->owner != 0xf1d34); pset->owner = 0xf1d34;
+}
+static void pset_unlock(processor_set_t pset) {
+    assert(pset->owner == 0xf1d34); pset->owner = 0;
+}
+''' + create + '\n' + enabled + '\n' + steal + r'''
+int main(void) {
+    node.psets = &pset0; node.pset_map = 1;
+    processor_set_t prime = pset_create(&node, 0, 1, 1);
+    pset_lock(&pset0);
+    if (sched_steal_thread_enabled(&pset0)) {
+        assert(sched_clutch_steal_thread(&pset0) == THREAD_NULL);
+        pset_lock(&pset0); /* thread_select reacquires after steal returns. */
+    }
+    pset_unlock(&pset0);
+    assert(prime == &pset0 && allocations == 0 && node.pset_map == 1);
+}
+'''
+with tempfile.TemporaryDirectory() as directory:
+    binary = Path(directory) / 'clutch-pset'
+    subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror',
+                    f'-DSELECTED_MULTIPLE={multiple}', '-x', 'c', '-', '-o', str(binary)],
+                   input=source, text=True, check=True)
+    subprocess.run([str(binary)], check=True)
+
 validate = runpy.run_path(str(ROOT / 'scripts/porting-record.py'))['validate']
 foreign = tomllib.loads((ctx.device / 'porting.toml').read_text())
 for area in foreign['area']:
