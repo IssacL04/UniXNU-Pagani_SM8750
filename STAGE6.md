@@ -936,4 +936,15 @@ XY in=.../... out=.../... mask=...
 
 设备补丁 `ticket-lock-diagnostics.patch` 仅扩展这条失败路径：保留原有断言，附加当前/持锁 compact ID、ticket 原始值，以及 XNU 自带有栈边界检查的 `backtrace()` 返回的最多八个地址和截断标志。未填充的地址置零；正常锁操作和八核启动参数不变。源码回归执行实际新增函数，覆盖 0–8 个返回地址、格式和锁状态保持。下一次测试需取得完整 `ctid/owner/tickets` 和 `BT 0–7`，再针对具体调用路径修复。
 
-本轮继续保留 4 GiB 窗口、第 57 版触摸基线和已有启动镜像。CPU 诊断版的完整构建与下载待完成；尚未再次启动手机或刷写分区。
+本轮继续保留 4 GiB 窗口、第 57 版触摸基线和已有启动镜像。第 60 版 CPU 诊断内核的完整构建与下载已通过，结果见下文；尚未再次启动手机或刷写分区。
+
+
+## 第 60 版 CPU 诊断内核构建结果（2026-10-27）
+
+[第 60 次 Actions](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/40499765573) 全部步骤通过，耗时 11 分 49 秒。设备源码为 `faa6aa2cbd8d0a005f85cb2ad6749c769df6e586`，主仓库 `13cc99ba1865242880def2a30ac45f4d8f86414c`、驱动 `3ba7f19c70da0bddb2623936d8dddc72d900aaee`、SoC `76fb502dd2be1dcba6c5338eefd9cafcfdc76371`。完整补丁链、18 个组件契约、九项源码内核回归、外设及控制台回归、生产对象/ABI 检查、最终链接与预链接均通过。
+
+下载目录为 `out/oneplus13t/actions/run-60/`。`kernel/kernel.macho` 大小为 127,803,392 字节，SHA-256 `422074400f8eff7b9be51dfec3e895a207f304deb678ba527dcaf23da2eeea35`。配套 RAM Data UUID 为 `E81D6D67-C2F6-4CAC-9FF9-100EDFF76900`，已核对其嵌入内核；压缩 Data 与完整原始 APFS 数据一致。实际内核含新增 `cpu/ctid/owner/tickets`、`BT count/flags` 和八个返回地址格式，构建记录明确包含 `ticket-lock-diagnostics.patch`，源码版本和八核/4 GiB 启动策略一致。
+
+本地额外使用实际 panic 渲染器，以 1216×2640 分辨率、八条历史阶段和异常字段验证完整八层调用栈可见，ASan/UBSan 检查通过。此项是主机渲染检查，尚未取得手机上的新调用栈。
+
+本轮仅准备诊断内核和配套输入，未组装第 60 版启动镜像，未启动手机或刷写分区。第 59 版的调度器锁 panic 尚未修复。下一次获准临时启动后，应记录完整 `cpu/ctid/owner/tickets` 与 `BT 0–7`，使用第 60 版自己的符号表定位调用路径。
