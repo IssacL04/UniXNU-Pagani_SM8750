@@ -979,3 +979,6 @@ XY in=.../... out=.../... mask=...
 SoC 的 `sm8750-smp.patch` 将 Clutch 的 `multiple_psets_enabled` 设为 `FALSE`。XNU 现有 `pset_create()` 据此返回启动核所在集合，所有八核共用运行队列；八个 affinity、Aff1 核编号、Aff2 集群编号、8 CPU / 2 hardware cluster 容量、PSCI 与 GIC 路径全部保留。集群和容量感知调度需要后续单独适配 Edge。内存继续为 4 GiB，锁断言和第 60 版调用栈诊断均保留。
 
 `test-format2.py` 从实际选定的 XNU 源码提取 `pset_create()`、steal 启用判断和 Clutch steal 函数，用第二个硬件集群触发调用约定回归。旧策略复现同一线程二次加锁断言；新策略通过，并确认没有分配第二个 pset、Prime 返回 `pset0` 且节点位图仍为 1。完整补丁链、18 个组件、八核 ADT、实际复位/恢复汇编和九项内核源码回归通过。第 61 次完整构建尚待完成；这些主机证据尚不能证明八核真机稳定。未再次启动手机或刷写分区。
+
+
+第 61 次构建（[40505475023](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/40505475023)，设备源码 `0922d28`）在新增主机回归的编译阶段停止：macOS SDK 已定义 `__unused`，测试再次定义导致 `-Werror,-Wmacro-redefined`。完整补丁链已经应用，尚未开始内核编译，也没有本轮可用内核。测试现以 `#ifndef __unused` 保留系统定义；SoC 的实际调度策略补丁不变。下一次完整构建继续验证同一八核修复。

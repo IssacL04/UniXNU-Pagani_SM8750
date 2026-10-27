@@ -168,7 +168,9 @@ source = r'''
 #include <stddef.h>
 #define TRUE 1
 #define FALSE 0
+#ifndef __unused
 #define __unused __attribute__((unused))
+#endif
 typedef int pset_cluster_type_t;
 typedef void *thread_t;
 #define THREAD_NULL NULL
