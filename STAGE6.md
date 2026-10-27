@@ -894,8 +894,13 @@ XY in=.../... out=.../... mask=...
 
 `pagani-peripheral-status=1` 已从默认参数移除，触摸传输、HID 绑定和坐标处理保持第 57 版实现。八核验证使用 `pagani-platform-status=1`：`CPU reg` 是内核登记数量，`online` 是可用处理器数量，`T` 和 `I` 是曾收到定时器和 IPI 的逻辑核位图，八核覆盖应为 `ff`。位图只证明每核曾收到中断，持续运行仍需观察在线数量和系统交互。第二行显示 `gPhysSize`、空闲及 memorystatus available 的 MiB；这些含义不同，不能把空闲值当作总可用物理内存。控制台在 VM 就绪后启用跨核互斥，普通诊断遇到占用时跳过；panic 保留第一个 CPU 的报告，不等待可能已停止的锁持有者。
 
-原厂 DT 记录的 DDR 区段合计 12 GiB：`0x80000000 + 2 GiB`、`0x880000000 + 4 GiB`、`0x980000000 + 6 GiB`。这些区段之间有空洞，固件和外设还有保留区。当前 XNU 的 `boot_args` 和 pmap 启动路径管理单个连续窗口，不能把 `owned_memory_size` 直接写成 12 GiB。
+原厂 DT 记录的 DDR 区段合计 12 GiB：`0x80000000 + 2 GiB`、`0x880000000 + 4 GiB`、`0x980000000 + 6 GiB`。低位 2 GiB 与高位区域之间有空洞，后两个 4 GiB、6 GiB DDR 区段彼此相邻。进一步合并原厂 `/memory/reg` 中相邻的有效区间，可得到 `0x8c0000000`–`0xb00000000` 的连续 9 GiB；这是 Android 快照中的 RAM 范围，不能替代 UEFI 当次空闲图。当前 XNU 的 `boot_args` 和 pmap 启动路径管理单个连续窗口，不能把 `owned_memory_size` 直接写成 12 GiB。
 
-较小的扩容试验是把设备配置的 `payload.adt.owned_memory_size` 从 `0x100000000` 改为 `0x140000000`（5 GiB），重新生成 ADT、载荷与启动镜像。DarwinBoot 已允许 256 MiB–8 GiB、2 MiB 步长的请求，且只在 UEFI 实际报告的连续 ConventionalMemory 中分配；申请失败会停止加载，不会把保留内存冒充可用内存。较高的 6 GiB DDR 区段可能容纳 5 GiB，但本轮没有新的 UEFI 空闲图，尚不能保证。要跨区段接近整机 12 GiB，需要修改加载器交付、XNU 内存段与 pmap 初始化，并重新核对 DMA 地址范围，超出一次配置扩容的范围。
+较小的扩容试验是把设备配置的 `payload.adt.owned_memory_size` 从 `0x100000000` 改为 `0x140000000`（5 GiB），重新生成 ADT、载荷与启动镜像。DarwinBoot 已允许 256 MiB–8 GiB、2 MiB 步长的请求，且只在 UEFI 实际报告的连续 ConventionalMemory 中分配；申请失败会停止加载，不会把保留内存冒充可用内存。较高的 6 GiB DDR 区段可能容纳 5 GiB，但本轮没有新的 UEFI 空闲图，尚不能保证。若实际 UEFI 图也保留足够大的连续空闲区，后续可评估 6–8 GiB，并同步核对 DTS/ADT 的 DRAM 声明；当前加载器的大小校验上限为 8 GiB，不能仅凭 Android 的 9 GiB 区间直接提高申请值。要跨区段接近整机 12 GiB，需要修改加载器交付、XNU 内存段与 pmap 初始化，并重新核对 DMA 地址范围，超出一次配置扩容的范围。
 
 本候选先保留 4 GiB，单独验证八核。RAM Data 的 1 GiB 是稀疏磁盘逻辑容量，按实际写入分配页面，不能固定从 4 GiB 中扣除整整 1 GiB。完整补丁链应用、18 个组件及八核 ADT/实际 XNU 查询宏回归、控制台边界和多核故障保留测试、21 段 ARM64 汇编检查、8 项内核源码回归及外设回归均已通过；完整构建与八核真机结果尚未取得。第 57 版镜像继续保留，未进行本候选的临时启动或分区刷写。
+
+
+第 58 次云端构建（[40479677153](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/40479677153)，设备源码 `2536969`）通过配置与生产回归，随后在 bootstrap 的 `start.s` 汇编失败：`HAS_CLUSTER=1` 激活了 `HAS_CLUSTER && !NO_CPU_OVRD` 分支，引用 SM8750 不具备的 Apple `CPU_OVRD` 及其位定义。日志保存在 `out/oneplus13t/actions/run-58/logs/kernel-bootstrap.log`，该轮没有生成可交付内核。后续 corecrypto 的缺失符号提示是此汇编失败的结果。
+
+修正为 SoC 配置显式设置 `NO_CPU_OVRD=1`，保留八核与两个集群。新增回归从实际已打补丁的 `start.s` 提取复位与恢复片段，包含当前 BCM2837 配置头，再用 ARM64 Mach-O 汇编器编译；修正前复现同样三条错误，修正后通过。完整补丁链、18 个组件和八核 ADT/CPU 查询回归重新通过，下一次完整编译尚待完成。

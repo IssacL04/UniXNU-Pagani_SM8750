@@ -144,6 +144,13 @@ with tempfile.TemporaryDirectory() as directory:
     subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-x', 'c', '-', '-o', str(binary)],
                    input=source, text=True, check=True)
     subprocess.run([str(binary)], check=True)
+    reset_block = re.search(r'#if HAS_CLUSTER\n.*?\n#endif', start, re.S).group()
+    resume_block = re.search(r'#if HAS_CLUSTER && !NO_CPU_OVRD\n.*?\n#endif', start, re.S).group()
+    asm = (f'#define ASSEMBLER 1\n#include "{xnu}/pexpert/pexpert/arm64/BCM2837.h"\n'
+           '.text\n.globl _smp_reset\n_smp_reset:\n' + reset_block + '\n' + resume_block + '\nret\n')
+    subprocess.run([os.environ.get('CLANG', 'clang'), '--target=arm64-apple-darwin',
+                    '-x', 'assembler-with-cpp', '-c', '-', '-o', str(Path(directory)/'smp-reset.o')],
+                   input=asm, text=True, check=True)
 
 validate = runpy.run_path(str(ROOT / 'scripts/porting-record.py'))['validate']
 foreign = tomllib.loads((ctx.device / 'porting.toml').read_text())
