@@ -2,7 +2,7 @@
 
 更新：2026-10-27。**第 50 版已获真机确认：跳过 Setup 进入锁屏，电源键短按亮灭屏、长按打开关机界面；触控初始化失败。** 第 51 版首次 SPI 读取超时，触控仍无响应。第 53 版已完成构建、镜像回验及临时启动，实机读数确认 FIFO 接口关闭，首次 SPI 传输仍超时。第 54 版 SE DMA 候选已通过完整构建、镜像回验及临时启动，实机首次读取返回全零协议头并报 `-71`，触摸 HID 尚未启动。第 55 版实测确认首个四字节 SE DMA 读取完成，返回值仍全零，协议报 `-71`，触控仍无响应。Android 只读基线已取得：两路触控电源启用、存在有效 `a5` 数据，原厂片选延时为 50。第 56 版已补齐电源请求及片选延时，通过主机回归、云端完整构建和本地产物核对。用户随后连接 fastboot，配套启动镜像已组装并回验，临时启动的 Sending/Booting 均返回 OKAY，未刷写分区；实测已读到有效 TouchComm v1 报头，按下/抬起会改变触点掩码，HID 报告返回 0；上下滑动和关机界面的“取消”均无响应。第 57 版已改为独立触屏身份并补齐限定匹配、绑定检查和事件分发诊断，主机回归、云端完整编译与本地产物核验通过，内核已下载；临时启动后用户确认触摸可用。用户随后连接 fastboot，配套第 57 版镜像已完成组装和回验，临时启动 Sending/Booting 均为 OKAY；用户反馈“触摸可以了”，具体诊断读数尚未提供，未刷写分区。
 
-最新第 59 版八核候选已完成完整构建、下载、镜像组装及回验；用户连接 fastboot 后，临时启动 Sending/Booting 均返回 OKAY，随后用户照片确认在 affinity `0x200` 上发生调度器 ticket-lock panic。尚未取得八核在线和系统界面验证。第 59 版故障镜像为 `out/oneplus13t/boot/stage7-run-59/boot.img`，构建使用设备源码 `859dbce`；第 60 版诊断镜像现已组装、回验并获 fastboot 接受临时启动，等待新调用栈或系统表现反馈；已确认基本触摸可用的第 57 版镜像继续保留。第 50、51、53、54、55、56 版镜像继续保留；桌面应用交互、亮度及长期稳定性仍未验证。当前概况见 [README](README.md)，分项证据见 [porting.toml](porting.toml)。下文按时间保留各轮诊断与后续修复，最新结果见末尾。
+第 59、60 版八核测试均发生调度器 ticket-lock panic。第 60 版完整调用栈定位到 Clutch 跨调度集合取任务后重复加锁；第 62 版让全部八核共享一个调度集合，保留真实硬件拓扑。完整构建与实际二进制核验已通过，配套镜像 `out/oneplus13t/boot/stage7-run-62/boot.img` 已组装并回验。用户连接 fastboot 后，Sending/Booting 均返回 OKAY，系统启动、八核在线数量及持续交互表现待反馈。已确认基本触摸可用的第 57 版和各轮诊断镜像继续保留；亮度及长期稳定性仍未验证。当前概况见 [README](README.md)，分项证据见 [porting.toml](porting.toml)。下文按时间保留各轮诊断与后续修复，最新结果见末尾。
 
 ## iPadOS 输入
 
@@ -993,3 +993,14 @@ SoC 的 `sm8750-smp.patch` 将 Clutch 的 `multiple_psets_enabled` 设为 `FALSE
 二进制检查使用实际 Mach-O 的符号表、段映射和 XNU 调度表布局读取 Clutch 策略。第 60 版的 `multiple_psets_enabled` 为 1，第 62 版为 0，steal 启用判断与 Clutch 回调地址仍对应预期函数。因此单集合修复已经进入最终内核。断言与八层调用栈诊断均保留，若出现其他 panic 仍可继续定位。
 
 这轮完成源码修复、完整编译及产物验证。未组装或临时启动第 62 版 `boot.img`，未刷写分区；原第 57、59、60 版镜像和当前第 60 版启动输入继续保留。下一次获准临时启动需使用同一第 62 版内核、trust cache 和 RAM Data，确认 `reg=8`、`online=8`、`T=ff`、`I=ff`，并观察持续系统交互。单一调度集合保留八核与真实硬件集群，集群容量感知调度及更大内存窗口仍未验证。
+
+
+## 第 62 版八核调度修复镜像临时启动（2026-10-27）
+
+用户确认 fastboot 已连接并允许测试。用第 62 次构建的内核、信任缓存和 RAM Data 执行 `./unixnu payload`、`./unixnu bootimg`，生成 `out/oneplus13t/boot/stage7-run-62/boot.img`：87,957,504 字节，SHA-256 `d15c0f5fca06ad13047e653aeaa778b1d3b5c6610448113143d5aa6ab7f1bd2b`。旧版镜像继续保留。
+
+回验确认 Android v4、空 ramdisk、与既有镜像相同的 3 MiB UEFI、160 MiB FAT，以及 FAT 内实际内核、trust cache、RAM Data 与第 62 次构建匹配。Data UUID 为 `9E72E6D9-AC74-428E-A275-E8A25FD3264C`。实际 ADT 保留全部八个 affinity、正确的 running/waiting 状态、19.2 MHz timebase、PSCI SMC 和 4 GiB 窗口；启动参数保留 SMP、远端 GICR、自 IPI 及 CPU/RAM 两行状态，触摸日志默认关闭。内核哈希与此前验证过的 Clutch 单集合修复产物一致。
+
+启动前只读确认序列号 `3B15BB01BAT00000`、`product: sun`、`is-userspace: no`。再次确认镜像哈希后执行 `fastboot boot`，Sending 用时 2.020 秒、Booting 用时 0.337 秒，均返回 OKAY，总计 2.671 秒。日志为镜像目录中的 `fastboot-boot.log`。未刷写任何分区。
+
+这证明临时加载请求成功。尚待用户反馈是否进入系统、`reg/online/T/I` 的实际值、触摸及持续交互表现；不能据 fastboot 返回值宣称八核稳定。若再次 panic，应使用本轮第 62 版内核符号表分析新的完整调用栈。
