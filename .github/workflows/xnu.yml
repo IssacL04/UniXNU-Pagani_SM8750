@@ -91,6 +91,7 @@ jobs:
           python3 ../UniXNU-Pagani_SM8750/scripts/prepare-original-trust.py --tree "$UNIXNU_TREE" \
             --inputs out/ipsw/21H461 --output "$UNIXNU_OUTDIR/original-static-system.bundle"
       - name: Prepare volatile Data
+        id: data
         working-directory: source/UniXNU
         run: |
           sudo "$(command -v python3)" ../UniXNU-Pagani_SM8750/scripts/prepare-ram-data.py --tree "$UNIXNU_TREE" \
@@ -103,11 +104,22 @@ jobs:
         run: |
           ./unixnu kernel -j 3 2>&1 | tee "$UNIXNU_OUTDIR/logs/kernel.log"
       - name: Build and stage A830 Metal
+        if: ${{ !cancelled() && steps.data.outcome == 'success' }}
         working-directory: source/UniXNU
         run: |
           python3 ../UniXNU-Pagani_SM8750/scripts/build-metal-userspace.py --tree "$UNIXNU_TREE" \
             --data "$UNIXNU_OUTDIR/ram-data/data.dbrdisk" --original-trust "$UNIXNU_OUTDIR/original-static-system.bundle" \
             --output "$UNIXNU_OUTDIR/metal" 2>&1 | tee "$UNIXNU_OUTDIR/logs/metal.log"
+      - name: Collect build identity and diagnostics
+        if: always()
+        working-directory: source/UniXNU
+        run: |
+          if test -n "$UNIXNU_OUTDIR"; then
+            test ! -f "$UNIXNU_OUTDIR/.config" || cp "$UNIXNU_OUTDIR/.config" "$UNIXNU_OUTDIR/candidate.config"
+            for log in "$UNIXNU_TREE"/.cache/mesa-tu-*.log; do
+              test ! -f "$log" || cp "$log" "$UNIXNU_OUTDIR/logs/"
+            done
+          fi
       - name: Upload candidate build outputs for local boot packaging
         if: always()
         uses: actions/upload-artifact@v4
@@ -118,5 +130,7 @@ jobs:
             source/UniXNU/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t_metal/logs/**
             source/UniXNU/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t_metal/metal/**
             source/UniXNU/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t_metal/status.json
+            source/UniXNU/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t_metal/candidate.config
+            source/UniXNU/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t_metal/ram-data/seed.json
           if-no-files-found: warn
           retention-days: 7
