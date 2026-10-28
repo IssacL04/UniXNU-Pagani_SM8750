@@ -1,10 +1,19 @@
-name: Pagani SM8750 XNU (OnePlus 13T)
+name: Pagani A830 Metal candidate
 on:
   workflow_dispatch:
+    inputs:
+      bundle_url:
+        description: HTTPS URL of the encrypted source and firmware bundle
+        required: true
+        type: string
+      bundle_sha256:
+        description: SHA-256 of the encrypted bundle
+        required: true
+        type: string
 permissions:
   contents: read
 concurrency:
-  group: oneplus13t-xnu-${{ github.ref }}
+  group: oneplus13t-metal-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   build:
@@ -16,101 +25,98 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          path: device
-          submodules: recursive
-          persist-credentials: false
-      - name: Read the maintained main fork pin
-        id: main
-        run: |
-          revision=$(cat device/upstream.rev)
-          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
-          echo "revision=$revision" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
-        with:
-          repository: IssacL04/UniXNU_Enc3l
-          ref: ${{ steps.main.outputs.revision }}
-          path: main
-          submodules: recursive
+          path: bootstrap
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install host tools and check the SDK
+      - name: Restore exact candidate sources and private inputs
+        env:
+          BUNDLE_URL: ${{ inputs.bundle_url }}
+          BUNDLE_SHA256: ${{ inputs.bundle_sha256 }}
+          PAGANI_METAL_BUNDLE_KEY: ${{ secrets.PAGANI_METAL_BUNDLE_KEY }}
         run: |
-          brew install cmake ninja unifdef llvm mtools openssl@3 dtc
+          test -n "$PAGANI_METAL_BUNDLE_KEY"
+          curl --fail --location --proto '=https' --tlsv1.2 --output "$RUNNER_TEMP/metal.enc" "$BUNDLE_URL"
+          python3 - <<'PY'
+          import hashlib, os, pathlib, re
+          expected = os.environ['BUNDLE_SHA256']
+          assert re.fullmatch('[0-9a-f]{64}', expected)
+          assert hashlib.sha256((pathlib.Path(os.environ['RUNNER_TEMP']) / 'metal.enc').read_bytes()).hexdigest() == expected
+          PY
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:PAGANI_METAL_BUNDLE_KEY \
+            -in "$RUNNER_TEMP/metal.enc" -out "$RUNNER_TEMP/metal.tar.gz"
+          python3 bootstrap/scripts/package-metal-ci.py restore --bundle "$RUNNER_TEMP/metal.tar.gz" --workspace source
+      - name: Install build tools and check SDK
+        run: |
+          brew install cmake ninja unifdef llvm mtools openssl@3 dtc glslang bison flex rustup
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix rustup)/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-path
-      - name: Resolve the four profiles and fetch pinned sources
-        working-directory: main
+      - name: Resolve isolated Metal profile
+        working-directory: source/UniXNU
         run: |
-          ./unixnu defconfig oneplus13t_defconfig -D ../device
+          python3 ../UniXNU-Pagani_SM8750/scripts/prepare-metal-profile.py --soc ../UniXNU-sm8750-common
+          ./unixnu defconfig oneplus13t_metal_defconfig -D ../UniXNU-Pagani_SM8750/.cache/metal-device
           ./unixnu fetch xnu libplatform libdispatch AvailabilityVersions libpthread corecrypto-2023 IOStorageFamily
           ./unixnu tree
-          OUTPUT="$PWD/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t"
+          OUTPUT="$PWD/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t_metal"
           mkdir -p "$OUTPUT/logs"
           echo "UNIXNU_OUTDIR=$OUTPUT" >> "$GITHUB_ENV"
           echo "UNIXNU_TREE=$OUTPUT/tree" >> "$GITHUB_ENV"
           echo "PYTHONPATH=$PWD/scripts" >> "$GITHUB_ENV"
           ./unixnu status --json > "$OUTPUT/status.json"
-          cp ../device/unixnu.lock "$OUTPUT/unixnu.lock"
-      - name: Check configuration and production contracts
-        working-directory: main
+      - name: Check A830 and baseline display/input contracts
+        working-directory: source/UniXNU
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          ASAN_OPTIONS: detect_leaks=0
         run: |
-          python3 ../device/scripts/test-format2.py --device ../device
-          python3 scripts/porting-record.py check --device ../device
-          python3 ../device/scripts/test-kernel-source.py
-          python3 ../device/scripts/test-bootimg.py
-          python3 ../device/scripts/test-stage6.py --tree "$UNIXNU_TREE" --openssl-prefix "$(brew --prefix openssl@3)"
-          ASAN_OPTIONS=detect_leaks=0 python3 ../device/scripts/test-stage7.py --tree "$UNIXNU_TREE"
-          ASAN_OPTIONS=detect_leaks=0 python3 ../device/scripts/test-peripherals.py --tree "$UNIXNU_TREE"
-          python3 ../device/scripts/test-ram-data.py
-          python3 ../device/scripts/test-root-audit.py --tree "$UNIXNU_TREE"
-          python3 "$UNIXNU_TREE/drivers/NativeKeyStoreEvents/test_closed_boundary.py"
-          python3 "$UNIXNU_TREE/drivers/PaganiDarwinBoot/Test/test-adt.py"
-          cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
-            -I "$UNIXNU_TREE/drivers/PaganiDarwinBoot/DarwinBootPkg/Driver" \
-            "$UNIXNU_TREE/drivers/BootProgress/Test/console.c" -o /tmp/boot-progress-test
-          ASAN_OPTIONS=detect_leaks=0 /tmp/boot-progress-test
-      - name: Prepare original ABI inputs, trust and root-window policies
-        working-directory: main
+          python3 ../UniXNU-Pagani_SM8750/scripts/test-metal-profile.py
+          python3 ../UniXNU-Pagani_SM8750/scripts/test-gpu-firmware.py
+          python3 ../UniXNU-Pagani_SM8750/scripts/check-gmu.py
+          python3 scripts/check-adreno-a830.py
+          python3 ../UniXNU-Pagani_SM8750/scripts/test-stage7.py --tree "$UNIXNU_TREE"
+          python3 ../UniXNU-Pagani_SM8750/scripts/test-peripherals.py --tree "$UNIXNU_TREE"
+      - name: Prepare original ABI, storage and trust inputs
+        working-directory: source/UniXNU
         run: |
-          ./unixnu ipsw fetch AppleLogo KernelCache OS Cryptex1,SystemOS StaticTrustCache Cryptex1,SystemTrustCache 2>&1 | tee "$UNIXNU_OUTDIR/logs/actions-ipsw.log"
+          ./unixnu ipsw fetch AppleLogo KernelCache OS Cryptex1,SystemOS StaticTrustCache Cryptex1,SystemTrustCache 2>&1 | tee "$UNIXNU_OUTDIR/logs/ipsw.log"
           python3 "$UNIXNU_TREE/scripts/audit-stage7-display.py" out/ipsw/21H461/kernelcache.decompressed
-          python3 ../device/scripts/prepare-ufs-policies.py --tree "$UNIXNU_TREE" \
-            --inputs out/ipsw/21H461 --openssl-prefix "$(brew --prefix openssl@3)" \
-            2>&1 | tee "$UNIXNU_OUTDIR/logs/actions-policies.log"
-          python3 ../device/scripts/prepare-original-trust.py --tree "$UNIXNU_TREE" \
-            --inputs out/ipsw/21H461 --output "$UNIXNU_OUTDIR/original-static-system.bundle" \
-            2>&1 | tee "$UNIXNU_OUTDIR/logs/actions-trust.log"
-      - name: Prepare volatile Data from the original var tree
-        working-directory: main
+          python3 ../UniXNU-Pagani_SM8750/scripts/prepare-ufs-policies.py --tree "$UNIXNU_TREE" \
+            --inputs out/ipsw/21H461 --openssl-prefix "$(brew --prefix openssl@3)"
+          python3 ../UniXNU-Pagani_SM8750/scripts/prepare-original-trust.py --tree "$UNIXNU_TREE" \
+            --inputs out/ipsw/21H461 --output "$UNIXNU_OUTDIR/original-static-system.bundle"
+      - name: Prepare volatile Data
+        working-directory: source/UniXNU
         run: |
-          sudo "$(command -v python3)" ../device/scripts/prepare-ram-data.py --tree "$UNIXNU_TREE" \
+          sudo "$(command -v python3)" ../UniXNU-Pagani_SM8750/scripts/prepare-ram-data.py --tree "$UNIXNU_TREE" \
             --source out/ipsw/21H461/044-76040-038.dmg --systemos out/ipsw/21H461/044-76034-038.dmg \
-            --output "$UNIXNU_OUTDIR/ram-data" --config "$UNIXNU_OUTDIR/.config" \
-            2>&1 | tee "$UNIXNU_OUTDIR/logs/actions-ram-data.log"
-      - name: Build XNU and prelink
-        working-directory: main
+            --output "$UNIXNU_OUTDIR/ram-data" --config "$UNIXNU_OUTDIR/.config"
+      - name: Build and prelink XNU with the A830 runtime
+        working-directory: source/UniXNU
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          ./unixnu kernel -j 3 2>&1 | tee "$UNIXNU_OUTDIR/logs/actions-build.log"
-          python3 "$UNIXNU_TREE/drivers/BootProgress/Test/panic-entry.py" "$UNIXNU_TREE/.cache/xnu-work" \
-            --font "$UNIXNU_TREE/drivers/PaganiDarwinBoot/DarwinBootPkg/Driver"
-      - name: Upload kernel and inputs for local firmware and image assembly
+          ./unixnu kernel -j 3 2>&1 | tee "$UNIXNU_OUTDIR/logs/kernel.log"
+      - name: Build and stage A830 Metal
+        working-directory: source/UniXNU
+        run: |
+          python3 ../UniXNU-Pagani_SM8750/scripts/build-metal-userspace.py --tree "$UNIXNU_TREE" \
+            --data "$UNIXNU_OUTDIR/ram-data/data.dbrdisk" --original-trust "$UNIXNU_OUTDIR/original-static-system.bundle" \
+            --output "$UNIXNU_OUTDIR/metal" 2>&1 | tee "$UNIXNU_OUTDIR/logs/metal.log"
+      - name: Upload candidate build outputs for local boot packaging
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: oneplus13t-format2-${{ github.run_number }}
+          name: oneplus13t-metal-${{ github.run_number }}
           path: |
-            main/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t/kernel/**
-            main/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t/logs/**
-            main/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t/status.json
-            main/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t/unixnu.lock
-            main/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t/ram-data/**
-            main/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t/original-static-system.bundle
+            source/UniXNU/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t_metal/kernel/**
+            source/UniXNU/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t_metal/logs/**
+            source/UniXNU/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t_metal/metal/**
+            source/UniXNU/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t_metal/status.json
           if-no-files-found: warn
           retention-days: 7
