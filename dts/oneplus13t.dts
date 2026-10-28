@@ -17,3 +17,7 @@
 &cpu5 { status = "okay"; };
 &cpu6 { status = "okay"; };
 &cpu7 { status = "okay"; };
+&gpu {
+    qcom,chipid = <0x44050001>;
+    qcom,gpu-model = "Adreno830v2";
+};
