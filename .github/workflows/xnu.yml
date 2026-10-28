@@ -49,7 +49,7 @@ jobs:
           python3 bootstrap/scripts/package-metal-ci.py restore --bundle "$RUNNER_TEMP/metal.tar.gz" --workspace source
       - name: Install build tools and check SDK
         run: |
-          brew install cmake ninja unifdef llvm mtools openssl@3 dtc glslang bison flex rustup
+          brew install cmake ninja unifdef llvm mtools openssl@3 dtc glslang shaderc spirv-tools bison flex rustup
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
