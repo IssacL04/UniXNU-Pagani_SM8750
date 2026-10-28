@@ -132,5 +132,11 @@ jobs:
             source/UniXNU/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t_metal/status.json
             source/UniXNU/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t_metal/candidate.config
             source/UniXNU/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t_metal/ram-data/seed.json
+            source/UniXNU/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t_metal/ram-data/data.dbrdisk
+            source/UniXNU/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t_metal/tree/build/adreno-metal-plugin/NativeAdrenoMetal.bundle/**
+            source/UniXNU/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t_metal/tree/build/adreno-metal-plugin/adrenoprobed
+            source/UniXNU/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t_metal/tree/build/adreno-metal-plugin/*.plist
+            source/UniXNU/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t_metal/tree/build/adreno-metal-plugin/trust.json
+            source/UniXNU/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t_metal/tree/build/adreno-metal-plugin/owner-trust.bundle
           if-no-files-found: warn
           retention-days: 7
