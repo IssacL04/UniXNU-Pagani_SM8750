@@ -119,13 +119,14 @@ jobs:
             --source out/ipsw/21H461/044-76040-038.dmg --systemos out/ipsw/21H461/044-76034-038.dmg \
             --output "$UNIXNU_OUTDIR/ram-data" --config "$UNIXNU_OUTDIR/.config"
       - name: Build and prelink XNU with the A830 runtime
+        id: kernel
         working-directory: source/UniXNU
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           ./unixnu kernel -j 3 2>&1 | tee "$UNIXNU_OUTDIR/logs/kernel.log"
       - name: Build and stage A830 Metal
-        if: ${{ !cancelled() && steps.data.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.kernel.outcome == 'success' }}
         working-directory: source/UniXNU
         run: |
           python3 ../UniXNU-Pagani_SM8750/scripts/build-metal-userspace.py --tree "$UNIXNU_TREE" \
