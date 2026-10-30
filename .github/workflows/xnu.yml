@@ -3,11 +3,11 @@ on:
   workflow_dispatch:
     inputs:
       bundle_url:
-        description: HTTPS URL of the encrypted source and firmware bundle
+        description: HTTPS URL of the source-only bundle
         required: true
         type: string
       bundle_sha256:
-        description: SHA-256 of the encrypted bundle
+        description: SHA-256 of the source-only bundle
         required: true
         type: string
 permissions:
@@ -30,22 +30,39 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Restore exact candidate sources and private inputs
+      - name: Restore candidate sources and reuse Run 69 firmware inputs
         env:
           BUNDLE_URL: ${{ inputs.bundle_url }}
           BUNDLE_SHA256: ${{ inputs.bundle_sha256 }}
           PAGANI_METAL_BUNDLE_KEY: ${{ secrets.PAGANI_METAL_BUNDLE_KEY }}
         run: |
           test -n "$PAGANI_METAL_BUNDLE_KEY"
-          curl --fail --location --proto '=https' --tlsv1.2 --output "$RUNNER_TEMP/metal.enc" "$BUNDLE_URL"
+          curl --fail --location --proto '=https' --tlsv1.2 --output "$RUNNER_TEMP/sources.tar.gz" "$BUNDLE_URL"
+          curl --fail --location --proto '=https' --tlsv1.2 --output "$RUNNER_TEMP/inputs.enc" \
+            https://raw.githubusercontent.com/IssacL04/UniXNU-Pagani_SM8750/823a2fa2ea91a31f97d3a9c6be0c792ea745c543/.ci-inputs/a830-metal.enc
           python3 - <<'PY'
           import hashlib, os, pathlib, re
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
           expected = os.environ['BUNDLE_SHA256']
           assert re.fullmatch('[0-9a-f]{64}', expected)
-          assert hashlib.sha256((pathlib.Path(os.environ['RUNNER_TEMP']) / 'metal.enc').read_bytes()).hexdigest() == expected
+          assert hashlib.sha256((root / 'sources.tar.gz').read_bytes()).hexdigest() == expected
+          assert hashlib.sha256((root / 'inputs.enc').read_bytes()).hexdigest() == '1cee6923ee6bcba2514cdc3c9ab1cf11709399c01a142a4e51f182d2c2e67fe2'
           PY
           openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:PAGANI_METAL_BUNDLE_KEY \
-            -in "$RUNNER_TEMP/metal.enc" -out "$RUNNER_TEMP/metal.tar.gz"
+            -in "$RUNNER_TEMP/inputs.enc" -out "$RUNNER_TEMP/previous.tar.gz"
+          python3 - <<'PY'
+          import os, pathlib, tarfile
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          with tarfile.open(root / 'sources.tar.gz') as sources, tarfile.open(root / 'previous.tar.gz') as previous, \
+                  tarfile.open(root / 'metal.tar.gz', 'w:gz') as output:
+              for member in sources:
+                  assert member.isfile() and not member.name.startswith('inputs/')
+                  output.addfile(member, sources.extractfile(member))
+              for member in previous:
+                  if member.name.startswith('inputs/'):
+                      assert member.isfile()
+                      output.addfile(member, previous.extractfile(member))
+          PY
           python3 bootstrap/scripts/package-metal-ci.py restore --bundle "$RUNNER_TEMP/metal.tar.gz" --workspace source
       - name: Install build tools and check SDK
         run: |
@@ -81,6 +98,10 @@ jobs:
           python3 scripts/check-adreno-a830.py
           python3 ../UniXNU-Pagani_SM8750/scripts/test-stage7.py --tree "$UNIXNU_TREE"
           python3 ../UniXNU-Pagani_SM8750/scripts/test-peripherals.py --tree "$UNIXNU_TREE"
+          cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+            -I "$UNIXNU_TREE/drivers/PaganiDarwinBoot/DarwinBootPkg/Driver" \
+            "$UNIXNU_TREE/drivers/BootProgress/Test/console.c" -o /tmp/boot-progress-test
+          /tmp/boot-progress-test
       - name: Prepare original ABI, storage and trust inputs
         working-directory: source/UniXNU
         run: |
