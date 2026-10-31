@@ -66,7 +66,7 @@ jobs:
           python3 bootstrap/scripts/package-metal-ci.py restore --bundle "$RUNNER_TEMP/metal.tar.gz" --workspace source
       - name: Install build tools and check SDK
         run: |
-          brew install cmake ninja unifdef llvm mtools openssl@3 dtc glslang shaderc spirv-tools bison flex rustup
+          brew install cmake ninja unifdef llvm mtools openssl@3 dtc glslang shaderc spirv-tools bison flex rustup molten-vk
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
@@ -96,6 +96,7 @@ jobs:
           python3 ../UniXNU-Pagani_SM8750/scripts/test-gpu-firmware.py
           python3 ../UniXNU-Pagani_SM8750/scripts/check-gmu.py
           python3 scripts/check-adreno-a830.py
+          python3 scripts/check-turnip-submit-backpressure.py --output "$UNIXNU_OUTDIR/logs/submit-pressure"
           python3 ../UniXNU-Pagani_SM8750/scripts/test-stage7.py --tree "$UNIXNU_TREE"
           python3 ../UniXNU-Pagani_SM8750/scripts/test-peripherals.py --tree "$UNIXNU_TREE"
           cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
@@ -132,6 +133,11 @@ jobs:
           python3 ../UniXNU-Pagani_SM8750/scripts/build-metal-userspace.py --tree "$UNIXNU_TREE" \
             --data "$UNIXNU_OUTDIR/ram-data/data.dbrdisk" --original-trust "$UNIXNU_OUTDIR/original-static-system.bundle" \
             --output "$UNIXNU_OUTDIR/metal" 2>&1 | tee "$UNIXNU_OUTDIR/logs/metal.log"
+      - name: Verify Metal heap reuse on the build host
+        working-directory: source/UniXNU
+        run: |
+          cd "$UNIXNU_TREE"
+          python3 scripts/check-native-metal-heap-host.py --loader "$(brew --prefix molten-vk)/lib/libMoltenVK.dylib" 2>&1 | tee "$UNIXNU_OUTDIR/logs/heap-aliasing.log"
       - name: Collect build identity and diagnostics
         if: always()
         working-directory: source/UniXNU
