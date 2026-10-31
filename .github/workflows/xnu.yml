@@ -10,8 +10,13 @@ on:
         description: SHA-256 of the source-only bundle
         required: true
         type: string
+      reuse_run_id:
+        description: Optional same-kernel run to reuse for a userspace-only rebuild
+        required: false
+        type: string
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: oneplus13t-metal-${{ github.ref }}
   cancel-in-progress: false
@@ -104,6 +109,7 @@ jobs:
             "$UNIXNU_TREE/drivers/BootProgress/Test/console.c" -o /tmp/boot-progress-test
           /tmp/boot-progress-test
       - name: Prepare original ABI, storage and trust inputs
+        if: ${{ inputs.reuse_run_id == '' }}
         working-directory: source/UniXNU
         run: |
           ./unixnu ipsw fetch AppleLogo KernelCache OS Cryptex1,SystemOS StaticTrustCache Cryptex1,SystemTrustCache 2>&1 | tee "$UNIXNU_OUTDIR/logs/ipsw.log"
@@ -113,6 +119,7 @@ jobs:
           python3 ../UniXNU-Pagani_SM8750/scripts/prepare-original-trust.py --tree "$UNIXNU_TREE" \
             --inputs out/ipsw/21H461 --output "$UNIXNU_OUTDIR/original-static-system.bundle"
       - name: Prepare volatile Data
+        if: ${{ inputs.reuse_run_id == '' }}
         id: data
         working-directory: source/UniXNU
         run: |
@@ -120,14 +127,42 @@ jobs:
             --source out/ipsw/21H461/044-76040-038.dmg --systemos out/ipsw/21H461/044-76034-038.dmg \
             --output "$UNIXNU_OUTDIR/ram-data" --config "$UNIXNU_OUTDIR/.config"
       - name: Build and prelink XNU with the A830 runtime
+        if: ${{ inputs.reuse_run_id == '' }}
         id: kernel
         working-directory: source/UniXNU
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           ./unixnu kernel -j 3 2>&1 | tee "$UNIXNU_OUTDIR/logs/kernel.log"
+      - name: Download the matching kernel and base Data
+        id: reuse
+        if: ${{ inputs.reuse_run_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: oneplus13t-metal-*
+          merge-multiple: true
+          path: ${{ env.UNIXNU_OUTDIR }}
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.reuse_run_id }}
+      - name: Validate reused inputs and prepare original trust
+        if: ${{ inputs.reuse_run_id != '' }}
+        working-directory: source/UniXNU
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, uuid
+          root = pathlib.Path(os.environ['UNIXNU_OUTDIR'])
+          identity = str(uuid.UUID(json.loads((root / 'ram-data/seed.json').read_text())['volume_uuid'])).upper()
+          assert identity.encode() in (root / 'kernel/kernel.macho').read_bytes()
+          assert identity in (root / 'candidate.config').read_text()
+          assert (root / 'ram-data/data.dbrdisk').stat().st_size > 0
+          assert not (root / 'metal').exists(), 'Reuse a kernel-only artifact'
+          (root / '.config').write_bytes((root / 'candidate.config').read_bytes())
+          PY
+          ./unixnu ipsw fetch StaticTrustCache Cryptex1,SystemTrustCache
+          python3 ../UniXNU-Pagani_SM8750/scripts/prepare-original-trust.py --tree "$UNIXNU_TREE" \
+            --inputs out/ipsw/21H461 --output "$UNIXNU_OUTDIR/original-static-system.bundle"
       - name: Build and stage A830 Metal
-        if: ${{ !cancelled() && steps.kernel.outcome == 'success' }}
+        if: ${{ success() && (steps.kernel.outcome == 'success' || steps.reuse.outcome == 'success') }}
         working-directory: source/UniXNU
         run: |
           python3 ../UniXNU-Pagani_SM8750/scripts/build-metal-userspace.py --tree "$UNIXNU_TREE" \
