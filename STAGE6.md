@@ -1411,3 +1411,5 @@ SYSMEM 对照镜像位于 `out/oneplus13t/boot/metal-run-88-sysmem/boot.img`，1
 Metal 候选将软件 vsync 请求设为 120 Hz，保留 CPU 基线的 60 Hz；关闭昂贵的运行时追踪但保留现有 4 Hz 屏幕状态栏。面板仍继承固件 DSI 模式，没有改写面板时序或伪造硬件 vblank。120 Hz 软件请求尚不代表 120 FPS 或面板 120 Hz。用户要求构建、下载 boot 后等待其返回，本轮不操作手机；新频率、功耗、实际帧率和热稳定性留待测试。
 
 [Run 91](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/41234063029) 已启动完整内核与用户态构建。CI 提交 `5b11f85` 的纯源码包包含 7 个仓库、66 项，253337 字节，SHA-256 `7cb596187eca02ad044dce1b4454817cea74379610be9cf5b681416af01d9685`。本地 24 个 runtime / 12 个 Mesa 补丁的精确应用和还原通过；配置隔离、525 MHz 全 speed-bin 投票、提交背压回归通过。
+
+新增本地实际显示代码回归覆盖 120 Hz 的定时器、固定刷新属性和通知，原 60 Hz、空闲/电源暂停及恢复检查保留；Clang 控制台运行时符号检查与 ASan/UBSan 显示测试通过。这是 Run 91 源码冻结后的测试扩充，生产代码未变化。完整上游历史核验发现 metal2vulkan `development` 与固定 `624bab39` 分叉，当前分支祖先断言不通过；保留 UniXNU 图形分支仍指定的固定版本，并独立通过全部 24 个补丁的精确源码还原检查。

@@ -43,7 +43,7 @@ static bool PE_parse_boot_argn(const char *name,void *value,unsigned size){
 }
 static void native_legacy_vsync_observed(unsigned,unsigned){}
 static void native_legacy_vsync_notify(void *,uint64_t stamp,uint64_t continuous,uint64_t interval){
-    assert(stamp==now && continuous==now+17 && interval==1666666);++notifications;
+    assert(stamp==now && continuous==now+17 && interval==(rate==120?833333u:1666666u));++notifications;
 }
 struct IOTimerEventSource {
     uint64_t deadline=0;unsigned arms=0;bool cancelled=false;
@@ -95,6 +95,13 @@ int main(){
     assert(words[0]==(1ull<<32)/60 && words[2]==words[0] && words[3]==words[1] && words[4]==104);
     assert(!display.getRefreshAttributes(nullptr,false));
     display.stopVsync();assert(!display.vsyncTimer && !liveTimers);display.stopVsync();
+    rate=120;display.startVsync();assert(display.vsyncTimer && display.vsyncArmed);
+    uint64_t expected=0;nanoseconds_to_absolutetime(1000000000ull/120,&expected);
+    assert(display.vsyncInterval==expected && display.vsyncTimer->deadline==now+expected);
+    assert(display.getRefreshAttributes(words,false));
+    assert(words[0]==(1ull<<32)/120 && words[2]==words[0] && words[3]==words[1]);
+    now=display.vsyncTimer->deadline;display.vsyncTick();assert(notifications==3);
+    display.stopVsync();assert(!display.vsyncTimer && !liveTimers);
 }
 '''
 with tempfile.TemporaryDirectory(prefix='stage7-check-') as temporary:
