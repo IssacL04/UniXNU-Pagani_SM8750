@@ -14,6 +14,11 @@ on:
         description: Optional same-kernel run to reuse for a userspace-only rebuild
         required: false
         type: string
+      verify_only:
+        description: Recheck a completed candidate with test-only source changes (requires reuse_run_id)
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
   actions: read
@@ -81,7 +86,11 @@ jobs:
           xcrun --sdk iphoneos --show-sdk-path
       - name: Resolve isolated Metal profile
         working-directory: source/UniXNU
+        env:
+          VERIFY_ONLY: ${{ inputs.verify_only }}
+          REUSE_RUN_ID: ${{ inputs.reuse_run_id }}
         run: |
+          test "$VERIFY_ONLY" != true || test -n "$REUSE_RUN_ID"
           python3 ../UniXNU-Pagani_SM8750/scripts/prepare-metal-profile.py --soc ../UniXNU-sm8750-common
           ./unixnu defconfig oneplus13t_metal_defconfig -D ../UniXNU-Pagani_SM8750/.cache/metal-device
           ./unixnu fetch xnu libplatform libdispatch AvailabilityVersions libpthread corecrypto-2023 IOStorageFamily
@@ -147,6 +156,8 @@ jobs:
       - name: Validate reused inputs and prepare original trust
         if: ${{ inputs.reuse_run_id != '' }}
         working-directory: source/UniXNU
+        env:
+          VERIFY_ONLY: ${{ inputs.verify_only }}
         run: |
           python3 - <<'PY'
           import json, os, pathlib, uuid
@@ -155,19 +166,35 @@ jobs:
           assert identity.encode() in (root / 'kernel/kernel.macho').read_bytes()
           assert identity in (root / 'candidate.config').read_text()
           assert (root / 'ram-data/data.dbrdisk').stat().st_size > 0
-          assert not (root / 'metal').exists(), 'Reuse a kernel-only artifact'
+          if os.environ['VERIFY_ONLY'] == 'true':
+              assert (root / 'metal/data.dbrdisk').is_file()
+              assert (root / 'metal/owner-trust.bundle').is_file()
+          else:
+              assert not (root / 'metal').exists(), 'Reuse a kernel-only artifact'
           (root / '.config').write_bytes((root / 'candidate.config').read_bytes())
           PY
           ./unixnu ipsw fetch StaticTrustCache Cryptex1,SystemTrustCache
           python3 ../UniXNU-Pagani_SM8750/scripts/prepare-original-trust.py --tree "$UNIXNU_TREE" \
             --inputs out/ipsw/21H461 --output "$UNIXNU_OUTDIR/original-static-system.bundle"
       - name: Build and stage A830 Metal
-        if: ${{ success() && (steps.kernel.outcome == 'success' || steps.reuse.outcome == 'success') }}
+        if: ${{ success() && !inputs.verify_only && (steps.kernel.outcome == 'success' || steps.reuse.outcome == 'success') }}
         working-directory: source/UniXNU
         run: |
           python3 ../UniXNU-Pagani_SM8750/scripts/build-metal-userspace.py --tree "$UNIXNU_TREE" \
             --data "$UNIXNU_OUTDIR/ram-data/data.dbrdisk" --original-trust "$UNIXNU_OUTDIR/original-static-system.bundle" \
             --output "$UNIXNU_OUTDIR/metal" 2>&1 | tee "$UNIXNU_OUTDIR/logs/metal.log"
+      - name: Prepare the pinned translator for a verification-only run
+        if: ${{ inputs.verify_only }}
+        working-directory: source/UniXNU
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, runpy
+          tree = pathlib.Path(os.environ['UNIXNU_TREE'])
+          pin = json.loads((tree / 'scripts/data/gpu-metal-vulkan-inputs.json').read_text())['translator']
+          checkout = runpy.run_path('../UniXNU-Pagani_SM8750/scripts/build-metal-userspace.py')['checkout']
+          checkout(tree / '.cache/gpu-reference/metal2vulkan', pin['repository'], pin['commit'])
+          PY
+          rustup toolchain install 1.98.0 --profile minimal
       - name: Verify Metal heap reuse on the build host
         working-directory: source/UniXNU
         run: |
@@ -179,7 +206,7 @@ jobs:
         run: |
           if test -n "$UNIXNU_OUTDIR"; then
             test ! -f "$UNIXNU_OUTDIR/.config" || cp "$UNIXNU_OUTDIR/.config" "$UNIXNU_OUTDIR/candidate.config"
-            for log in "$UNIXNU_TREE"/.cache/mesa-tu-*.log; do
+            for log in "$UNIXNU_TREE"/.cache/mesa-tu-*.log "$UNIXNU_TREE"/build/metal-heap-host/*.log "$UNIXNU_TREE"/build/adreno-metal-bridge/build-*.log; do
               test ! -f "$log" || cp "$log" "$UNIXNU_OUTDIR/logs/"
             done
           fi
