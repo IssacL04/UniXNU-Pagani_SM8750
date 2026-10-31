@@ -103,6 +103,7 @@ packages = [
   "{uefi}",
   "{uefi}/Platforms/OnePlus",
   "{tree}/package",
+  "{tree}/kits",
   "{tree}/drivers/PaganiDarwinBoot",
   "{edk2}",
   "{uefi}/Common/Mu",

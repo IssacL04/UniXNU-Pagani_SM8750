@@ -8,3 +8,10 @@
 # Original static system trust bundle sha256 7416ca4f8377146626bb284e2133c76bee6cb4e3ee0af5d648b186235a7323a7
 # Data seed: prepare-ram-data.py from verified OS and SystemOS; seed.json records image and UUID.
 # unique_chip_id: per-device nonzero private 64-bit value in ignored main unixnu.local.toml.
+# PKX110 Gen8 GPU: base vendor extent in the local 2026-10-22 super.img backup.
+# OTA COW overlays not applied; active-slot equality unverified. Local cache: .cache/firmware/pkx110-gpu/.
+# Exact source provenance, byte lengths and SHA-256 pins: scripts/data/sm8750-gpu-inputs.json.
+# vendor/firmware/gen80000_gmu.bin sha256 1ad8175e6cd01ea76c64d20b83600038c52dd29844b48d57b11b769b038863a5
+# vendor/firmware/gen80000_sqe.fw sha256 9c8f009bea112d7c06dd2ccb67e889999459e53b92f0f4859f5ea0db067ad6b5
+# vendor/firmware/gen80000_aqe.fw sha256 f04cb97e1e629b9003a26c5670b8f7e5b7bfeca95d35b2abd581fd8672efed20
+# vendor/firmware/gen80000_zap.mbn sha256 926b145d3cc241d4de77f24ead55223e554865e2e0ee724ce61dbf9e680b6b3b

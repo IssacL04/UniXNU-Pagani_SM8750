@@ -23,6 +23,13 @@ def check(source):
     rows = re.findall(r'\{"([^"]+)",\s*(0x[0-9A-Fa-f]+),\s*(0x[0-9A-Fa-f]+),'
                       r'\s*(\w+),\s*(\w+),\s*(\w+),\s*(\w+),\s*(\w+)\}', source)
     assert rows and len(rows) == source.count('{"'), 'unparsed memory-map entries'
+    # DAL/HWIO registers the whole GFX aperture; partial HOBs make AddMemorySpace fail.
+    gfx = [row for row in rows if int(row[1], 16) < 0x03E00000
+           and int(row[1], 16) + int(row[2], 16) > 0x03D00000]
+    assert len(gfx) == 1, 'GFX must have one complete MMIO mapping, without partial overlaps'
+    _, base, size, hob, resource, attrs, kind, arm_attrs = gfx[0]
+    assert (int(base, 16), int(size, 16)) == (0x03D00000, 0x100000), 'incomplete DAL/HWIO GFX aperture'
+    assert (hob, resource, attrs, kind, arm_attrs) == ('AddDev', 'MMAP_IO', 'UNCACHEABLE', 'MmIO', 'NS_DEVICE'), 'GFX must be Device MMIO'
     ram = sorted(dt_ranges('/memory'))
     reserved = []
     nodes = subprocess.check_output(['fdtget', '-l', str(DTB), '/reserved-memory'], text=True)
@@ -63,7 +70,7 @@ def check(source):
         if name != 'CPU_Vectors':
             low, high = int(base, 16), int(base, 16) + int(size, 16)
             assert start + length <= low or start >= high, f'CPU_Vectors overlaps {name}'
-    print(f'PASS: {allocations} RAM allocations fit the exported DT; hardware-fence and CPU_Vectors checks passed')
+    print(f'PASS: {allocations} RAM allocations fit the exported DT; hardware-fence, CPU_Vectors and complete GFX MMIO checks passed')
 
 
 if __name__ == '__main__':

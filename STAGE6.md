@@ -1064,3 +1064,350 @@ RAM 行来自 `gPhysSize` 与空闲／可用页计数，确认当前 XNU 窗口�
 本轮在共享 SM8750 DTSI 中记录 GPU、GMU、GPUCC 和 GPU SMMU 资源，并在 13T 设备树记录芯片 ID `0x44050001` 与型号 `Adreno830v2`。这些节点保持禁用，设备配置仍未选择 GPU 或 Metal 组件。设备树转换器跳过禁用节点；回读确认新镜像中的内核、信任缓存和 RAM Data 与第 63 版逐字节一致，ADT 保留八核、4 GiB 窗口及根卷信息，未加入 GPU 节点。测试时相关 DTS 改动尚未提交；发布的设备源码 `830e21446dd45a1b8c0c7b350221ce60e87c2379` 和 SoC 源码 `b79d675e522383c29131ccda8529fda45e1f2852` 保留了测试镜像使用的 DTS 内容。
 
 测试镜像为 `out/oneplus13t/boot/stage7-gpu-resources/boot.img`，87,957,504 字节，SHA-256 `34b8738bf6ad044df6045039971936644d32690fa354c524478aed51719e0a22`；Android v4 封装回读通过。对序列号 `3B15BB01BAT00000`、产品 `sun` 的设备执行 `fastboot boot`，Sending 和 Booting 均返回 OKAY，总计 2.656 秒，未刷写分区。用户随后反馈“进入系统，触控正常”。这确认了本轮资源记录下的系统启动和基本触控；没有 GPU 上电、命令提交、渲染或 Metal 加速的实机证据。
+
+## Run 68 CPR Translation fault（2026-10-30）
+
+用户通过 Windows fastboot 连接 13T，授权测试此前生成的最新 GPU 候选。核对序列号 `3B15BB01BAT00000`、`product: sun`、`is-userspace: no` 后，临时启动 `out/oneplus13t/boot/metal-run-68/boot.img`。镜像为 100,491,264 字节，SHA-256 `9d607f44fcf661692d2d115057dcc0aaf8650a81fc4a315764cd78f77b4f4893`，与原打包记录一致。Sending 2.304 秒、Booting 0.337 秒均返回 OKAY，总计 3.041 秒；未刷写分区，日志为该目录的 `fastboot-boot-20261030.log`。
+
+用户随后提供异常照片，并确认 `FAR=0x03D9A00C`、`X8=0x03D9A000`。照片显示 UEFI `CPRDxe.dll` 异常，`ELR=0xD2766FD0`，模块基址 `0xD2761000`，偏移 `0x5FD0`；`ESR=0x96000047` 对应同级 Data Abort、写访问、三级页表 Translation fault。尚未进入 XNU，也没有执行 A830/Metal 运行路径。
+
+对实际 `Binaries/pagani/QcomPkg/Drivers/CPRDxe/CPRDxe.efi` 反汇编，`0x5FD0` 为 `str w9, [x8, #0xc]`，与故障地址一致。该版 UEFI 的 `GPUCC` 映射为 `[0x03D90000, 0x03D9A000)`，没有覆盖这次 CPR 写入所在的相邻页。板级内存表新增 `GPU_CPR`，地址 `0x03D9A000`、大小 `0x1000`，使用 Device MMIO 属性。`scripts/check-memory-map.py` 新增对应的访问覆盖检查：旧表会失败，修复后与既有 RAM、hardware-fence、CPU_Vectors 检查一起通过。
+
+本地完整 UEFI 重建成功，FD 为 3 MiB，SHA-256 `cfa98cb97fe84a489ca79dc64369a9d9ea86b05d3030aaeecdfc5a30c7fbd9f2`；从实际 FD 中读回确认存在新的 CPR 描述符。修正版为 `out/oneplus13t/boot/metal-run-68-cpr-map-20261030/boot.img`，100,491,264 字节，SHA-256 `b021bd01b68e7a3a102597cb58f50b5b8002f1af27cf39a21102969f17891ad2`。Android v4 封装回验通过；解包比较确认 BootShim、stock DTB 和整个 192 MiB FAT 载荷逐字节不变，仅替换嵌入的 UEFI。因此内核、Metal Data、trust cache 和 ADT 继续使用同一 Run 68 输入。
+
+用户随后确认重新连接 Windows fastboot。再次核对序列号、`product: sun`、`is-userspace: no` 以及修正版镜像哈希后，执行 `fastboot boot`：Sending 2.304 秒、Booting 0.338 秒均返回 OKAY，总计 2.984 秒，未刷写分区。日志为修正版目录的 `fastboot-boot-20261030.log`。用户随后反馈仍然异常；第二张照片中的故障偏移前进到 `CPRDxe+0x6054`。该指令为 `ldr w10, [x9, #0x32d0]`，后续循环在 `+0x32D4` 到 `+0x3310` 间写入。首版 4 KiB 映射只覆盖 `[0x03D9A000, 0x03D9B000)`，不足以容纳这组寄存器。原始失败镜像和第 63 版基线继续保留。
+
+第二版将 `GPU_CPR` 扩为 `[0x03D9A000, 0x03D9E000)`（16 KiB），保留 Device MMIO 属性。回归检查覆盖最初的 `0x03D9A00C`、后续 `0x03D9D2D0` 和循环末端 `0x03D9D310` 的完整 32 位访问；原 4 KiB 表在第二处失败，新表通过，同时保留 RAM、hardware-fence 和 CPU_Vectors 检查。UEFI 经主仓 resolver 重建成功，最终 FD 和打包镜像均读回确认该映射。
+
+第二版镜像为 `out/oneplus13t/boot/metal-run-68-cpr-map-v2-20261030/boot.img`，100,491,264 字节，SHA-256 `115a4116f436c7fc73d1d624b03df6d6ab5844d81539a891d9072371a4fb23d7`；FD SHA-256 为 `e99304f18b3abff82a2b6b863843b1d194146812e3b9daea1715bd52817f28ca`。解包确认 BootShim、stock DTB 和整个 Run 68 FAT 载荷与原镜像逐字节一致。
+
+用户确认再次连接 Windows fastboot 后，核对设备为 `3B15BB01BAT00000`、`product: sun`、`is-userspace: no` 并临时启动第二版：Sending 2.295 秒、Booting 0.336 秒均返回 OKAY，总计 3.001 秒，未刷写分区。日志为第二版目录的 `fastboot-boot-20261030.log`。用户反馈“仍出现异常”并提供第三张照片：本次为 `ClockDxe+0x100A8`，模块基址 `0xD3020000`、ELR `0xD30300A8`、FAR/X8 `0x5080`、ESR `0x96000007`。尚未进入 XNU。
+
+### 完整 GFX 映射与 UEFI 实测
+
+`ClockDxe+0x100A8` 为 `ldr w10, [x8]`。X0 指向 `gpu_cc_cx_gdsc` 描述符，原寄存器偏移为 `0x5080`。实际 DALSYSDxe 的 GFX 表项在 `+0x4F900`，定义物理/虚拟基址 `0x03D00000`、长度 `0x100000`；GPUCC 寄存器组子项偏移 `0x94000`，CPR 子项偏移 `0x9A000`、长度 `0x4000`。因此这次 ClockDxe 预期访问应为 `0x03D99080`，屏幕上的 `0x5080` 表明基址没有建立。
+
+`HWIODxe+0x17AC` 申请整个 GFX 段。`DALSYSDxe+0x43A4` 先查询段首的 GCD 类型，若尚未注册则调用 `AddMemorySpace`；现有 GPUCC、CPR、GPU SMMU 小段 HOB 与整个请求重叠，按 GCD 规则返回冲突。ClockDxe 随后使用未建立的基址，留下纯偏移地址。已确认这里分析的 DALSYSDxe、HWIODxe 和 ClockDxe 二进制与原 Run 68 固件逐字节一致；ClockDxe 保留原有 CESTA 显示保护补丁。
+
+板级内存表以一个 `GFX 0x03D00000/0x100000` Device MMIO 区域替代上述小段。回归检查要求完整区域且不存在重叠的小段；上一版会失败，新表和既有 RAM 检查通过。UEFI 重建及最终镜像回读均确认完整映射。
+
+镜像为 `out/oneplus13t/boot/metal-run-68-gfx-map-20261030/boot.img`，100,491,264 字节，SHA-256 `8a1a6fb5a17da313475a02a90df81247042f15f1e7c6fab28b50c0dcd3f76154`；FD SHA-256 为 `ec397f5f4646a43fa2e9a6bf6372efd3010facf181e311f3a13df600a9cfac07`。BootShim、stock DTB 和整个 192 MiB Run 68 FAT 载荷保持逐字节一致。临时启动 Sending 2.298 秒、Booting 0.337 秒均返回 OKAY，总计 2.964 秒；未刷写分区。用户确认“uefi部分没问题了，但是启动内核后panic”，随后提供 XNU panic 照片。这个结果确认本轮 UEFI 已完成并进入内核。
+
+### XNU SMEM 读取异常
+
+内核照片显示最后阶段为 `stage7: GPU board inputs`，随后发生 Kernel data abort：PC `0xfffffff00bfd9e58`、LR `0xfffffff00bfd9e40`、ESR `0x96000010`、FAR `0xfffffff9b9737000`，X8 为 `0x9E000`。ESR 对应同步外部访问中止。Run 68 的实际 `kernel.macho` 将 PC 定位到 `pagani_gpu_start+0x288`，指令为 `ldrb w10, [x10, x8]`，属于 `snapshot(g.smem, g.soc_snapshot)` 的源字节读取。
+
+`PaganiGpu.cpp` 将 `0x81D00000/0x200000` SMEM 区域完整复制两次，其中首次读取到物理 `0x81D9E000` 时异常。读取 SoC 信息只需 SMEM 目录、全局分区条目头及 item 137 的字段；其他分区没有必要访问。修复移除两次整块复制和对应 2 MiB 临时分配，让现有有界解析器通过 volatile 访问读取所需元数据和字段；保留两次 SoC ID/SKU 一致性检查及 speed-bin 检查。
+
+新增 host 回归将全局分区及目录以外的内存设为 `PROT_NONE`，分别验证 cached/uncached item 路径。该测试与 `scripts/check-gmu.py` 的固件、GMU/HFI、投票、SCM 和时钟/电源检查均通过 ASan/UBSan。当时启动镜像仍是原 Run 68 内核；后续重建和复测记录见下文。没有 GPU 上电、命令提交或 Metal 渲染成功的证据。
+
+### Run 69：选择性 SMEM 读取修复重建
+
+[Run 69](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/41079321476) 从构建分支提交 `823a2fa2ea91a31f97d3a9c6be0c792ea745c543` 完成。加密包固定七个源码仓库及私有固件，主仓基线为已推送到个人 fork 的 `b6d0e445854d3f4cafb09e4ccf58c9c4aecc170d`。A830/GMU 与显示输入检查、XNU 编译和预链接、Turnip/Metal 插件及守护进程构建、签名和 Data 组装全部通过。加密输入归属已补入 packaging 区域；构建分支的移植记录检查及主仓 Docs 检查均通过。
+
+下载后的实际内核在 `pagani_gpu_start` 中包含两次对 `Sm8750SocInfoGpuCode` 的直接调用，地址分别为 `0xfffffff00bfda0ec`、`0xfffffff00bfda190`。GPU 入口和共享解析器均为可执行的非 weak 符号。内核、配置和 Metal Data 对应 UUID `C6D2F70B-11E9-4A89-908C-C2C9B5711DF1`；owner trust 包含三个构建 CDHash，两个原始 trust 模块逐字节保持一致。
+
+新镜像为 `out/oneplus13t/boot/metal-run-69/boot.img`，100,491,264 字节，SHA-256 `df36c514399f6a9e0a71f94443013318e60f188dd5873dfd916bf51b09353ba0`。它使用 Run 69 配套的 192 MiB FAT 载荷和已实测越过 UEFI 的完整 GFX FD（SHA-256 `ec397f5f4646a43fa2e9a6bf6372efd3010facf181e311f3a13df600a9cfac07`）。Android v4、空 ramdisk、实际嵌入 FD/FAT、kernel/trust/Data 文件及启动参数回读全部通过。此前各版镜像保留。
+
+用户确认连接 Windows fastboot 后，重新核对序列号 `3B15BB01BAT00000`、`product: sun` 和 `is-userspace: no`，执行临时启动：Sending 2.292 秒、Booting 0.337 秒均返回 OKAY，总计 3.044 秒，未刷写分区。日志为新镜像目录的 `fastboot-boot-20261030.log`。用户随后确认“正常进入系统，但是刷新率差不多还是一秒一次”。这次启动已越过原 SMEM panic；约 1 FPS 是用户对画面更新的观察，不是计数器测量，也不能据此确认 GPU 加速。
+
+核对 Run 69 实际内核：`native_legacy_gpu_offer` 在 `0xfffffff00bfe11f0` 仅执行 `mov w0, #0; ret`，因此最终 framebuffer 输出仍走 CPU 拷贝。实际启动参数含 `pagani-gpu=1`、`sheng-gpu-addon=1` 和 `offline-legacy-cpu-present=1`；`sheng-gpu-metal-opens=0` 表示不限连接次数。`pagani_gpu_start()` 失败只记录状态并返回，Stage7Probe 仍继续启动，因此正常进入系统不证明 GPU 初始化成功。60 Hz 软件 vsync 配置也不等于实测 60 FPS。当前没有 GPU 注册结果、Metal 客户端调用和命令完成计数等实机数据，GPU 状态继续保持未验证。
+
+
+### GPU 低帧率排查与屏幕诊断（2026-10-31）
+
+Run 69 已进入系统，用户观察约每秒刷新一次。官方 [GPU 适配流程](https://unixnu.com/porting/gpu)要求依次确认 GMU/HFI、CP/fence、user client、Metal 发布和呈现；同一现象可能发生在不同阶段。
+
+| 参考实现 | 已记录的问题与处理 | 对 13T 的适用范围 |
+| --- | --- | --- |
+| [sheng / A740](https://unixnu.com/drivers/adreno740#shader-compilation) | 冷启动记录过 77 条 pipeline 约 43 秒、零 cache hit；采用 release 构建、shader 专化及缓存复用 | 若 GPU 提交/完成正常，但首次打开界面明显更慢，再检查 pipeline 编译与缓存。不能将这个耗时当作 13T 测量值 |
+| [zeta / A660](https://github.com/none24smu/UniXNU-zeta#graphics-runtime-and-contiguous-allocation-stalls) | 实测客户端对象上限、连续物理内存搜索、GPU VA 耗尽和共享提交槽压力；相应修复具有各自的实测或待验证边界，黑背景和卡顿仍未全部解决 | 参考同一 Metal/Turnip/NativeAdreno 链路的分层诊断。GPU 代际不同，不照搬寄存器、频率或窗口值 |
+| [Galaxy S25 A830 / Phosh](https://github.com/Azkali/phosh-termux-gpu#per-device-config) | 作者记录 Turnip 解锁后偶发竞争，`flushall,syncdraw` 串行化可缓解；A750 对照无需该设置 | 相同 GPU 代际，但运行于 Android KGSL，不证明 XNU 后端正常。串行化可能降低吞吐，本轮不启用此开关 |
+
+较近的 [Ace 5 / A750 XNU 端口](https://github.com/tycykp/UniXNU-OnePlus-Ace5#hardware-support)仍明确标注只有准备与观察服务，没有 GPU 执行或 Metal 加速，因此不列为已修复对照。
+
+Run 70 至 Run 78 的诊断候选复用 `pagani-platform-status=1` 的 CPU/RAM 状态栏，追加以下五行；Run 79 字段及轮询语义更正在文末记录。GPU 计数通过共享驱动的非阻塞 snapshot 读取；锁忙会显示 `Metal snapshot busy`，不会等待 GPU 操作完成。最后阶段和启动返回码独立保存，普通显示日志不会覆盖。
+
+| 屏幕行 | 含义 |
+| --- | --- |
+| `GPU ... rc=...` | 最后 GPU 阶段与启动返回码，十六进制；`GPU Metal registered rc=00000000` 才说明注册流程成功 |
+| `M open=... close=... who=...` | 插件连接授予/关闭累计数，以及最近尝试打开 accelerator 的进程名；不是当前连接数 |
+| `CMD s=... c=... to=... bad=...` | 累计 user-client 提交、已观察 fence 完成并回收的作业、超时和 poisoned 作业数；启动自检命令不计入 |
+| `API n=... err=... busy=...` | 已进入驱动核心的方法数、最近 IOReturn，以及连接因限额/槽位被拒绝次数；`busy` 不是 GPU 利用率 |
+| `DISP ... fps ... ms ... KiB` | 约一秒窗口的成功 CPU 拷贝率、最近一次拷贝耗时和字节量；不代表面板刷新率或纯 GPU 渲染 FPS |
+
+没有发布 GPU 或 snapshot 锁忙时，后两行改为已保存的 `P` 电源步骤/窗口/寄存器值与 `GMU` 阶段/固件/HFI 结果，不额外访问 MMIO。状态行会覆盖少量系统画面并增加诊断绘制开销。
+
+先等待启动完成，再连续滑动界面并比较数秒间隔的读数：初始化失败先按阶段处理；连接数为零先查插件发现/发布；提交增长而完成停滞或超时增长先查执行/fence；完成持续增长但 CPU 拷贝耗时很大，则检查显示拷贝路径。计数只能定位阶段，正确像素和持续稳定性仍需实机确认。
+
+本地 ASan/UBSan 已通过实际控制台边界、两秒帧率/空闲归零、panic 保留，以及实际 GPU snapshot 的未发布、锁忙、正常返回和进程名边界检查。诊断版完整构建已由 Run 74 通过；实机状态栏读数仍待观察。
+
+
+Run 70 的 A830 snapshot 测试通过，但板级编译报 `PAGANI_STATUS_BYTES` 未声明。根因是候选配置仅覆盖 Stage7Probe/PaganiInput，BootProgress 仍解析到设备子模块的旧提交，因此云端控制台检查也执行了旧源码。候选配置现显式选择同一工作目录的 BootProgress；新增真实 resolver 路径断言在旧配置下失败，修正后通过。后续 Metal 编译改为只在内核构建成功后运行，失败日志仍由 always-upload 保留。Run 70 已停止，不作为可启动产物。
+
+
+Run 71 已通过 A830 板级编译，随后早期控制台对象检查拒绝 `_bzero`。新增 `char gpu_lines[4][80] = {{0}}` 让 Clang 生成清零运行库调用；检查器打印整个未定义符号列表，首项 UBSan 符号并非本次拒绝条件。现只初始化各行首字节为 NUL。实际源码对象在旧写法下依赖 `memset`，修改后只剩 `snprintf`/`vsnprintf`；该对象依赖回归已接入 `test-stage7.py`，控制台 ASan/UBSan 与显示测试均通过。生产对象的运行库及 FP/SIMD 检查保持原样。Run 71 没有生成可启动镜像。
+
+Run 72 在新增主机对象检查阶段遇到 macOS SDK 的 fortified stdio 宏与内核函数声明冲突。测试夹具现于 `stdio.h` 后取消 `snprintf`/`vsnprintf` 宏；本地注入同类宏可重现旧失败，修正后对象检查及 ASan/UBSan 均通过。生产内核检查未变，Run 72 未生成可启动镜像。
+
+Run 73 的主机检查全部通过，但生产对象再次触发 `_bzero` 检查。XNU `MakeInc.def` 默认启用 `-ftrivial-auto-var-init=zero`，会清零整个栈缓冲区；此前主机对象测试遗漏了该选项。现对 GPU 文本缓冲区使用局部 `uninitialized` 属性，并通过 volatile 字节写入显式清零全部 320 字节，保留完整初始化。对象回归已加入 XNU 的自动初始化选项：旧实现出现 `memset`，修正后通过；控制台 ASan/UBSan 同样通过。生产检查保持启用。此次 GitHub 状态 API 滞后并间歇返回 502，直接下载 job 日志确认实际失败，未生成可启动镜像。
+
+Run 74 完整构建与临时启动（2026-10-31）：
+
+- [GitHub Actions Run 74](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/41102040521) 成功，CI 提交 `5d3412df08c78cd513ab0ad3c3f7edbf5842bbed`，纯源码包 SHA-256 `ec6720449e12d69fb89d39b502713d6bab39483ad5c69c28a3b886fa038f17e1`。实际控制台对象检查、完整 XNU/A830 编译/预链接及 Metal 用户态构建均通过。
+- 镜像为 `out/oneplus13t/boot/metal-run-74/boot.img`，100491264 字节，SHA-256 `fc5e815a54c9a1bbd51610e463481cfe52bd782867ca39215909c43942301e91`。Data UUID 为 `80761223-5759-4BDF-962E-4A19846CB850`。已核对新增 GPU 诊断函数为真实可执行的强符号，以及同轮 Data/信任缓存、实测 GFX UEFI、Android v4 和 FAT 回读。
+- Windows `fastboot boot` 的 Sending/Booting 均为 OKAY，总计 3.227 秒；没有写入分区。日志在镜像目录的 `fastboot-boot-20261031.log`。用户确认已进入系统并看到新增 GPU 信息。具体状态值、滑动时的提交/完成计数，以及低帧率原因仍待记录。
+
+### Run 74 GPU 电源阶段失败与关键时钟写入（2026-10-31）
+
+用户从状态栏抄录：
+
+```text
+GPU power rc=ffffffff
+Metal not published
+P step=6 w=1 off=9008 val=8000000
+GMU p=0 fw=0 hfi=0 proto=0
+DISP（滑动时约 2 fps）386.3ms 12540KiB
+```
+
+`w=1` 是 GPUCC，基址 `0x03d90000`；`off=0x9008` 对应 `GPU_CC_CXO_AON_CLK`，物理地址 `0x03d99008`。按用户文本保留 `val=0x08000000`。状态停在关键时钟写入阶段，GMU 初始化尚未执行，Metal 服务没有发布。`ffffffff` 是板级将电源函数错误统一转换为 `-1` 的结果。
+
+对照本地无修改的 [OnePlus 时钟源代码 745702d](https://github.com/OnePlusOSS/android_kernel_oneplus_sm8750/blob/745702d5ed2c0435f2b1d3bb78bc4f48422d4191/drivers/clk/qcom/gpucc-sun.c#L573)，六路关键 CBCR 只执行 `regmap_update_bits`；本端口的通用 `update()` 却额外轮询使能位。候选修复让 branch 先作掩码写入，再按原有模式选择延时或状态轮询；关键/AHB/DDRSS 路径遵循厂商 delay/skip 策略，普通时钟仍检查使能位和停钟位。其他 PLL、RCG、GDSC 检查以及后续 GMU、CP 和 fence 验证保持启用。板级现保留 `Sm8750GpuPowerOn` 的具体返回码。
+
+新增软件寄存器模型保持 `0x9008` 的读值为 `0x08000000`，写入使能位后仍不回读该位：旧实现失败，修正后通过，并确认只作一次读取与一次写入。普通时钟使能位不保持时仍超时；81 个读失败点、38 个写失败点、五种有界停顿及既有 GMU/HFI/SCM/SMEM 回归通过。该模型验证厂商序列与退出条件，尚未证明候选可以在手机上完成 GPU 初始化。
+
+`DISP` 显示的是 CPU 拷贝：本次约 12.25 MiB 用时 386.3 ms，与滑动时约 2 fps 相符。即使下一轮 GPU 初始化成功，现有 CPU 呈现路径仍可能限制帧率；本轮先处理电源阶段的退出。
+
+Run 75 修正版已构建并临时启动：
+
+- [GitHub Actions Run 75](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/41110329224) 成功，CI 提交 `05bd77332e0a87d9b82f72e947e581a090e482b5`，纯源码包 SHA-256 `4271ac6adf847a26bde124e5a637e197320feec2275bcc324407e45c98062256`。云端执行了新的非保持使能位回归和全部故障注入检查，并通过完整 XNU/A830 预链接与 Metal 构建。
+- 镜像 `out/oneplus13t/boot/metal-run-75/boot.img` 为 100491264 字节，SHA-256 `7a1a280333ee044495eac7f8b7aaf7cd5173ddde5204e21b868cbcfc532314af`，Data UUID `A61912C9-E87A-4FB8-99D3-385A9BE34F75`。下载内核哈希与云端日志一致，GPU 符号、同轮 Data/信任缓存、已验证 GFX UEFI 和 Android/FAT 回读检查通过。
+- Windows `fastboot boot` 的 Sending/Booting 均返回 OKAY，总计 3.042 秒，未刷写分区。镜像目录保留 `fastboot-boot-20261031.log`。后续用户读数确认越过 `0x9008`，在 `0x9010` 超时，见下节；CPU 拷贝路径保持原样。
+
+
+### Run 75 DEMET 时钟状态判定（2026-10-31）
+
+用户抄录 `GPU power rc=ffffff92`、`Metal not published`、`P step=6 w=1 off=9010 val=8000000`；GMU 全为零，`DISP 386.4ms 12540KiB`。`ffffff92` 为 `-110`，说明上一轮已越过关键 CXO 写入，仍在普通分支时钟阶段超时。
+
+同一 OnePlus 源码的 [gpu_cc_demet_clk](https://github.com/OnePlusOSS/android_kernel_oneplus_sm8750/blob/745702d5ed2c0435f2b1d3bb78bc4f48422d4191/drivers/clk/qcom/gpucc-sun.c#L276) 使用 `BRANCH_HALT_VOTED` 和 `clk_branch2_ops`。[clk_branch2_check_halt](https://github.com/OnePlusOSS/android_kernel_oneplus_sm8750/blob/745702d5ed2c0435f2b1d3bb78bc4f48422d4191/drivers/clk/qcom/clk-branch.c#L49) 在开启时接受 `CLK_OFF`（bit 31）清零，或 NoC FSM（bits 30:28）等于 2，不要求使能位读回。端口此前的 `mask=0x80000001 / value=1` 多检查了 bit 0，因而拒绝 `0x08000000`。
+
+共用 branch 轮询现采用上述 HALT/FSM 条件，保留 500 微秒上限、MMIO 错误传播及 PLL/RCG/GDSC 和后续 GMU/CP 检查。回归先以 `0x9010=0x08000000` 重现旧失败；修正后，该值及 `0xa0000000` 通过，停钟且 FSM 不为 ON 的 `0x80000000`、`0x90000000`、`0xb0000000` 仍超时。全部 81 个读失败点、38 个写失败点、五种有界停顿与 GMU/HFI/SCM/SMEM ASan/UBSan 检查通过。此结果验证状态判定逻辑，实机是否继续进入 GMU 尚待下一轮镜像。
+
+
+Run 76 已完成构建并下载，按用户要求停在本地取回阶段：
+
+- [GitHub Actions Run 76](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/41116080103) 成功，用时 25 分 56 秒。CI 提交为 `dc3b0501d74a6286ba13aebf5c5ea34dfd16869c`，纯源码包 SHA-256 为 `d138b75470defe11d3839ded8a4eda2b79efd30d285d553b6b7640fb2c5d8215`。HALT/FSM 回归、既有硬件模型、完整 XNU/A830 编译/预链接和 Metal 用户态构建均通过。
+- 完整产物已下载到 `out/oneplus13t/actions/metal-run-76/`。`kernel/kernel.macho` 为 128344064 字节，SHA-256 `54fab07ecaa0b23ba6baf61419e1a449247c00651e0fbc4e5708f1b4e9b2e26d`，与云端预链接日志一致。实际 Mach-O 为 arm64，电源、GPU 启动及诊断入口均为可执行强符号；内核和同轮 Data UUID `2459A7A6-B0FE-4CF3-992A-8CDF16E7A155` 匹配，配套 Metal Data 和信任缓存已取回。
+- 本轮未组装 `boot.img`，未执行 fastboot 或刷写。用户要求休息后再继续实机测试；新判定能否越过 DEMET 并进入 GMU 尚未验证，CPU 拷贝路径没有改变。
+
+
+Run 76 后续临时启动（2026-10-31）：用户再次连接 fastboot 并明确要求开始测试后，已组装同轮镜像 `out/oneplus13t/boot/metal-run-76/boot.img`，100491264 字节，SHA-256 `a249b0c90b9a3d8270f1de96ce1681bb39cb59a03d33d1c59c553cb3dff9683e`。GPU 可执行符号、Data UUID、原始/owner 信任缓存、已验证 GFX UEFI、Android v4 和 FAT 内容回读均通过。目标为 `sun`，`is-userspace=no`；Windows `fastboot boot` 的 Sending/Booting 均返回 OKAY，总计 2.984 秒，未刷写分区。镜像目录保留 `fastboot-boot-20261031-040041.log`。新的 GPU/P/GMU 或 M/CMD/API 状态仍待用户观察，尚不能确认越过 DEMET 或 GPU 执行成功。
+
+
+### Run 76 越过电源阶段，SMMU 失败位置待细分（2026-10-31）
+
+用户读数为 `GPU SMMU rc=ffffffff`、`Metal not published`、`P step=7 w=0 off=71010 val=8000003`，GMU 全零，显示拷贝约 `253ms 12530KiB`。按原文保留寄存器值 `0x08000003`。电源函数已返回成功；程序随后经过 secure CX 调用和总线投票，进入 SMMU 准备。GMU 启动尚未执行，GPU 加速仍未建立。显示耗时与上一轮不同，但本轮没有修改 CPU 拷贝实现，不能据此归因于 GPU。
+
+`prepare_smmu()` 的 ID1 布局检查、上下文占用、ACTLR 回读、MMIO 绑定和 GMU/GPU 上下文配置此前都汇总为 `-1`。当前读数无法确定具体分支。手机保存的 live DTB 中 `/soc/kgsl-smmu@3da0000/qcom,actlr` 为 `0 3ff 32b`，与现有写入匹配；本轮不改变 ACTLR、上下文银行/流选择或已有拒绝条件。
+
+下一版保留具体错误码，并在 `GPU SMMU ID/banks/ACTLR/bind/GMU/GPU` 中显示最后进入的阶段。失败时后两行改为：
+
+- `SMMU i1=... i2=... off=... v=...`：保存的 ID1、上下文报告的 ID2、前置检查寄存器偏移及读值；读写回调失败前将读值设为 `ffffffff`。
+- `CTX c=... s=... p=.../... r=.../... mm=...`：`c=0/1/2` 为前置检查/GMU/GPU 上下文，`s` 为上下文步骤，`p`、`r` 分别是编程和流路由的阶段/状态码，`mm` 为已有报告的回读差异位图。GPU 上下文报告目前不填差异位图，`c=2` 时的 `mm=0` 不证明回读一致。
+
+这些行只读取既有快照；完成 SMMU 后恢复 P/GMU 行。实际板级函数的软件测试覆盖五个读失败点、两个写失败点、非法布局、两个活动上下文拒绝、ACTLR 不匹配、绑定及 GMU/GPU 错误码，以及诊断期间零 MMIO 访问。保持拒绝活动上下文和读写失败；是否需要修改硬件初始化序列，等待新阶段与寄存器读数。
+
+
+### GPU 汇总候选：SMMU 资源选择、内存分配与 GPU 呈现（2026-10-31）
+
+用户要求继续参考可用 GPU 实现，补齐缺项，完成云端构建并在本地生成 boot.img，待其醒来后再测试。Run 77 的诊断构建已取消，以下改动合入下一次完整构建；本轮不操作手机。
+
+SMMU 分配依据包括 [OnePlus arm-smmu-qcom.c](https://github.com/OnePlusOSS/android_kernel_oneplus_sm8750/blob/745702d5ed2c0435f2b1d3bb78bc4f48422d4191/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c#L471-L489) 和 [hummer 的同芯片 GMU 探针](https://github.com/2426120557/UniXNU-hummer/blob/286fd7576935fb719359e2d7ed50b86df6ecac86/package/HummerAdrenoBringup.cpp)。厂商将 context bank 0/1 留给 GPU，其他客户端从 bank 2 分配；原 13T 接线使用 GMU bank 1，现改为从 2 开始选择未启用且无有效路由引用的 bank。GPU 仍使用 bank 0。hummer 记录固件在 slot 2 留有有效路由；它提供同芯片初始化经验，并未证明完整 A830 Metal 加速。
+
+新增共享 `Sm8750GpuSmmuPrepare` 检查全局状态、完整流表、目标 SID 0/1/5 的精确或掩码冲突，以及 bank 占用。仅选择无效槽位，复查后写入并回读 FAULT，再交给现有 ArmSmmu4K 建立翻译。有效固件路由保持不动，已占用 GPU bank 0、SID 冲突或资源不足均停止初始化。保留 ACTLR `0x32b`、页表属性、地址范围与后续 GMU/CP/fence 检查。这个改动补齐了源码可确认的接线缺项，Run 76 的具体失败分支仍未得到实机读数验证。
+
+[zeta 的连续内存停顿记录](https://github.com/none24smu/UniXNU-zeta/blob/eb489285a1d9153872f00c93ebb519a269b249b5/README.md#graphics-runtime-and-contiguous-allocation-stalls)指出，普通大 BO 在连接锁内优先搜索连续页，会扫描和整理大量内存。13T 复用已有 pool/离散页分配，移除这个额外搜索；显式要求连续内存的调用及 GPU 固件、ring、页表仍保持连续性要求。没有扩大 BO/GPU VA 上限。现有对象上限已为 16384，无需再套用 zeta 的旧 1024→4096 补丁。
+
+显示连接参考 [sheng 的 LegacyDisplayProbe](https://github.com/UniXNU/UniXNU-sheng/blob/08cde20edc3254ed6f7df8d0f5384fb887786e8f/package/LegacyDisplayProbe.cpp) 和[官方 framebuffer 接口](https://unixnu.com/drivers/gop-framebuffer)。候选编译并延迟注册现有 NativeGOPPresenter，将其挂在 IOResources 下并引用真实 framebuffer provider；仅当 GPU 初始化、自检和 Metal 服务注册全部成功且 `sheng-fb-gpu=1` 时启动。插件通过现有 handoff 连接执行 GPU blit，完成后退休显示交换。GPU/客户端未就绪时保留 CPU 拷贝；映射失败、拷贝失败或 handoff 客户端关闭会释放所持帧并通知回退。新增任务归属检查避免另一个进程领取或完成当前帧。插件退出服务循环时关闭 handoff 连接。没有修改 DPU 时序或启用直接页面翻转。
+
+状态栏中的 `CMD ... P=成功/失败` 记录 GPU 呈现完成次数；`DISP` 继续只统计 CPU 拷贝，GPU 呈现开始后其 fps 可能降为零。SMMU 行改为 `SMMU p=... b=... i1=... off=... v=...`：`p=1..6` 对应全局检查、流表扫描、bank 选择、复查、FAULT 写入和完成；`b` 是选择的 GMU bank，选择前为零。CTX 行继续显示上下文阶段和底层状态，GPU 上下文也补齐回读差异位图。
+
+主机检查覆盖实际资源选择函数的普通/EXIDS 流有效位、掩码冲突、固件路由保留、bank 2 占用后的选择、资源耗尽和全部 I/O 失败点；实际 presenter 检查覆盖启动条件、尺寸、任务归属、完成、映射失败及关闭回退。离散页回归在旧分配策略上触发连续搜索断言，修改后通过分配、映射、提交、fence 回收与释放，显式连续请求失败时不降级。完整云端构建与镜像回读结果将在本节补充。所有这些检查均不执行设备 GPU shader，正确画面、实际帧率及长期稳定性等待真机测试。
+
+
+本地完成状态：SMMU/GMU/HFI/电源、presenter、碎片 BO 完整生命周期、GPU 上下文回读差异、Metal 配置与显示/输入回归已通过。新源码包为 `out/oneplus13t/ci/metal-enhanced-sources-20261031.tar.gz`，156221 字节、7 个仓库/55 条目，SHA-256 `1cfbf66371c6f52cdeca1b2fe2cac22bc76b7546d38c506df13dfaf460df68e5`；已审计不含固件、DTB、密钥或二进制补丁。CI 工作树的本地提交为 `b8942ef`。准备了独立 `metal-device-run-78` 配置及镜像回读脚本，但尚未执行完整构建或生成本轮 boot.img。
+
+平台自动审批两次拒绝将该源码包推送至已有 `IssacL04/UniXNU-Pagani_SM8750:codex/a830-metal-20261028` 分支。第二次已提交用户对此仓库/分支的明确源码包授权和后续构建持续授权，审批仍要求本次用户直接重新批准；新提交保持本地。当前 Linux 主机没有完整 XNU 交叉工具链，备用安装流程需要构建专用 clang、ld64 并安装系统工具，不能直接用现有环境产出同等内核。已向用户请求平台要求的批准，等待后再继续构建、下载和打包。未操作手机，未把此前 Run 76 的镜像当作本轮产物。
+
+
+后续授权与构建（2026-10-31）：用户已直接授权本次源码包推送、构建并生成本地 boot.img。`b8942ef6e3c1f0e9cbbed7b54fe785fc0c6dd82e` 已成功推送至现有 CI 分支；[Run 78](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/41166974317) 已启动，配套文档检查成功。前述审批阻塞已解除，继续完成新产物下载和镜像组装；手机测试仍等待用户另行安排。
+
+
+### Run 78 汇总镜像已生成，等待实机测试（2026-10-31）
+
+[Run 78](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/41166974317) 全部成功，构建用时 28 分 32 秒。源码包对应 CI 提交 `b8942ef6e3c1f0e9cbbed7b54fe785fc0c6dd82e`；本地与 macOS 云端均通过 SMMU 资源选择、presenter 归属/关闭回退、离散 BO 生命周期、GPU 上下文回读差异，以及既有 GMU/HFI、电源、显示和输入回归。完整 XNU/A830 编译、最终链接/预链接和 Metal/Turnip 构建、签名、Data 安装均完成。日志中的首次 bootstrap 链接在组件 archive 尚未生成时报告预期的未定义符号，后续组件构建、最终链接和预链接成功；最终内核哈希已与下载文件逐字节核对。
+
+| 产物 | 本地路径或身份 |
+| --- | --- |
+| 内核及同轮输入 | `out/oneplus13t/actions/metal-run-78/` |
+| 内核 | `kernel/kernel.macho`，128393216 字节，SHA-256 `7521ed4180e85eef7a35394711aa6b7e12d9aff3492dc32cd06b8b63024b4007` |
+| 可测试镜像 | `out/oneplus13t/boot/metal-run-78/boot.img`，100495360 字节 |
+| 镜像 SHA-256 | `d6a3858561769553943822ae8d57deab0003d9419e2e82dc78bb931170455d4e` |
+| Data UUID | `4C02592E-3207-4785-967B-D8D1C5314E1B` |
+| 打包记录 | 同目录 `boot.json`；`out/metal-candidate-run-78/packaging.log` |
+
+本地打包复用已经实机通过的完整 GFX UEFI（SHA-256 `ec397f5f4646a43fa2e9a6bf6372efd3010facf181e311f3a13df600a9cfac07`），嵌入 192 MiB FAT payload。新增 `Sm8750GpuSmmuPrepare`、presenter/offer/close 以及 GPU 诊断入口均为最终内核中的非弱可执行符号；SMMU/CTX 与 `CMD ... P=成功/失败` 字符串存在。内核和 Data 的 UUID、三个 owner CDHash 与原始信任模块、Android v4 容器、空 Android ramdisk、完整 FAT 及 kernel/trust/Data/启动参数回读通过，`sheng-fb-gpu=1` 确认写入镜像。原 CPU 基线配置保持不变。
+
+任务停在本地镜像生成与验证，未执行 fastboot 或写入分区。下一轮先观察 GPU/SMMU/CTX 阶段；若 Metal 已发布，再观察滑动时 CMD s/c 和 P 成功/失败计数。DISP 只统计 CPU 拷贝，GPU 呈现接管后该计数可能为零。Run 76 的具体 SMMU 失败原因、新资源选择是否通过、GPU 画面正确性和帧率均仍待实机验证。
+
+
+Run 78 后续临时启动（2026-10-31 18:46，UTC+8）：用户连接 fastboot 并明确要求测试后，重新核对镜像大小及 SHA-256；设备为 `sun`，`is-userspace=no`。Windows `fastboot boot` 的 Sending 返回 OKAY（2.297 秒）、Booting 返回 OKAY（0.339 秒），总计 3.010 秒，未刷写分区。日志为 `out/oneplus13t/boot/metal-run-78/fastboot-boot-20261031-184620.log`。已请求 GPU/SMMU/CTX 或 M/CMD/API/P/DISP 读数；手机是否进入系统、SMMU/GMU 是否推进和 GPU 是否呈现尚待用户观察。
+
+
+### Run 78 GPU 呈现确认与下一版诊断（2026-10-31）
+
+用户确认进入系统，目测滑动约十几帧。静止时读到 `GPU Metal registered rc=00000000`、`M open=4 close=2 who=WidgetRendere_D`、`CMD s=1039 c-1039 to=223671 bad=0 P=518/0`，API 调用数约 11548 且变化，随后出现 `err=e00002c7`。原文的 `c-1039` 按完成数 1039 解读。初始化、自检和服务注册已通过，提交与完成数相等，GPU 呈现完成 518 次、失败 0 次。该观察支持 GPU 命令和呈现已运行；准确帧率、着色器像素正确性及长期负载仍未测量。
+
+`to` 来自 fence wait 的未完成结果，包含零超时轮询，223671 不能解释成同样次数的 GPU 卡死。`Metal snapshot busy` 由诊断 try-lock 失败触发，原显示因此切到 P/GMU 行。`e00002c7` 是 `kIOReturnUnsupported`；已有 GetStatus 路径缺少 status provider，但仅凭返回值还不能确定调用方法。下一版记录方法编号与返回值的同一次调用快照，不改变接口返回值或时钟策略。
+
+新增和调整的字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `M~` | 当前 GPU 锁忙，显示上次成功采样；不切换成初始化失败行 |
+| `CMD ... poll=...` | fence 未完成的轮询次数，取代易误解的 `to` |
+| `API ... m=... err=...` | 最近核心方法编号及其返回值；`m=8` 是 GetStatus，`m=6` 是 WaitFence |
+| `CLK req=...MHz` | 已向 GMU 成功请求的档位频率；不是硬件频率测量，当前没有运行期调频 |
+| `busy=0/1/?` | GMUAO GPU 忙闲位的一次采样；读取失败为 `?`，不是利用率百分比 |
+| `SPactive=?/6` | 配置包含 6 个 SP；活动 SP 数无法可靠读取，保留 `?`，不显示为 0 或 6 |
+| `DISP G=...fps/...ms` | GPU 呈现完成率，及最近成功帧从 offer 到完成的耗时，含交接、映射和等待 |
+| `C=.../...` | CPU 回退拷贝的 fps / 最近一次耗时 ms；GPU 接管后可以是 0 fps，旧耗时仍保留 |
+| `O=...ms` | 上次状态栏调用的耗时；包含采样、栅格化或缓存覆盖的本次工作 |
+
+忙闲位依据 OnePlus SM8750 graphics-kernel `6a196f79f77acd55cf302e1696c038e4cad99254` 的 `adreno_gen8.c:gen8_hw_isidle` 与 `gen8_reg.h`，对应 GMUAO `0x23b0c` 的 bit 23。只有启动成功、GPU OOB 持有且 GMU 未 poisoned 时才单次读取；初始化失败路径仍不做诊断 MMIO。公开源码没有为 `SP_STATUS` 提供可确认的活动核心掩码，暂不读它，也不把 shader 总数或 CPU 核数冒充活动数。
+
+状态每秒最多采样和栅格化 4 次。新画面会覆盖日志区域，因此每帧仍以连续写入覆盖缓存像素；显示不会因为限速而隔帧消失。缓存覆盖 80 个文本列，保留屏幕宽度、行尾和高度边界；panic 后停止采样和绘制。FPS 按至少 1 秒的计数差计算，静止后回到零；各显示值在 9999.9 饱和。这个改动减少逐字逐列绘制，但实际加速幅度要由新镜像的 G/C/O 读数判断。
+
+主机回归已通过：实际诊断函数的未发布/首次锁忙/缓存锁忙/方法返回配对，GPU presenter 耗时，GMU 忙闲采样前置条件与失败，缓存字形一致性、250ms 采样边界、新帧覆盖后的恢复、帧率归零、边界和 panic 保留，以及现有 A740/A830、GMU/HFI/电源和显示运行时符号检查。新内核和镜像尚待云端构建。
+
+Run 79 已触发：源码提交 `8bd34b4b1f352a83fe21fcf72bf686e229b28f6b`，纯源码包 168710 字节，SHA-256 `9ff57ae0e49d7277864cd6bea4e87751d6c2a3c49fe7b50c032cdc09f441f674`。已推送至原 CI 分支，文档检查通过；[完整构建](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/41196229588) 进行中，独立本地打包树已准备。
+
+
+### Run 79 日志与计时镜像完成（2026-10-31）
+
+[Run 79](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/41196229588) 构建成功，21 分 41 秒。实际云端检查包含新的诊断缓存、GMUAO 采样门限、presenter 耗时、控制台缓存与帧率回归，随后通过 XNU/A830 生产编译、最终链接/预链接、Metal/Turnip、签名和 Data 安装。
+
+- 本地内核与配套输入：`out/oneplus13t/actions/metal-run-79/`。`kernel/kernel.macho` 为 128397312 字节，SHA-256 `42ba2198944c7a4aa4cea8598ea5f160568cec91b56730d2fb46c7d7ceb31930`，与最终预链接日志一致。
+- 本地镜像：`out/oneplus13t/boot/metal-run-79/boot.img`，100499456 字节，SHA-256 `ebe45129843cf7234b1c37107bf365e7aa8ab8f6d2fd7952a5148eb8bbab5ea3`。打包记录为同目录 `boot.json` 和 `out/metal-candidate-run-79/packaging.log`。
+- 同轮 Data UUID：`884DF059-65A8-4463-A044-8C3D57EA13F4`。内核、Data、三个 owner CDHash 与原始信任模块配对通过。已验证 GFX UEFI、Android v4 容器、完整 192 MiB FAT、内核/信任缓存/Data/启动参数回读通过。
+- 实际内核包含新的 `CMD ... poll`、`M~` 格式、API 方法号、CLK 请求频率/忙闲/未知 SP 活动数和 G/C/O 计时格式；诊断与呈现入口、`native_gop_gpu_last_ns` 均为已定义强符号。
+
+用户选择“先生成本地镜像，暂不启动”。本轮停在本地镜像验证，没有执行 fastboot 或操作手机。Run 78 文件保留。Run 79 的实际请求频率、忙闲读数、活动 SP 数（当前不可得）以及帧率改善尚无实机结果。
+
+
+Run 79 后续临时启动（2026-10-31 20:37，UTC+8）：用户重新连接 fastboot 并明确要求测试，已核对上述镜像 SHA-256、设备序列号和 `sun` / `is-userspace=no` 身份。Windows `fastboot boot` 的 Sending 返回 OKAY（2.297 秒），Booting 返回 OKAY（0.338 秒），总计 3.001 秒，未刷写分区。日志为 `out/oneplus13t/boot/metal-run-79/fastboot-boot-20261031-203720.log`。已请求静止及连续滑动约 10 秒时的 CLK、DISP、API 三行，以及系统启动和流畅度观察；这些运行结果尚未收到。
+
+
+### Run 79 实机反馈与 Run 80 呈现开销修复（2026-10-31）
+
+用户确认 Run 79 可以进入系统，但滑动没有更流畅，最高约 15 FPS。静止读数为 `API n=9933 m=4 err=00000000 busy=0`、`CLK req=222MHz busy=0 SPactive=?/6`、`DISP G=0.0fps/72.2ms C=0.0/339.1 O=27.1ms`；滑动时 busy 变为 1，API 偶见 `e00002d6`（超时）和 `e00002c7`（接口不支持）。静止时的 72.2/339.1 ms 是最后一次 GPU 交接/CPU 拷贝耗时，保留到下一次完成；没有新帧时 FPS 为零。27.1 ms 显示状态栏每帧覆盖仍有明显开销。
+
+Run 80 源码修复两条重复路径。NativeGOPPresenter 为当前任务保留最多 6 个 surface 映射，并返回稳定映射编号，让 Metal 现有的 4 项导入缓存能够命中；容量外保留逐帧映射，连接关闭或映射失败时释放全部映射并回退。GPU 客户端通过新增可选方法协商日志行范围，GPU blit 和 CPU 拷贝/黑屏填充都避开该范围；协商成功后 BootProgress 每 250 ms 更新一次，不再每帧写回日志。旧客户端保留逐帧覆盖行为。像素校验也跳过日志区域。
+
+`M` 行新增 `map=创建次数/命中次数`，`API` 行新增 `E=最近非零错误方法/返回值`；当前方法和返回值仍保留。`DISP` 行末显示 `4Hz` 或 `frame`，O 仍是最近一次实际绘制耗时，不能乘以屏幕 FPS 估算 4Hz 模式开销。GPU 请求频率未改变，活动 SP 数仍未知。新增映射生命周期、容量上限、失败回退、日志行避让/边界、4Hz 无写入和错误保留回归；ASan/UBSan、GMU/SMMU/presenter、A830 软件 runtime 与 Stage7 检查通过。生产构建、同版本镜像打包和实际帧率改善待验证。
+
+
+### 60 FPS 目标的缓冲区对照（2026-10-31）
+
+用户要求继续参考其他仓库和主仓，目标为稳定至少 60 Hz 的画面刷新。实际完成 60 帧/秒要求持续帧间隔约 16.67 ms；`sheng-vsync=60` 只设置软件通知节奏，面板硬件 vblank/TE 还没有驱动，不能据此认定实际稳定刷新率。
+
+- 当前 Adreno740 `5c8c1453c67d6ef6b10ec43ab1f8fc570a2f33e1` 和 AdrenoMetal `ce5e19e33e05e1873d38d818e23cabfe0ac708c3` 已是 2026-10-31 查询到的各自主仓 main。前者已取消每次提交的全局 TLB 清空并缩减 IB/缓存审计；现有 per-client 表为 16384，不能套用 zeta 较早的 1024→4096 容量补丁。
+- [主仓 AdrenoMetal 文档](https://unixnu.com/drivers/adreno-metal)记录 sheng 在 120 Hz 请求下运行桌面和空闲 shader priming；[sheng 配置](https://github.com/UniXNU/UniXNU-sheng)明确这仍是 timing request，未提供可迁移到 A830 的持续帧耗时分布。
+- [zeta 的运行记录](https://github.com/none24smu/UniXNU-zeta#graphics-runtime-and-contiguous-allocation-stalls)记录映射缓存 1008 次命中/3 次 miss、堆 alias 转换以及普通 BO 连续分配的长扫描。当前 A830 已采用普通 BO 的 pool/scattered 路径；本轮使 presenter 的稳定映射编号接通现有 Metal 导入缓存。为了保持借用地址的生命周期，6 个映射以内复用，超出仍逐帧导入；不直接淘汰用户态可能引用的映射。
+- [zeta 堆复用补丁](https://github.com/none24smu/UniXNU-zeta/blob/main/package/NativeMetal-zz-heap-aliasing.patch)指出前端未转发 `makeAliasable`。当前版本也没有该转发且固定返回不可 alias。已核对锁定 metal2vulkan `720ef1ce9ae2a2068999a8675717418b9416283e` 的接口，补齐 buffer/texture/view 的 alias 操作及真实 heap/offset，使自动 heap 能复用仍保留对象的存储。复用检查覆盖重复调用、旧对象释放不误释放新对象、placement heap 和非 heap 控制；需要 macOS 执行真实前端/Rust bridge，已加入云端流程。
+- [zeta 同源 Turnip 提交修复](https://github.com/none24smu/UniXNU/blob/ios26-ufs-owner-root/patches/mesa/turnip-submit-backpressure.patch)针对 8 个共享 job 槽被其他客户端占满。原逻辑在本进程旧 fence 已完成时可快速耗尽 64 次尝试并误报 DeviceLost；现改成同一个 5 秒截止时间，并在 busy 后让出 100 微秒。ASan/UBSan 实际函数测试通过 200 次临时 busy、无本地 fence、永久 busy、真实超时/错误、无竞争路径，旧 64 次逻辑在同一测试中失败。该等待只发生在 busy 时，不为正常提交增加延迟。
+
+zeta 后续报告仍有 55–83 ms 的呈现窗口和画面问题，因此上述机制是可参考的修复依据，不能作为已达到 60 FPS 的证据。本轮不删除同步/缓存维护或放宽错误判断；保留每帧实际完成才计数。新镜像需要在连续滑动和多次切换应用时检查 G 帧率、G/O 耗时、map 命中及错误计数，达到持续 60 FPS 后再评估更高刷新率。
+
+
+Run 80 构建准备：纯源码包 `out/oneplus13t/ci/metal-buffer-reuse-sources-20261031.tar.gz` 为 189561 字节、7 个仓库/59 个文件项，SHA-256 `3086e9833beabe0d26592e0869b8005e6fda3f99c84b4eabd7b3134185a92b5c`。本地 CI 提交 `dd148ec` 固定该输入以及 host heap 回归步骤。自动权限审核拒绝向既定 `IssacL04/UniXNU-Pagani_SM8750` 的 `codex/a830-metal-20261028` 分支推送，理由是要求本轮直接确认具体目的地；已请求确认，尚未触发新构建。独立 Run 80 profile/config/tree 和同版本打包检查已准备，Run 79 镜像保留。新 kernel/boot.img 尚未生成。
+
+
+用户随后明确授权本次源码包推送、构建并生成本地 boot.img。原推送已成功，提交为 `dd148ec4f13fad7ab9c0790455f9889e82b8afb8`；文档 CI `41204382448` 通过。[Run 80](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/41204396477) 已启动，并包含真实 Metal/Rust 堆复用回归。独立 Run 80 解析树的 Stage7 与外设检查通过。尚未下载新内核或操作手机。
+
+
+Run 80 attempt 1 在 A830/显示/输入/提交背压回归通过后，下载 Apple OS 输入时收到截断的 8 MiB HTTP 响应：`IncompleteRead(819200 bytes read, 7569408 more expected)`。未进入生产编译；失败日志保留在 `/tmp/pagani-run80-failed.log`。已重跑同一个 run，源码、配置和输入哈希不变。
+
+
+对 60 FPS 目标补充一项：Run 80 的 4 Hz 模式仍在每次刷新时写回整块日志，并同步占用显示完成路径。后续候选在已协商保留日志区域后，只栅格化和写回变化字符；第一次绘制完整清屏，旧客户端仍完整覆盖，退出保留模式后恢复原行为。实际控制台 ASan/UBSan 测试确认：只改变 CPU 数字时，旧字符位置的哨兵保持原值，变化字符正确更新，奇数 stride 的 32 位写入、行尾、屏幕上下边界及 panic 冻结仍通过。此处减少总写入量，实际 O 耗时仍待新镜像测量。
+
+
+### 上游 GPU 分支接入与 389 MHz 候选（2026-10-31）
+
+用户取消 Run 81 后要求拉取新 GPU 修复，并在下一版尝试全核心调度和适当提高频率。Run 80/81 已取消；本轮保留 surface 映射缓存、heap alias、日志区域避让和变化字符更新，继续使用 iPadOS 17.7.11。UniXNU main 合入上游 `67df14de`，本地合并点为 `575e0492`；新的 GPU 实现来自上游 `feat/ipados27-gpu-parity`，没有切换到 iPadOS 27。
+
+依赖固定为 Adreno740 `7fa13d4421e773f11a5196b5098d2362c07fe926`、AdrenoMetal `77cb2075b5500488ec2f8b181445d6496a08ec15`、ArmSmmu4K `1811b6d1a398ce0cab4e6143b610610f6ea59067`、GopFramebuffer `74ff4c4165c0d84bbca82b1ec732677d2d62a98b` 和 metal2vulkan `624bab3918de5b978e1101517abca2b4fa426565`。配套导入 GPU 构建脚本、Turnip BO 缓存/提交依赖/图块路径和 22 个 Metal runtime 补丁。后者已在锁定源码上逐一应用通过。
+
+新版 user BO 从系统 pageable 内存分配并 wire，不再预留板级 512 MiB BO 池；分配/释放和 fence 轮询移出共享锁，页表与对象索引按需增长，每个用户连接有自己的 GPU 地址空间。A830 的 AQE 和较大 SQE 映射进入每个进程页表；板级提供实际 context 与 SMMU 输入位宽。Gen8 CP 页表包使用三个 payload dword，时间戳使用 OnePlus graphics-kernel `6a196f79` 的 `GEN8_CP_ALWAYS_ON_COUNTER_LO=0x8e7`。未开放 SCM CP aperture 时继续使用上游的 CPU 页表切换路径。缓存一致性开关沿用原资格要求。
+
+板级启动策略从匹配 speed-bin/SKU 的原机 OPP 表选择不超过 389 MHz 的最高档，六个现有 profile 均选中 389 MHz，使用其 level 60 电压投票和 bandwidth index 4。请求通过原有 `Sm8750GmuSetPerformance` 完成，CLK 仍显示 ACK 后保存的请求值，不能视为实时测频。A830 沿用原厂三 slice、六 SP 全拓扑配置；Metal 的 `gpuCoreCount` 在 A830 构建中从上游固定 8 改为 6，供 MPS 选择内核规模。`SP_PERFCTR_SHADER_MASK=0x3f` 是计数器选择，不被当作核心上电或活动证明；`SPactive=?/6` 继续明确活动数未知。
+
+提交 busy 保留同一个五秒截止时间和每次 100 微秒让出；真实失败仍上报。源码包同时保存公共 submodule gitlink，并在恢复补丁后更新对应依赖，避免云端静默使用旧 SMMU 接口。当前完成源码合并与主机验证，生产构建、实际频率和持续 60 FPS 仍待新镜像验证。
+
+
+Run 82 已提交构建：UniXNU 合并点 `575e0492` 已推送至 `IssacL04/UniXNU_Enc3l/main`。CI 输入提交 `87b8ed37b2bb8a9d63ec1e69899b91d4495f06dd`，纯源码包为 229626 字节、7 个仓库/62 项，SHA-256 `4109d2d4ed53b0bb0d141991209326cfbbfbeaa70369077f0452fdd162d40e77`。[Run 82](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/41207690832) 使用固定输入并复用 Run 69 固件。主机 A830/GMU/SMMU、system BO、每进程六类 GPU 缓冲区映射（含 SQE/AQE）、user-client 和提交背压回归通过；生产编译与本地 boot.img 尚在处理。
+
+Run 82 在 macOS 主机检查阶段因测试夹具残留 `native_adreno_pool_mib` 未使用变量失败，尚未生产编译。旧池的生产配置已删除；现同步删除夹具变量，Clang 的 SMMU/presenter 和完整 A830 软件 runtime 检查通过，GCC 的 SMMU 检查通过。新版源码将继续构建。
+
+Run 83 在 macOS 通过 GMU/HFI/389 MHz 投票、SMEM、SMMU/presenter 和 A830 初始化检查后，GMU context 测试链接缺少可选 `native_pmap_user_mappings`。Linux 的 weak 声明被错误用于 Apple host；已将 Linux 主机限定为 `weak`，Apple 主机和生产环境保留 `weak_import`，同样修正 `native_gpu_dcvs` 声明。
+
+Run 84 重现 Apple host 的可选 pmap 符号链接失败，仅修正 weak 属性不足。已沿用上游 `test_system_memory.cpp` 的 pmap 替身，补齐 GMU/GPU context 与 user-client 夹具；后者同时定义 DCVS 诊断数组。生产 pmap 和缓存路径未改动。
+
+Run 85 的 macOS 主机回归和全部驱动编译通过，最终内核链接缺少新上游引用的 `native_pmap_user_mappings` 与 `native_gpu_dcvs`。采用 [DroidVM 的真实 pmap 实现](https://github.com/Droid-VM/macOS-DroidVM/blob/208225c6a19178224119ac262a99c1e51e30fd22/patches/xnu-12377/0007-native_pmap_user_mappings-user-mappings-of-a-managed.patch)，适配当前 `xnu-10063.141.1`，仅在非 PPL 内核启用：持有 PVH 锁遍历 CPU 用户映射，跳过内核和 IOMMU 映射，不修改页表。实际函数的 GCC/Clang ASan/UBSan 回归覆盖空表、单项、链表、无效页、可选输出及锁配对。A830 板级在 HFI 性能请求确认后写入 `native_gpu_dcvs[1]`；`[0]` 保持零，明确没有启用动态调频器。后续须通过生产重链接。
+
+Run 86 的主机回归、XNU/A830 编译和预链接通过。Metal 阶段在 Mesa 补丁应用处停止：提交背压补丁与上游 GMEM 补丁附带的提交计时修改重叠。现将背压补丁放到序列末尾，保留计时并重新适配；12 个补丁完整应用和反向还原锁定源码检查通过，实际函数的背压/计时回归通过。后续用户态构建复用 Run 86 的内核和配对 Data，下载后核对 UUID，仅重取固定的两个原始信任模块。
+
+Run 87 复用 Run 86 内核并通过配对检查，iOS Turnip 和新的 Metal bridge 均已编译成功。插件编译被 `patchFramebufferBranch` 的未使用函数警告阻止：调用仅在 arm64e/iPadOS 27 路径，定义缺少相同保护。现补齐 `__arm64e__` 条件；构建脚本在 Rust LTO 前检查插件、frontend 和 probe daemon 的实际语法，复用同一组编译参数。生产编译继续保留全部告警检查。
+
+Run 88 的生产 iOS Turnip、Metal bridge、插件/daemon 编译及签名、Data 安装通过。主机验证在纹理堆耗尽准备阶段失败：新上游会在自动堆满后返回独立纹理，旧夹具错误等待 nil。夹具改按堆占用停止增长识别回退，并检查独立纹理不会释放堆空间；原有 buffer/texture/view 复用和旧行为对照断言保留，单独重跑主机验证。生产代码不变。
+
+本地 `out/oneplus13t/boot/metal-run-88/boot.img` 已封装，100376576 字节，SHA-256 `94e52bfec0fa7e82b7fee4f67ce8b8883ffe7011b09c10d552bbeffd52d215a9`。内核与 Run 86 相同，Data UUID `E50A9074-8440-4F63-A08C-1E8A188CEFB9`、原始/owner trust、强 GPU/pmap/DCVS 符号、GFX UEFI、Android v4 与 FAT 内容和参数回读通过。尚未执行本轮手机启动；主机堆复用检查仍待重跑。
+
+[Run 89](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/41219310884) 已成功完成主机复核：实际 frontend/Rust 的 buffer/texture/view aliasing、保留旧对象后的复用、重复释放、placement offset 与非堆对照全部通过；移除 alias 转发的旧行为对照按预期失败。该轮只修改夹具、工作流及记录，生产代码与 Run 88 一致。日志保存于 `out/oneplus13t/actions/metal-run-88/logs/heap-recheck-run89.log`。实际 iOS 插件的 `NBDeviceMethods.gpuCoreCount` 位于 `0x389cc`，指令为 `mov w0, #6; ret`；内核的 OPP 选择比较常量为 389000001，对应最高 389 MHz。镜像可供下一次设备测试，持续 60 FPS、六 SP 同时活跃、实际频率与热稳定性尚未测量。
+
+## Run 88 临时启动（2026-11-01 02:09，Asia/Shanghai）
+
+用户确认 fastboot 已连接并要求测试。镜像重新核对为 100376576 字节，SHA-256 `94e52bfec0fa7e82b7fee4f67ce8b8883ffe7011b09c10d552bbeffd52d215a9`；设备序列号 `3B15BB01BAT00000`，product `sun`，`is-userspace=no`。Windows `fastboot boot` 发送返回 OKAY（2.293 秒），Booting 返回 OKAY（0.336 秒），总耗时 3.052 秒，未刷写分区。日志：`out/oneplus13t/boot/metal-run-88/fastboot-boot-20261101-020921.log`。手机启动画面、389 MHz 请求、提交/完成和呈现帧率待设备观察，当前只确认 bootloader 接受了临时启动。
+
+## Run 88 设备反馈与日志区域修正（2026-11-01）
+
+用户反馈操作正常、明显更流畅，观察到约 60 帧；同时出现屏幕颜色跳变，诊断字母不可见、主要剩下数字，因此 CLK/DISP/CMD 数值无法可靠辨认。该反馈确认 UI 可用和流畅度改善，尚不作为持续帧率、实际频率或全 SP 活动测量。用户图片显示日志带未保持黑底，固定字母消失，仅部分变化数字留下；桌面颜色异常仍需分路径定位。
+
+源码发现新上游 `scanout_opaque` 计算路径和半浮点转换直接覆盖整帧，绕过已有 blit 的日志保留区域。日志自身只重画变化字符，这能解释固定字母被覆盖而变化数字重新出现。`GpuScanoutPresenter.h` 已让两条计算路径按可见行区间提交，保留原有 alpha 和颜色转换；`scanout_host.mm` 增加无保留区、中间保留区、整帧保留区的逐像素和行尾留白检查，并接入现有 macOS 验证脚本。当前仅脚本语法与差异检查通过，实际 macOS 检查和新候选构建待执行。颜色跳变的根因尚未确认。
+
+SYSMEM 对照镜像位于 `out/oneplus13t/boot/metal-run-88-sysmem/boot.img`，100376576 字节，SHA-256 `6add8b1fad817598e7494f16c79dd786b415bcdab6f0e912bc07b876c0c64daf`。从已验证 Run 88 payload 复制，仅给启动参数追加 `sheng-tu-debug=sysmem,nocb` 后重新打包。最终镜像回读确认 kernel、Data、trust cache、ADT、UEFI、shim 和 DTB 与 Run 88 相同。用户确认 fastboot 就绪后，于 02:31 临时启动：Sending 2.293 秒、Booting 0.338 秒均 OKAY，总计 2.946 秒，未刷写分区；颜色和流畅度对照待反馈。日志：`out/oneplus13t/boot/metal-run-88-sysmem/fastboot-boot-20261101-023150.log`。该对照用于区分 GMEM 路径与颜色问题，未包含日志区域修复。
+
+用户随后确认 SYSMEM 对照颜色恢复正常，日志仍与原版一样残缺。滑动主观约 30-60 FPS，下拉控制中心和应用冷启动仍卡顿。该单变量对照把颜色问题缩小到 GMEM 相关路径，尚未确定具体 load/store 或通道交换操作。候选生成器已默认加入 `sheng-tu-debug=sysmem,nocb`，现有 profile 隔离测试验证只出现一次；Run 90 打包也加入该参数。日志修复的用户态正在 Run 90 构建，复用 Run 86 内核，不需要因该运行时参数重新编译。
+
+同一启动内重复测试后，控制中心已无严重卡顿，应用打开/关闭动画仍明显掉帧，用户估计约 20 FPS。这是主观动画观察；日志仍不可读，尚无该场景的提交/完成与呈现耗时记录，不能把剩余瓶颈归因于首次编译或 GPU 频率。
+
+## Run 90 日志修复与 SYSMEM 镜像（2026-11-01）
+
+[Run 90](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/41229571660) 完整通过。复用 Run 86 的相同内核，重编译 iOS Turnip、Metal bridge、插件和 daemon，完成签名、Data 安装及主机回归。`logs/scanout.log` 证明实际 frontend/Rust/Vulkan 路径的 BGRA、线性/编码半浮点像素与参考转换一致，中间日志区、整帧保留区和行尾填充区保持原字节；堆复用及移除 alias 转发的旧行为对照也通过。这些像素检查在 macOS/MoltenVK 执行，仍需设备确认日志可读性。
+
+本地镜像：`out/oneplus13t/boot/metal-run-90/boot.img`，100380672 字节，SHA-256 `91cc316ac1edcf151643bf21cda08872b8244caa80a7351a61cbaafd4090f0d4`。打包加入已在设备恢复正常颜色的 `sheng-tu-debug=sysmem,nocb`；该参数只影响运行时配置，不需要重编译内核或 Metal。最终 Android/FAT 回读通过，实际新插件与 Run 88 不同，内核与 Run 86/88 完全相同，Data UUID 为 `E50A9074-8440-4F63-A08C-1E8A188CEFB9`，owner/original trust、已验证 GFX UEFI 和诊断启动参数匹配。保留 Run 88 及其 SYSMEM 对照镜像。Run 90 的设备日志和应用动画测量待测试。
+
+用户确认手机回到 Windows fastboot；03:02 的 Run 90 临时启动发送 2.287 秒、Booting 0.337 秒均 OKAY，总计 2.971 秒，未刷写分区。日志：`out/oneplus13t/boot/metal-run-90/fastboot-boot-20261101-030211.log`。颜色、日志可读性和应用动画的 CLK/CMD/DISP 数值等待设备反馈。
+
+
+## Run 90 实机读数与下一轮性能候选（2026-11-01）
+
+用户确认 Run 90 颜色正常、日志完整。滑动时 CLK 请求 389 MHz、busy=1，SPactive=?/6；CMD 提交/完成持续增加，bad=0。呈现约 28-40 FPS，G 总耗时约 20-50 ms，CPU copy 频率为 0，日志刷新约 0-5 ms / 4 Hz。`M map=3/5129` 的命中数继续增至约 6000，映射数仍为 3，当前没有逐帧重新映射证据。`E=6/e00002d6` 对应 WaitFence 的 Timeout，包含正常轮询未完成，不能据此判定 GPU 卡死。busy 是布尔忙闲值，不是活跃 SP 数；G 耗时包括 offer 到完成交接，不能当作纯 GPU shader 时间。
+
+同步 UniXNU main `04b4e55`，合并点为 `875ac19`。AdrenoMetal 更新到 `fc5ca0b`：诊断采样改为显式开启，避免默认每 2 ms 暂停渲染线程；保留 A830 的六 SP、堆复用和日志带修复。配合 UniXNU 图形分支 `02f8cdd` 的 Turnip 诊断开关及 SYSMEM 非 lazy 内存，减少渲染线程临时分配 40-112 MiB 附件的机会。上游构建脚本引用的 0023/0024 补丁在该 AdrenoMetal 提交中缺失，本地补齐现有 QoS 函数的 iOS 条件以及 stage/allocation 追踪开关，并加入真实 runtime 的开/关和完成回调 QoS 检查。没有引入 method-17 或 A7xx 双环抢占寄存器。
+
+参考 [sheng](https://github.com/UniXNU/UniXNU-sheng) 的已运行 GPU 桌面和软件刷新配置，以及 [zeta](https://github.com/none24smu/UniXNU-zeta#graphics-runtime-and-contiguous-allocation-stalls) 的分配/提交背压记录。zeta 仍报告画面及性能问题；[hummer](https://github.com/2426120557/UniXNU-hummer) 的同款 A830 尚未提供完整 Metal 桌面验证。A830 继续使用本机原厂 OPP，启动请求从 389 MHz 提至 525 MHz，并同步使用原表电压/依赖投票和 bandwidth index 4。
+
+Metal 候选将软件 vsync 请求设为 120 Hz，保留 CPU 基线的 60 Hz；关闭昂贵的运行时追踪但保留现有 4 Hz 屏幕状态栏。面板仍继承固件 DSI 模式，没有改写面板时序或伪造硬件 vblank。120 Hz 软件请求尚不代表 120 FPS 或面板 120 Hz。用户要求构建、下载 boot 后等待其返回，本轮不操作手机；新频率、功耗、实际帧率和热稳定性留待测试。
+
+[Run 91](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/41234063029) 已启动完整内核与用户态构建。CI 提交 `5b11f85` 的纯源码包包含 7 个仓库、66 项，253337 字节，SHA-256 `7cb596187eca02ad044dce1b4454817cea74379610be9cf5b681416af01d9685`。本地 24 个 runtime / 12 个 Mesa 补丁的精确应用和还原通过；配置隔离、525 MHz 全 speed-bin 投票、提交背压回归通过。

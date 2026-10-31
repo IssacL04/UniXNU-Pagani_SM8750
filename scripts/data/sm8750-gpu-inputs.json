@@ -1,0 +1,43 @@
+{
+  "chip_id": "0x44050001",
+  "gpu_id": 830,
+  "gmem_bytes": 12582912,
+  "gmem_base": "0x4000000",
+  "firmware": {
+    "source": "PKX110 local full-flash backup dated 2026-10-22, super.img base vendor extent at byte 1694498816; OTA COW overlays not applied",
+    "vendor_fingerprint": "oplus/ossi/ossi:15/AP3A.240617.008/1785569020571:user/release-keys",
+    "active_slot_match_verified": false,
+    "files": {
+      "gen80000_aqe.fw": {
+        "bytes": 25340,
+        "sha256": "f04cb97e1e629b9003a26c5670b8f7e5b7bfeca95d35b2abd581fd8672efed20",
+        "vendor_path": "firmware/gen80000_aqe.fw"
+      },
+      "gen80000_gmu.bin": {
+        "bytes": 88896,
+        "sha256": "1ad8175e6cd01ea76c64d20b83600038c52dd29844b48d57b11b769b038863a5",
+        "vendor_path": "firmware/gen80000_gmu.bin"
+      },
+      "gen80000_sqe.fw": {
+        "bytes": 111892,
+        "sha256": "9c8f009bea112d7c06dd2ccb67e889999459e53b92f0f4859f5ea0db067ad6b5",
+        "vendor_path": "firmware/gen80000_sqe.fw"
+      },
+      "gen80000_zap.mbn": {
+        "bytes": 12088,
+        "sha256": "926b145d3cc241d4de77f24ead55223e554865e2e0ee724ce61dbf9e680b6b3b",
+        "vendor_path": "firmware/gen80000_zap.mbn"
+      }
+    }
+  },
+  "reference": {
+    "linux": {
+      "repository": "https://github.com/torvalds/linux",
+      "commit": "65ba8f34ec886ec72b2c07ddc8cf3d815c32869d"
+    },
+    "mesa": {
+      "commit": "85fda3b36405bcaea8bffc64aa4f2651dc90770d",
+      "chip_match": "src/freedreno/common/freedreno_devices.py"
+    }
+  }
+}

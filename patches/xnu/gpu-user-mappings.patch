@@ -1,0 +1,86 @@
+From: lateautumn233 <lateautumn233@foxmail.com>
+Subject: [PATCH] Native GPU user-mapping diagnostics for the non-PPL kernel
+
+Adapted to the selected XNU source from Droid-VM/macOS-DroidVM
+b5302f936b70573ae63d82e5542586bac324a18f. Read-only; no mappings are removed.
+
+--- a/osfmk/arm/pmap/pmap.c
++++ b/osfmk/arm/pmap/pmap.c
+@@ -14943,3 +14943,77 @@
+ }
+ 
+ #endif /* DEVELOPMENT || DEBUG */
++
++/* Read-only BO diagnostics; adapted from Droid-VM/macOS-DroidVM b5302f936b70. */
++#if !XNU_MONITOR
++unsigned int native_pmap_user_mappings(ppnum_t ppnum, void **first_pmap, uint64_t *first_va, char *first_name);
++unsigned int
++native_pmap_user_mappings(ppnum_t ppnum, void **first_pmap, uint64_t *first_va, char *first_name /* 17 bytes, the process's */)
++{
++	const pmap_paddr_t pa = ptoa(ppnum);
++	unsigned int count = 0;
++
++	if (first_pmap) {
++		*first_pmap = NULL;
++	}
++	if (first_va) {
++		*first_va = 0;
++	}
++	if (first_name) {
++		first_name[0] = 0;
++	}
++	if (!pa_valid(pa)) {
++		return 0;
++	}
++	const unsigned int pai = pa_index(pa);
++	pvh_lock(pai);
++	pv_entry_t **pvh = pai_to_pvh(pai);
++	pt_entry_t *ptep = PT_ENTRY_NULL;
++	pv_entry_t *pvep = PV_ENTRY_NULL;
++	int index = 0;
++	if (pvh_test_type(pvh, PVH_TYPE_PTEP)) {
++		ptep = pvh_ptep(pvh);
++	} else if (pvh_test_type(pvh, PVH_TYPE_PVEP)) {
++		pvep = pvh_pve_list(pvh);
++	}
++	while (ptep != PT_ENTRY_NULL || pvep != PV_ENTRY_NULL) {
++		if (pvep != PV_ENTRY_NULL) {
++			ptep = pve_get_ptep(pvep, index);
++		}
++#ifdef PVH_FLAG_IOMMU
++		if (ptep != PT_ENTRY_NULL && pvh_ptep_is_iommu(ptep)) {
++			ptep = PT_ENTRY_NULL;
++		}
++#endif /* PVH_FLAG_IOMMU */
++		if (ptep != PT_ENTRY_NULL) {
++			pmap_t pmap = ptep_get_pmap(ptep);
++			if (pmap != kernel_pmap) {
++				if (count == 0) {
++					if (first_pmap) {
++						*first_pmap = pmap;
++					}
++					if (first_va) {
++						*first_va = (uint64_t)ptep_get_va(ptep);
++					}
++#if MACH_ASSERT
++					if (first_name) {
++						strlcpy(first_name, pmap->pmap_procname, 17);
++					}
++#endif /* MACH_ASSERT */
++				}
++				count++;
++			}
++		}
++		if (pvep == PV_ENTRY_NULL) {
++			break;
++		}
++		ptep = PT_ENTRY_NULL;
++		if (++index == PTE_PER_PVE) {
++			index = 0;
++			pvep = pve_next(pvep);
++		}
++	}
++	pvh_unlock(pai);
++	return count;
++}
++#endif /* !XNU_MONITOR */

@@ -5,3 +5,4 @@ zzzzz-root-panic-progress.patch
 zzzzzz-vm-bootstrap-progress.patch
 zzzzzzz-early-framebuffer-page-tables.patch
 ticket-lock-diagnostics.patch
+gpu-user-mappings.patch

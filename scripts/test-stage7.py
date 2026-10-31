@@ -2,7 +2,9 @@
 """Exercise the actual display timer lifecycle with host stubs."""
 import argparse
 import ast
+import os
 from pathlib import Path
+import re
 import runpy
 import subprocess
 import tempfile
@@ -97,6 +99,16 @@ int main(){
 '''
 with tempfile.TemporaryDirectory(prefix='stage7-check-') as temporary:
     folder = Path(temporary)
+    console = tree / 'drivers/BootProgress'
+    source = folder / 'console-runtime.c'
+    source.write_text((console / 'Test/console.c').read_text().split('static void panic_for_test', 1)[0])
+    obj = source.with_suffix('.o')
+    subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-O2', '-ftrivial-auto-var-init=zero', '-ffreestanding', '-fno-builtin',
+                    '-fno-stack-protector', '-fno-jump-tables', '-I', str(console / 'Test'),
+                    '-I', str(tree / 'drivers/PaganiDarwinBoot/DarwinBootPkg/Driver'),
+                    '-c', str(source), '-o', str(obj)], check=True)
+    undefined = subprocess.check_output(['nm', '-u', str(obj)], text=True)
+    assert not re.search(r'\b_*(?:memset|memcpy|bzero|stack_chk_fail)\b', undefined), undefined
     for name, text, compiler, standard in [('refresh.cpp', cpp, 'c++', 'c++17')]:
         source = folder / name
         source.write_text(text)
@@ -108,4 +120,4 @@ with tempfile.TemporaryDirectory(prefix='stage7-check-') as temporary:
             rules = runpy.run_path(str(Path(__file__).with_name('prepare-ram-data.py')))['COMPAT_FIXUPS']
             expected = [f'{Path(path).name} {offset:x} {original}' for _, path, offset, original in rules]
             assert result.splitlines() == expected, 'Build-time byte checks must match all kernel rules'
-print('PASS: C language selection, logical timing state, display timer lifetime and fixed refresh cadence')
+print('PASS: console runtime-helper boundary, C language selection, logical timing state, display timer lifetime and fixed refresh cadence')
