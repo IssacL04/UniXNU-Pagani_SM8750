@@ -26,7 +26,7 @@ def relative(name):
     return path
 
 
-def create(output):
+def create(output, sources_only=False):
     if output.exists():
         raise ValueError('Refuse to overwrite ' + str(output))
     files, manifest = {}, []
@@ -35,7 +35,7 @@ def create(output):
         url = git(repo, 'remote', 'get-url', 'origin').decode().strip()
         if not re.fullmatch(r'https://github.com/[\w.-]+/[\w.-]+', url):
             raise ValueError('Require a public-source GitHub HTTPS origin: ' + name)
-        patch = git(repo, 'diff', '--binary', '--ignore-submodules=all', 'HEAD')
+        patch = git(repo, 'diff', '--binary', '--ignore-submodules=dirty', 'HEAD')
         if patch:
             subprocess.run(['git', '-C', str(repo), 'apply', '--reverse', '--check', '-'], input=patch, check=True)
         patch_name = f'changes/{index}.patch'
@@ -53,16 +53,17 @@ def create(output):
             additions.append({'path': name_in_repo, 'archive': archived, 'mode': source.stat().st_mode & 0o777})
         manifest.append({'path': name, 'repository': url, 'revision': git(repo, 'rev-parse', 'HEAD').decode().strip(),
                          'patch': patch_name, 'additions': additions})
-    pins = json.loads((ROOT / 'scripts/data/sm8750-gpu-inputs.json').read_text())['firmware']['files']
-    for name, pin in pins.items():
-        data = (ROOT / '.cache/firmware/pkx110-gpu' / name).read_bytes()
-        if len(data) != pin['bytes'] or hashlib.sha256(data).hexdigest() != pin['sha256']:
-            raise ValueError('Firmware pin differs: ' + name)
-        files['inputs/firmware/' + name] = data
-    dtb = (ROOT / 'sysinfo/live.dtb').read_bytes()
-    if hashlib.sha256(dtb).hexdigest() != 'd00767f2068d0df73fc2a077de750bba66a5420c77414db1441ff09f6f3ec223':
-        raise ValueError('Runtime DTB pin differs')
-    files['inputs/live.dtb'] = dtb
+    if not sources_only:
+        pins = json.loads((ROOT / 'scripts/data/sm8750-gpu-inputs.json').read_text())['firmware']['files']
+        for name, pin in pins.items():
+            data = (ROOT / '.cache/firmware/pkx110-gpu' / name).read_bytes()
+            if len(data) != pin['bytes'] or hashlib.sha256(data).hexdigest() != pin['sha256']:
+                raise ValueError('Firmware pin differs: ' + name)
+            files['inputs/firmware/' + name] = data
+        dtb = (ROOT / 'sysinfo/live.dtb').read_bytes()
+        if hashlib.sha256(dtb).hexdigest() != 'd00767f2068d0df73fc2a077de750bba66a5420c77414db1441ff09f6f3ec223':
+            raise ValueError('Runtime DTB pin differs')
+        files['inputs/live.dtb'] = dtb
     files['manifest.json'] = (json.dumps(manifest, indent=2) + '\n').encode()
     output.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(output, 'w:gz') as archive:
@@ -73,7 +74,7 @@ def create(output):
     with tarfile.open(output) as archive:
         assert set(archive.getnames()) == set(files)
         assert all(archive.extractfile(name).read() == data for name, data in files.items())
-    print(f'PASS: {len(manifest)} source checkouts, {len(files)} entries, {output.stat().st_size} bytes; private inputs included')
+    print(f'PASS: {len(manifest)} source checkouts, {len(files)} entries, {output.stat().st_size} bytes; sources_only={sources_only}')
     print(hashlib.sha256(output.read_bytes()).hexdigest())
 
 
@@ -105,7 +106,8 @@ def restore(bundle, output):
             git(repo, 'submodule', 'update', '--init', '--recursive', '--depth', '1')
             patch = archive.extractfile(item['patch']).read()
             if patch:
-                subprocess.run(['git', '-C', str(repo), 'apply', '-'], input=patch, check=True)
+                subprocess.run(['git', '-C', str(repo), 'apply', '--index', '-'], input=patch, check=True)
+                git(repo, 'submodule', 'update', '--init', '--recursive', '--depth', '1')
             for extra in item['additions']:
                 target = repo / relative(extra['path'])
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -131,10 +133,11 @@ if __name__ == '__main__':
     parser.add_argument('operation', choices=['create', 'restore'])
     parser.add_argument('--bundle', type=Path, required=True)
     parser.add_argument('--workspace', type=Path)
+    parser.add_argument('--sources-only', action='store_true', help='Create a source bundle without firmware or runtime DTB')
     args = parser.parse_args()
     if args.operation == 'restore' and not args.workspace:
         parser.error('restore requires --workspace')
     try:
-        create(args.bundle.resolve()) if args.operation == 'create' else restore(args.bundle.resolve(), args.workspace.resolve())
+        create(args.bundle.resolve(), args.sources_only) if args.operation == 'create' else restore(args.bundle.resolve(), args.workspace.resolve())
     except (OSError, ValueError) as error:
         parser.exit(1, str(error) + '\n')
