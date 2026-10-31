@@ -195,7 +195,7 @@ jobs:
           checkout(tree / '.cache/gpu-reference/metal2vulkan', pin['repository'], pin['commit'])
           PY
           rustup toolchain install 1.98.0 --profile minimal
-      - name: Verify Metal heap reuse on the build host
+      - name: Verify Metal heap reuse and scanout on the build host
         working-directory: source/UniXNU
         run: |
           cd "$UNIXNU_TREE"
