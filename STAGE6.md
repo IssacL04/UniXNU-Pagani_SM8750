@@ -1417,3 +1417,13 @@ Metal 候选将软件 vsync 请求设为 120 Hz，保留 CPU 基线的 60 Hz；�
 ## Metal 分支与 main 同步（2026-11-01）
 
 按用户要求核对 `codex/a830-metal-20261028`：合并前分支独有 33 个提交，main 独有 3 个提交。使用保留父提交的 merge 合入全部历史，保留双方结构化记录中的所有列表项。已有两个 CI 输入文件逐字节来自该远端分支，没有加入新固件输入。A830 工作流沿用 main 的 `metal.yml`，内容与分支 `xnu.yml` 一致；main 的 CPU 基线 `xnu.yml` 保留。后续直接在 main 修改和构建，两个远端分支在本次合并后同步到同一提交。Run 91 使用已固定的原提交继续构建。
+
+## Run 91 构建与本地镜像（2026-11-01）
+
+[Run 91](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/41234063029) 于 03:24:26 至 04:21:34（Asia/Shanghai）完成，耗时 57 分 08 秒。完整 XNU/A830 编译及预链接、iOS Turnip/Metal bridge/插件构建、签名和 Data 安装均通过。真实 macOS frontend/Rust 回归确认：完成回调使用 user-interactive QoS；默认不记录 stage/allocation 诊断，单独开启后可读取记录；buffer/texture/view 堆复用通过，删除 alias 转发的旧行为对照按预期失败。逐像素回归覆盖 BGRA、线性/编码半浮点、日志保留区、行尾填充和未知格式拒绝。日志位于 `out/oneplus13t/actions/metal-run-91/logs/`。这些主机测试不代表 A830 实机性能。
+
+下载的 `kernel/kernel.macho` 为 128479232 字节，SHA-256 `22b89a31ce29c4c3aeb1143d688e8ad24cb50b90a2c2b78e49cb52e6c46ad668`，与云端日志一致。实际 `_PaganiGpuBuildStartup` 指令包含 525000001 比较常量，对应最高 525 MHz 的原表选择；生产 iOS 插件包含 QoS 函数导入和 `SHENG_DIAG` 开关。强 GPU 可执行符号和配对 Data UUID `40DDD231-F4AE-4443-818F-8085CB168DBE` 检查通过。
+
+本地镜像为 `out/oneplus13t/boot/metal-run-91/boot.img`，100392960 字节，SHA-256 `c05b470241545b7feb003426c1e236cab289edf02df9bff4d465961fa834588d`。Android v4 与完整 FAT 回读确认配对 kernel/Data、original/owner trust、已测试 GFX UEFI 和启动参数一致，包含 `sheng-vsync=120`、`sheng-gpu-sample=0`、`sheng-tu-debug=sysmem,nocb`，未开启 `sheng-diag=1`。CPU 基线配置保持原值，旧镜像保留。
+
+本轮按要求停在本地镜像完成处，没有操作手机。525 MHz 请求是否被硬件确认、实际帧率、面板刷新率、功耗和热稳定性均待用户返回后测试；未把软件 120 Hz 配置记录为已达到 120 FPS。分支合并点为 `1f0c4a4`，双方历史均可达，合并后的两个分支文档 CI 均通过；本次最终记录在 main 提交后同步两端，后续直接使用 main。
