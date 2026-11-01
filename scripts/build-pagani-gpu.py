@@ -40,7 +40,7 @@ def build(tree, kernelcache):
     firmware, pm4, smmu = [tree / 'kits' / name for name in ('AdrenoFirmware', 'AdrenoPM4', 'ArmSmmu4K')]
     sources = [gpu / ('NativeAdreno' + name + '.cpp') for name in (
         'A830HwInit', 'CpInit', 'Cpu', 'GmuContext', 'GmuMemory', 'GpuContext', 'Irq', 'Memory',
-        'Publish', 'Pwrup', 'Ring', 'Sha256', 'SmmuContext', 'SmmuMemory', 'Submit', 'Timer', 'UserClient', 'Vm')]
+        'Publish', 'Pwrup', 'Preempt', 'Ring', 'Sha256', 'SmmuContext', 'SmmuMemory', 'Submit', 'Timer', 'UserClient', 'Vm')]
     sources += [soc / name for name in ('Sm8750Gmu.c', 'Sm8750GmuCommandDb.c', 'Sm8750GpuPower.c',
                                        'Sm8750GpuZap.c', 'Sm8750SocInfo.c', 'Sm8750GpuSmmu.c')]
     sources += [firmware / name for name in ('AdrenoFirmware.c', 'AdrenoHfi.c', 'AdrenoHfiStartup.c', 'AdrenoHfiVotes.c')]

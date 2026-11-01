@@ -24,6 +24,8 @@ for language in (['-xc++'],['-x','c++']):
 display = (tree / 'drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp').read_text()
 timer = display[display.index('    IOTimerEventSource *vsyncTimer'):display.index('public:', display.index('    IOTimerEventSource *vsyncTimer'))]
 refresh = display[display.index('    bool isTimingEnabled('):display.index('    // A swap the client')]
+board = (tree / 'drivers/Stage7Probe/Stage7Probe.cpp').read_text()
+observed = board[board.index('volatile uint64_t native_gop_vsync[3]'):board.index('void native_legacy_client_enter')]
 cpp = r'''
 #include <cassert>
 #include <cstdint>
@@ -41,7 +43,8 @@ static void nanoseconds_to_absolutetime(uint64_t ns,uint64_t *ticks){*ticks=ns/1
 static bool PE_parse_boot_argn(const char *name,void *value,unsigned size){
     assert(size==4);*static_cast<unsigned *>(value)=!strcmp(name,"sheng-vsync")?rate:locked;return true;
 }
-static void native_legacy_vsync_observed(unsigned,unsigned){}
+static void progress(const char *,unsigned){}
+''' + observed + r'''
 static void native_legacy_vsync_notify(void *,uint64_t stamp,uint64_t continuous,uint64_t interval){
     assert(stamp==now && continuous==now+17 && interval==(rate==120?833333u:1666666u));++notifications;
 }
@@ -101,6 +104,7 @@ int main(){
     assert(display.getRefreshAttributes(words,false));
     assert(words[0]==(1ull<<32)/120 && words[2]==words[0] && words[3]==words[1]);
     now=display.vsyncTimer->deadline;display.vsyncTick();assert(notifications==3);
+    assert(native_gop_vsync[0]==120 && native_gop_vsync[1]==notifications && native_gop_vsync[2]==1);
     display.stopVsync();assert(!display.vsyncTimer && !liveTimers);
 }
 '''

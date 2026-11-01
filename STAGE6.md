@@ -1427,3 +1427,19 @@ Metal 候选将软件 vsync 请求设为 120 Hz，保留 CPU 基线的 60 Hz；�
 本地镜像为 `out/oneplus13t/boot/metal-run-91/boot.img`，100392960 字节，SHA-256 `c05b470241545b7feb003426c1e236cab289edf02df9bff4d465961fa834588d`。Android v4 与完整 FAT 回读确认配对 kernel/Data、original/owner trust、已测试 GFX UEFI 和启动参数一致，包含 `sheng-vsync=120`、`sheng-gpu-sample=0`、`sheng-tu-debug=sysmem,nocb`，未开启 `sheng-diag=1`。CPU 基线配置保持原值，旧镜像保留。
 
 本轮按要求停在本地镜像完成处，没有操作手机。525 MHz 请求是否被硬件确认、实际帧率、面板刷新率、功耗和热稳定性均待用户返回后测试；未把软件 120 Hz 配置记录为已达到 120 FPS。分支合并点为 `1f0c4a4`，双方历史均可达，合并后的两个分支文档 CI 均通过；本次最终记录在 main 提交后同步两端，后续直接使用 main。
+
+
+## Run 91 临时启动（2026-11-01 20:49，Asia/Shanghai）
+
+用户返回并明确要求 fastboot 测试。重新核对镜像为 100392960 字节、SHA-256 `c05b470241545b7feb003426c1e236cab289edf02df9bff4d465961fa834588d`；设备 `3B15BB01BAT00000`、product `sun`、`is-userspace=no`。Windows `fastboot boot` 的 Sending 2.293 秒、Booting 0.337 秒均返回 OKAY，总计 3.275 秒，未刷写分区。日志：`out/oneplus13t/boot/metal-run-91/fastboot-boot-20261101-204948.log`。随后用户确认进入桌面、颜色正常，帧率仍约 40 多 FPS。屏幕读数为 `CLK req=525Mhz busy=0 SPactive=?/6`、`API n=29493（增加）m=7 err=00000000 E=6/e00002d6`、`CMD s=4547 c=4547 poll=5695 bad=0 P=2099/0`、`DISP G=40fps/20.1 C=0.0/259.4 O=0.2 4Hz`。525 MHz 是请求值；busy=0 是单次采样，不能据此判断负载瓶颈。当前提交数与完成数相等，未报告提交或 presenter 失败。`E` 保留最近一次非零方法返回，`m=7 err=0` 表示最近方法成功；该快照不能证明当前存在 GPU 故障。`G` 的 20.1 ms 包含呈现交接，尚未分离 GPU 执行、唤醒和等待耗时。面板实际刷新率、持续帧率与热稳定性仍未测量。
+
+
+## 同步 main 与呈现耗时拆分（2026-11-01）
+
+按用户要求同步 UniXNU 上游 main `6790e7c`，合并提交 `888876f` 已推送到主仓 fork。保留本地早期控制台、RAM Data、分区目标和预链接输入处理。Adreno740 更新至 `a9a2cbb`，AdrenoMetal 至 `831a9dc`，同时采用 main 固定的 SMMU/GOP 等依赖。A830 保留 Gen8 上下文、SQE/AQE、计数器和指令包差异；上游 A740 双环抢占在 A830 上明确拒绝。iPadOS 17 不提供新 GPU-role API，使用前台优先级回退。运行时采用上游完整 24 补丁序列，删除已被上游覆盖的本地诊断补丁；12 个 Mesa 补丁含既有提交背压修复，精确应用和逆向还原均通过。
+
+Run 91 的 20.1 ms 是 offer 到完成交接的整段耗时。当前代码仍每帧输出两次进度标记、每五帧逐字符输出 PF 状态，这些输出会调用 IOService 通道。候选将稳定运行期间的输出放到 `SHENG_DIAG` 开关下，保留首帧、首个失败和退出记录。它的性能影响尚未实测。
+
+`FR us` 显示最近一次成功呈现的各段微秒数：`A` 为内核 offer 到交付（含映射），`S` 为先前在途工作的等待，`E` 为导入和命令编码，`Q` 为 commit 调用，`W` 为完成等待，`G` 为 Metal 运行时提供的 GPU 时间戳差。没有时间戳时 `G=?`；MoltenVK 等主机驱动可能使用主机时钟推算，不能据此证明 A830 shader 耗时。各段快照近似读取，不保证状态行采样时来自同一帧。`VSYNC SW=实测/请求Hz late=累计次数` 记录软件通知，不代表面板 TE/vblank。
+
+完成消息可选附带计时数据；旧内核返回长度不支持时只探测一次并退回原格式。内核先校验长度、保留位、进程和序号；失败帧不覆盖成功帧计时。没有新增逐帧内核调用。保留 525 MHz 原厂 OPP、120 Hz 软件请求和 SYSMEM 颜色修复。主机 SMMU/GMU、所有权/兼容协议、计时字段、状态行边界、控制台像素保留、60/120 Hz 定时器及提交背压回归通过；真实 Metal host 路径和生产编译将在云端验证。新镜像实测后再判断耗时集中于 A/S/E/Q/W/G 哪一段。

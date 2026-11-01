@@ -10,6 +10,7 @@ DRIVERS = ROOT.parent / 'UniXNU-Pagani-Drivers/drivers'
 presenter = (DRIVERS / 'NativeMobileDisplay/NativeGOPPresenter.cpp').read_text()
 fields = presenter.split('    IOMemoryMap *mapping=nullptr;', 1)[1].split('public:', 1)[0]
 methods = presenter.split('bool NativeGOPPresenter::offer(', 1)[1].split('extern "C" void native_gop_presenter_set_source', 1)[0]
+handoff = 'IOReturn NativeGOPPresenter::handoffCall(' + presenter.split('IOReturn NativeGOPPresenter::handoffCall(', 1)[1].split('IOMemoryDescriptor *NativeGOPPresenter::handoffMemory()', 1)[0]
 board = (DRIVERS / 'Stage7Probe/Stage7Probe.cpp').read_text()
 startup = board.split('static void startGpuPresenter(', 1)[1].split('static bool console(', 1)[0]
 source = r'''
@@ -62,17 +63,21 @@ struct IOMemoryDescriptor {
 #define OSSafeReleaseNULL(p) do {if(p)(p)->release();p=nullptr;}while(0)
 static uint64_t native_gop_gpu_offers,native_gop_gpu_completions,native_gop_gpu_failures,native_gop_gpu_abandoned;
 static uint64_t native_gop_gpu_last_ns,native_gop_gpu_maps,native_gop_gpu_map_hits;
+static uint32_t native_gop_gpu_timing_us[6]={0,0,0,0,0,UINT32_MAX};
 static uint64_t native_gop_wait_stats[7];
 static void native_legacy_gpu_complete(void *p,int status) {assert(p);++doneCalls;doneStatus=status;}
 class NativeGOPPresenter {
 public:
 ''' + fields + r'''
     bool offer(void *,IOMemoryDescriptor *,uint64_t,uint32_t,uint32_t);
+    static IOReturn handoffCall(uint32_t,task_t,const void *,size_t,void *,size_t);
 };
-bool NativeGOPPresenter::offer(''' + methods + r'''
+static NativeGOPPresenter *gHandoff;
+bool NativeGOPPresenter::offer(''' + methods + handoff + r'''
 static void lifecycle() {
     IOLock lock;
     NativeGOPPresenter p;p.gate=&lock;p.online=true;p.gpuMode=true;
+    gHandoff=&p;
     p.mode={NGP_VERSION,NGP_BGRX8888,64,64,256,16384};
     IOMemoryDescriptor frame,failedFrame;
     task_t first=reinterpret_cast<void *>(1),other=reinterpret_cast<void *>(2);
@@ -87,19 +92,33 @@ static void lifecycle() {
     assert(!p.offer(&p,&frame,UINT64_MAX,64,64));
     assert(p.offer(&p,&frame,256,64,64) && frame.refs==2);
     assert(!p.offer(&p,&frame,256,64,64));
+    ticks+=123000;
     assert(!p.waitSwap(first,1,&swap) && swap.address && swap.reserved && IOMemoryMap::live==1);
     const auto id=swap.reserved;
     assert(p.completeSwap(other,swap.sequence,0)==kIOReturnBadArgument);
     assert(p.completeSwap(first,swap.sequence+1,0)==kIOReturnBadArgument && !doneCalls);
     p.abandonSwap(other);assert(frame.refs==3 && !doneCalls && preserved);
-    ticks+=17000000;
-    assert(!p.completeSwap(first,swap.sequence,0) && doneCalls==1 && !doneStatus);
+    NGPCompleteTimed timing={{swap.sequence,0,0},11,22,33,44,55,0};
+    for(size_t size:{0u,15u,17u,39u,41u})
+        assert(p.handoffCall(NGP_METHOD_COMPLETE_SWAP,first,&timing,size,nullptr,0)==kIOReturnBadArgument && !doneCalls);
+    timing.reserved=1;
+    assert(p.handoffCall(NGP_METHOD_COMPLETE_SWAP,first,&timing,sizeof timing,nullptr,0)==kIOReturnBadArgument);
+    timing.reserved=0;timing.done.reserved=1;
+    assert(p.handoffCall(NGP_METHOD_COMPLETE_SWAP,first,&timing,sizeof timing,nullptr,0)==kIOReturnBadArgument);
+    timing.done.reserved=0;
+    assert(p.handoffCall(NGP_METHOD_COMPLETE_SWAP,other,&timing,sizeof timing,nullptr,0)==kIOReturnBadArgument && !doneCalls);
+    ticks+=16877000;
+    assert(!p.handoffCall(NGP_METHOD_COMPLETE_SWAP,first,&timing,sizeof timing,nullptr,0) && doneCalls==1 && !doneStatus);
     assert(frame.refs==2 && IOMemoryMap::live==1 && native_gop_gpu_completions==1);
     assert(native_gop_gpu_last_ns==17000000 && native_gop_gpu_maps==1);
+    const uint32_t expected[]={123,11,22,33,44,55};
+    assert(!memcmp(native_gop_gpu_timing_us,expected,sizeof expected));
     // A cache hit must not attempt another task map, even if mapping new memory now fails.
     mapFails=true;
     assert(p.offer(&p,&frame,256,64,64) && !p.waitSwap(first,1,&swap) && swap.reserved==id);
-    assert(!p.completeSwap(first,swap.sequence,0) && doneCalls==2 && native_gop_gpu_map_hits==1);
+    NGPComplete legacy={swap.sequence,0,0};
+    assert(!p.handoffCall(NGP_METHOD_COMPLETE_SWAP,first,&legacy,sizeof legacy,nullptr,0) && doneCalls==2 && native_gop_gpu_map_hits==1);
+    assert(native_gop_gpu_timing_us[0]==0 && native_gop_gpu_timing_us[1]==0 && native_gop_gpu_timing_us[5]==UINT32_MAX);
     assert(p.offer(&p,&failedFrame,256,64,64));
     assert(p.waitSwap(first,1,&swap)==kIOReturnNoMemory && doneCalls==3 && doneStatus==kIOReturnAborted);
     assert(!p.gpuClient && !taskRefs && frame.refs==1 && failedFrame.refs==1 && !preserved && !IOMemoryMap::live);

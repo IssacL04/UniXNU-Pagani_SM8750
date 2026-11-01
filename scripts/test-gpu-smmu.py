@@ -97,11 +97,15 @@ static int gmu_read(void *,uint32_t reg,uint32_t *v) {
 }
 static unsigned native_adreno_wc_enabled;
 static unsigned long long native_gop_gpu_completions,native_gop_gpu_failures,native_gop_gpu_maps,native_gop_gpu_map_hits;
+static uint32_t native_gop_gpu_timing_us[6]={100,200,300,400,500,UINT32_MAX};
+static uint64_t native_gop_vsync[3]={120,0,0},now_us=1;
+static uint64_t ring_now(void *) {return now_us;}
+static bool published;
 static const char *current_stage="GPU SMMU";
 static int startup_result;
 static void stage(const char *name) {current_stage=name;}
-extern "C" bool native_adreno_diagnostics(NativeAdrenoDiagnostics *) {return false;}
-static void *native_adreno_published_service() {return nullptr;}
+extern "C" bool native_adreno_diagnostics(NativeAdrenoDiagnostics *d) {*d={};return published;}
+static void *native_adreno_published_service() {return published?&g:nullptr;}
 ''' + prepare + status + r'''
 static void reset() {
     g={};regs.fill(0);regs[0x24/4]=0x40000008;regs[0x20/4]=0x48001e08;regs[0]=0x406;
@@ -172,6 +176,15 @@ int main() {
     assert(pagani_gpu_status(rows)==1 && strstr(rows[4],"busy=?") && activity_reads==3);
     g.gmu.poisoned=1;
     assert(pagani_gpu_status(rows)==1 && !rows[4][0] && activity_reads==3);
+    published=true;
+    assert(pagani_gpu_status(rows)==1 && !strcmp(rows[5],"FR us A=100 S=200 E=300 Q=400 W=500 G=?"));
+    assert(strstr(rows[6],"SW=0.0/120Hz"));
+    now_us+=1000000;native_gop_vsync[1]=120;native_gop_vsync[2]=3;
+    assert(pagani_gpu_status(rows)==1 && !strcmp(rows[6],"VSYNC SW=120.0/120Hz late=3"));
+    for(auto &v:native_gop_gpu_timing_us)v=UINT32_MAX-1;
+    assert(pagani_gpu_status(rows)==1 && strstr(rows[5],"G=9999999"));
+    for(auto &row:rows)assert(memchr(row,0,sizeof row));
+    assert(strlen(rows[5])<PAGANI_STATUS_BYTES-1);
     puts("PASS: SMMU selection/failure paths, no startup diagnostic MMIO, guarded Gen8 activity and requested clock labels");
 }
 '''

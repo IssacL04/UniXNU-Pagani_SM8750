@@ -44,6 +44,8 @@ extern "C" {volatile uint64_t native_adreno_fence_phys=0;}
 // Slot 0 stays zero: fixed OPP policy; slot 1 records the acknowledged HFI level.
 extern "C" {volatile uint32_t native_gpu_dcvs[15];}
 extern "C" volatile uint64_t native_gop_gpu_completions,native_gop_gpu_failures,native_gop_gpu_maps,native_gop_gpu_map_hits;
+extern "C" volatile uint32_t native_gop_gpu_timing_us[6];
+extern "C" volatile uint64_t native_gop_vsync[3];
 extern "C" int boot_log_export_put(uint32_t,uint32_t,uint32_t,const void *,uint32_t) {return -1;}
 
 namespace {
@@ -375,7 +377,7 @@ extern "C" int pagani_gpu_status(char lines[PAGANI_GPU_ROWS][PAGANI_STATUS_BYTES
     const int rc=__atomic_load_n(&startup_result,__ATOMIC_ACQUIRE);
     snprintf(lines[0],PAGANI_STATUS_BYTES,"%s rc=%08x",name,
         uint32_t(rc));
-    lines[4][0]=0;
+    for(unsigned i=4;i<PAGANI_GPU_ROWS;++i)lines[i][0]=0;
     if(!rc && g.gmu.gpu_oob_held && !g.gmu.poisoned) {
         uint32_t busy;
         // Gen8 GMUAO bit 23 is GPUBUSYIGNAHB; SP_STATUS has no verified active-core decoding.
@@ -406,5 +408,23 @@ extern "C" int pagani_gpu_status(char lines[PAGANI_GPU_ROWS][PAGANI_STATUS_BYTES
         (unsigned long long)__atomic_load_n(&native_gop_gpu_completions,__ATOMIC_RELAXED),
         (unsigned long long)__atomic_load_n(&native_gop_gpu_failures,__ATOMIC_RELAXED));
     snprintf(lines[3],PAGANI_STATUS_BYTES,"API n=%u m=%u err=%08x E=%u/%08x",d.calls,d.last_method,d.last_status,d.last_error_method,d.last_error);
+    uint32_t timing[6];
+    for(unsigned i=0;i<6;++i) {
+        const uint32_t us=__atomic_load_n(&native_gop_gpu_timing_us[i],__ATOMIC_RELAXED);
+        timing[i]=us>9999999?9999999:us;
+    }
+    char gpu_time[12];
+    if(__atomic_load_n(&native_gop_gpu_timing_us[5],__ATOMIC_RELAXED)==UINT32_MAX)snprintf(gpu_time,sizeof gpu_time,"?");
+    else snprintf(gpu_time,sizeof gpu_time,"%u",timing[5]);
+    snprintf(lines[5],PAGANI_STATUS_BYTES,"FR us A=%u S=%u E=%u Q=%u W=%u G=%s",
+        timing[0],timing[1],timing[2],timing[3],timing[4],gpu_time);
+    static uint64_t last_us=0,last_sent=0;
+    static unsigned fps10=0;
+    const uint64_t us=ring_now(nullptr),sent=__atomic_load_n(&native_gop_vsync[1],__ATOMIC_RELAXED);
+    if(!last_us) {last_us=us;last_sent=sent;}
+    if(us-last_us>=1000000) {fps10=unsigned((sent-last_sent)*10000000/(us-last_us));last_us=us;last_sent=sent;}
+    snprintf(lines[6],PAGANI_STATUS_BYTES,"VSYNC SW=%u.%u/%lluHz late=%llu",fps10/10,fps10%10,
+        (unsigned long long)__atomic_load_n(&native_gop_vsync[0],__ATOMIC_RELAXED),
+        (unsigned long long)__atomic_load_n(&native_gop_vsync[2],__ATOMIC_RELAXED));
     return 1;
 }
