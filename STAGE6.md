@@ -1449,3 +1449,9 @@ main 工作流第 1 次构建（41312075987）在主机 user-client 测试链接
 面板控制边界再次核对：`UEFI-Pagani_SM8750/Platforms/OnePlus/oneplus13tPkg/oneplus13t.dsc` 设置 `USE_CUSTOM_DISPLAY_DRIVER=0`，选择 `SimpleFbDxe`。该驱动只公布一个 framebuffer 模式，`FrameBufferSetMode` 直接返回成功，没有切换 DSI 时序。`NativeLegacyDisplay::getRefreshAttributes` 与定时器使用 `sheng-vsync` 生成软件刷新信息；`PaganiPanel` 目前实现亮度和电源控制，未实现动态刷新切换。因而当前 120 Hz 请求不能证明物理面板已切到 120 Hz，实际频率仍需 DSI/TE 读数。Run 91 单帧 20.1 ms 交接也超过 120 FPS 的 8.33 ms 预算；先用新分段计时定位呈现耗时，再评估本机面板切换方案。
 
 main 第 2 次构建（41312611105）通过全部主机前置回归、完整内核和预链接、iOS Turnip、Metal bridge、插件/daemon 编译签名及 owner trust 生成。Data 安装因设备脚本仍传递上游已删除的 `--clients` 参数而停止，真实 Metal host 回归尚未运行。已按当前 `add-gpu-plugin-data.py` 接口移除过时参数；插件本身已使用上游客户端发布策略，不再读取旧 clients 文件。后续复用本次匹配的内核和基础 Data，重新构建/安装用户态并执行 host 回归。
+
+[main 第 3 次构建](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/41316345393) 于 22:28:12 至 23:02:04（Asia/Shanghai）成功完成。源码提交为 `d7dbaa020d64f730737e7b78ee61bec81aef2cc5`；生产内核源码与第 2 次构建相同，复用其内核和基础 Data，重新完成 iOS Turnip/Metal/plugin、签名、owner trust 和 Data 安装。真实 macOS frontend/Rust 回归通过堆复用与旧行为对照、回调 QoS、诊断开关、BGRA/线性及编码半浮点逐像素比较、日志区和行尾留白保留。`scanout_host.mm` 同时通过计时重置、40 字节完成消息、旧内核 16 字节回退只探测一次、真实错误保留和稳定帧标记关闭断言；编译保留断言并使用本轮 `NativeMobileDisplay` 头文件。日志位于 `out/oneplus13t/actions/metal-main-3/logs/`。
+
+本地镜像为 `out/oneplus13t/boot/metal-main-3/boot.img`，100409344 字节，SHA-256 `292ea3ca0fdab1d3c71e6e5fd39e5fce22130afcc27fa17d9bd23c5fd1202cbd`。内核 SHA-256 `e286ea49dfd3b97fa1d84abd2f788af3ce04ba70db2de9f3afbd7ffe1a3572a5` 与第 2 次构建一致，配对 Data UUID 为 `6FC4EA70-B24F-44E4-8394-ABDAB0CDC877`。实际内核包含强 GPU/计时/VSYNC 符号和新格式字符串；525000001 的 OPP 比较常量、original/owner trust、已测试 GFX UEFI、Android v4 与 FAT 内 kernel/Data/trust 和启动参数回读均通过。保留 `sheng-vsync=120`、`sheng-gpu-sample=0`、`sheng-tu-debug=sysmem,nocb`，未开启 `sheng-diag=1`。
+
+目前新镜像尚未在手机运行。下一次授权临时启动后，在重复滑动和开关同一应用约 10 秒的场景记录 `DISP`、`FR us`、`VSYNC SW` 与 `CMD`，对照 Run 91 的约 40 FPS / 20.1 ms。当前证据还不能说明已达到 120 FPS；物理刷新率、GPU 实际频率和持续热稳定性仍待测量。
