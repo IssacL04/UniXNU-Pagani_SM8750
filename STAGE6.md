@@ -1460,3 +1460,14 @@ main 第 2 次构建（41312611105）通过全部主机前置回归、完整内�
 ## Main Metal run 3 临时启动（2026-11-01 23:26，Asia/Shanghai）
 
 用户确认手机回到 Windows bootloader fastboot，并要求现在测试。重新核对镜像为 100409344 字节，SHA-256 `292ea3ca0fdab1d3c71e6e5fd39e5fce22130afcc27fa17d9bd23c5fd1202cbd`；目标为 `3B15BB01BAT00000`、product `sun`、`is-userspace=no`。Windows `fastboot boot` 的 Sending 2.293 秒、Booting 0.337 秒均返回 OKAY，总计 3.026 秒，未刷写分区。日志为 `out/oneplus13t/boot/metal-main-3/fastboot-boot-20261101-232638.log`。目前只确认 bootloader 接受临时启动；已请求桌面/颜色/诊断文字结果，以及约 10 秒重复操作期间的 `DISP`、`FR us`、`VSYNC SW` 和 `CMD`。新镜像的启动和帧率尚待用户观察。
+
+
+## 当前进度汇总与暂停修复（2026-11-01）
+
+用户确认 main Metal run 3 已进入桌面，颜色和底部诊断文字正常；相较 Run 91 主观感觉稍微更流畅。用户报告 VSYNC 读数均为 0，未提供整行原始文字、`FR us`、`DISP`、`CMD` 的本轮数值或量化帧率。这里保留原始观察，不把零读数解释为面板没有刷新，也不把主观改善换算为 FPS。
+
+当前已完成上游 main/Adreno 整合、A830 Gen8 兼容、稳定帧日志开销削减、分段计时及软件 VSYNC 计数，以及完整生产构建、真实 Metal 主机回归、镜像回读和一次授权临时启动。当前镜像仍为 `metal-main-3/boot.img`，SHA-256 `292ea3ca0fdab1d3c71e6e5fd39e5fce22130afcc27fa17d9bd23c5fd1202cbd`。上一轮 Run 91 的约 40 FPS / 20.1 ms 是已有量化基线；本轮提升幅度尚未量化。
+
+尚未解决或验证的事项包括：VSYNC 零读数的原因、帧耗时主要集中在哪一段、持续 120 FPS、物理面板刷新切换、GPU 实际频率/活跃 SP 数及热稳定性。现有 120 Hz 配置仍是软件通知请求。按用户要求停止后续修复、构建和手机操作，本次只整理记录并保存源码进度。
+
+云端保存沿用设备仓库 main：提交 `d7dbaa0` 的七仓库纯源码快照，逐字节覆盖当前六个关联源码工作区的全部 tracked diff 和新增文件；设备源码及后续记录直接提交。另将 UEFI 的 5 个源码/文档改动保存为 `.ci-inputs/uefi-pagani-progress.patch`，基于 `50b7313f40684aa25481cd109d7f48b9a50663fa`，包含 GFX 映射和可选只读探针；临时 index 的完整应用、生成树比对和逆向检查均通过，没有改写 UEFI 工作区或 index。该补丁不含固件镜像、运行 DTB 或密钥；当前 Metal CI 输入保持原样。各共享仓库的本地改动仍未分别提交，但已在云端源码快照中保存，未向上游组件仓库推送。

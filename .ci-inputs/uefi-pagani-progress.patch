@@ -1,0 +1,128 @@
+# Source: https://github.com/IssacL04/UEFI-Pagani_SM8750.git
+# Base: 50b7313f40684aa25481cd109d7f48b9a50663fa
+# Apply at the base with: git apply uefi-pagani-progress.patch
+
+diff --git a/Platforms/OnePlus/oneplus13tPkg/Applications/GpuProbe/GpuProbe.c b/Platforms/OnePlus/oneplus13tPkg/Applications/GpuProbe/GpuProbe.c
+new file mode 100644
+index 00000000..f612ed82
+--- /dev/null
++++ b/Platforms/OnePlus/oneplus13tPkg/Applications/GpuProbe/GpuProbe.c
+@@ -0,0 +1,53 @@
++// SPDX-License-Identifier: BSD-2-Clause-Patent
++#include <Uefi.h>
++#include <Library/IoLib.h>
++#include <Library/UefiLib.h>
++#include <Library/UefiBootServicesTableLib.h>
++#include <GpuProbe.h>
++
++STATIC int
++ReadRegister (VOID *Context, CONST char *Name, uint32_t Address, uint32_t *Value)
++{
++  (VOID)Context;
++  // shortcut: bus faults cannot be recovered here; add guarded access before unattended probing.
++  // Keep the pending address visible if access raises an external abort.
++  Print (L"%-14a %08x: reading", Name, Address);
++  *Value = MmioRead32 (Address);
++  Print (L"\r%-14a %08x: %08x\r\n", Name, Address, *Value);
++  return 0;
++}
++
++EFI_STATUS EFIAPI
++GpuProbeEntry (EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
++{
++  struct sm8750_gpu_snapshot  Snapshot;
++  enum sm8750_gpu_probe_result Result;
++  EFI_INPUT_KEY              Key;
++  EFI_STATUS                 Status;
++  UINTN                      EventIndex;
++
++  if ((gST->ConOut == NULL) || (gST->ConIn == NULL)) {
++    return EFI_UNSUPPORTED;
++  }
++
++  gST->ConOut->ClearScreen (gST->ConOut);
++  Print (L"OnePlus 13T / A830 preboot probe v1\r\n");
++  Print (L"Read-only GPUCC; conditional SMMU IDs. No GPU startup.\r\n\r\n");
++  Result = sm8750_gpu_probe (ReadRegister, NULL, &Snapshot);
++  Print (L"\r\nResult=%u CC=%u SMMU=%u\r\n", Result, Snapshot.cc_count, Snapshot.smmu_count);
++  if (Result == GPU_PROBE_SMMU_SKIPPED) {
++    Print (L"SMMU skipped: CX power/reset or clock prerequisites absent.\r\n");
++  } else if (Result == GPU_PROBE_OK) {
++    Print (L"SMMU registers captured; GPU execution remains untested.\r\n");
++  } else {
++    Print (L"Probe stopped: invalid ID or failed register access.\r\n");
++  }
++  Print (L"Photograph this screen. Press a volume key to return.\r\n");
++  // Drain the selection key before waiting for a new physical key press.
++  while (!EFI_ERROR (gST->ConIn->ReadKeyStroke (gST->ConIn, &Key))) { }
++  do {
++    Status = gBS->WaitForEvent (1, &gST->ConIn->WaitForKey, &EventIndex);
++    if (EFI_ERROR (Status)) { return Status; }
++  } while (EFI_ERROR (gST->ConIn->ReadKeyStroke (gST->ConIn, &Key)));
++  return EFI_SUCCESS;
++}
+diff --git a/Platforms/OnePlus/oneplus13tPkg/Applications/GpuProbe/GpuProbe.inf b/Platforms/OnePlus/oneplus13tPkg/Applications/GpuProbe/GpuProbe.inf
+new file mode 100644
+index 00000000..9d1a961c
+--- /dev/null
++++ b/Platforms/OnePlus/oneplus13tPkg/Applications/GpuProbe/GpuProbe.inf
+@@ -0,0 +1,20 @@
++[Defines]
++  INF_VERSION = 0x0001001B
++  BASE_NAME = OnePlus13TGpuProbe
++  FILE_GUID = 0B083000-1E24-4750-9A11-13A830875000
++  MODULE_TYPE = UEFI_APPLICATION
++  VERSION_STRING = 0.1
++  ENTRY_POINT = GpuProbeEntry
++
++[Sources]
++  GpuProbe.c
++
++[Packages]
++  MdePkg/MdePkg.dec
++  Sm8750Platform/Sm8750Platform.dec
++
++[LibraryClasses]
++  IoLib
++  UefiLib
++  UefiApplicationEntryPoint
++  UefiBootServicesTableLib
+diff --git a/Platforms/OnePlus/oneplus13tPkg/Library/MemoryMapLib/MemoryMapLib.c b/Platforms/OnePlus/oneplus13tPkg/Library/MemoryMapLib/MemoryMapLib.c
+index c3f6eeb9..daae9abe 100644
+--- a/Platforms/OnePlus/oneplus13tPkg/Library/MemoryMapLib/MemoryMapLib.c
++++ b/Platforms/OnePlus/oneplus13tPkg/Library/MemoryMapLib/MemoryMapLib.c
+@@ -43,6 +43,8 @@ gMemoryDescriptor[] = {
+   {"IMEM_Cookie_Base",   0x146AA000, 0x00016000, AddDev, MMAP_IO, INITIALIZED, Conv,   NS_DEVICE},
+ 
+   // Register Regions
++  // Match DAL/HWIO's whole GFX aperture; partial HOBs block its MMIO registration.
++  {"GFX",                0x03D00000, 0x00100000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE},
+   {"IPC_ROUTER_TOP",     0x00400000, 0x00100000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE},
+   {"SECURITY_CONTROL",   0x00780000, 0x00007000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE},
+   {"QUP",                0x00800000, 0x00300000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE},
+diff --git a/Platforms/OnePlus/oneplus13tPkg/oneplus13t.dsc b/Platforms/OnePlus/oneplus13tPkg/oneplus13t.dsc
+index b9cc0fe4..f659edd9 100644
+--- a/Platforms/OnePlus/oneplus13tPkg/oneplus13t.dsc
++++ b/Platforms/OnePlus/oneplus13tPkg/oneplus13t.dsc
+@@ -95,6 +95,8 @@
+   ConfigurationMapLib|paganiPkg/Library/ConfigurationMapLib/ConfigurationMapLib.inf
+ 
+ [Components]
++  # Optional payload application, invoked only through its diagnostic menu entry.
++  oneplus13tPkg/Applications/GpuProbe/GpuProbe.inf
+   #
+   # ACPI Tables
+   #
+diff --git a/README.md b/README.md
+index ca6cbec7..1f655785 100644
+--- a/README.md
++++ b/README.md
+@@ -6,4 +6,8 @@ Build through the maintained UniXNU fork with the sibling `UniXNU-Pagani_SM8750`
+ 
+ The prior build reached the UniXNU menu and booted build 39 into the iPadOS UI. The new shared initrd driver and migrated build must be retested on hardware. Memory reservations, framebuffer stride, and embedded payload addresses remain device policy. No hardware boot is part of repository migration.
+ 
++`oneplus13tPkg/Applications/GpuProbe` builds the optional `OnePlus13TGpuProbe.efi` application. It uses the selected `Sm8750Platform` kit through `{tree}/kits` in `PACKAGES_PATH`; it is not dispatched as a DXE driver. The board memory map exposes one complete Device GFX aperture at `0x03D00000/0x100000`, including GPUCC, CPR and GPU SMMU. A dedicated payload menu entry runs the read-only snapshot and holds its result for a photograph until a physical key returns to the menu. See the [device test procedure](https://github.com/IssacL04/UniXNU-Pagani_SM8750#gpu-preboot-probe). GPUCC/SMMU accessibility is not yet device-verified; an external abort or a stalled bus can stop the probe at the last printed address.
++
+ Original project credits and licenses remain with Mu-Silicium and the source packages. Upstream: [UniXNU/uefi-sheng](https://github.com/UniXNU/uefi-sheng).
++
++The 2026-10-30 Run 68 boot initially stopped in `CPRDxe`; adding CPR pages exposed a later `ClockDxe` access to offset `0x5080` with a zero GPUCC base. DAL/HWIO registers the entire 1 MiB GFX region, and partial GPUCC/CPR/SMMU resource HOBs conflicted with that registration. The board now supplies that complete region. The host regression and firmware/container checks pass; the user confirmed UEFI completion and XNU handoff after a temporary boot. XNU then stopped while copying SMEM for GPU board inputs. No partition was flashed.
