@@ -1455,3 +1455,8 @@ main 第 2 次构建（41312611105）通过全部主机前置回归、完整内�
 本地镜像为 `out/oneplus13t/boot/metal-main-3/boot.img`，100409344 字节，SHA-256 `292ea3ca0fdab1d3c71e6e5fd39e5fce22130afcc27fa17d9bd23c5fd1202cbd`。内核 SHA-256 `e286ea49dfd3b97fa1d84abd2f788af3ce04ba70db2de9f3afbd7ffe1a3572a5` 与第 2 次构建一致，配对 Data UUID 为 `6FC4EA70-B24F-44E4-8394-ABDAB0CDC877`。实际内核包含强 GPU/计时/VSYNC 符号和新格式字符串；525000001 的 OPP 比较常量、original/owner trust、已测试 GFX UEFI、Android v4 与 FAT 内 kernel/Data/trust 和启动参数回读均通过。保留 `sheng-vsync=120`、`sheng-gpu-sample=0`、`sheng-tu-debug=sysmem,nocb`，未开启 `sheng-diag=1`。
 
 目前新镜像尚未在手机运行。下一次授权临时启动后，在重复滑动和开关同一应用约 10 秒的场景记录 `DISP`、`FR us`、`VSYNC SW` 与 `CMD`，对照 Run 91 的约 40 FPS / 20.1 ms。当前证据还不能说明已达到 120 FPS；物理刷新率、GPU 实际频率和持续热稳定性仍待测量。
+
+
+## Main Metal run 3 临时启动（2026-11-01 23:26，Asia/Shanghai）
+
+用户确认手机回到 Windows bootloader fastboot，并要求现在测试。重新核对镜像为 100409344 字节，SHA-256 `292ea3ca0fdab1d3c71e6e5fd39e5fce22130afcc27fa17d9bd23c5fd1202cbd`；目标为 `3B15BB01BAT00000`、product `sun`、`is-userspace=no`。Windows `fastboot boot` 的 Sending 2.293 秒、Booting 0.337 秒均返回 OKAY，总计 3.026 秒，未刷写分区。日志为 `out/oneplus13t/boot/metal-main-3/fastboot-boot-20261101-232638.log`。目前只确认 bootloader 接受临时启动；已请求桌面/颜色/诊断文字结果，以及约 10 秒重复操作期间的 `DISP`、`FR us`、`VSYNC SW` 和 `CMD`。新镜像的启动和帧率尚待用户观察。
