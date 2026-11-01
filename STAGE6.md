@@ -1440,8 +1440,12 @@ Metal 候选将软件 vsync 请求设为 120 Hz，保留 CPU 基线的 60 Hz；�
 
 Run 91 的 20.1 ms 是 offer 到完成交接的整段耗时。当前代码仍每帧输出两次进度标记、每五帧逐字符输出 PF 状态，这些输出会调用 IOService 通道。候选将稳定运行期间的输出放到 `SHENG_DIAG` 开关下，保留首帧、首个失败和退出记录。它的性能影响尚未实测。
 
-`FR us` 显示最近一次成功呈现的各段微秒数：`A` 为内核 offer 到交付（含映射），`S` 为先前在途工作的等待，`E` 为导入和命令编码，`Q` 为 commit 调用，`W` 为完成等待，`G` 为 Metal 运行时提供的 GPU 时间戳差。没有时间戳时 `G=?`；MoltenVK 等主机驱动可能使用主机时钟推算，不能据此证明 A830 shader 耗时。各段快照近似读取，不保证状态行采样时来自同一帧。`VSYNC SW=实测/请求Hz late=累计次数` 记录软件通知，不代表面板 TE/vblank。
+`FR us` 显示最近一次成功呈现的各段微秒数：`A` 为内核 offer 到交付（含映射），`S` 为先前在途工作的等待，`E` 为导入和命令编码，`Q` 为 commit 调用，`W` 为完成等待，`G` 为 Metal 运行时提供的 GPU 时间戳差。`G` 与提交/等待区间可能重叠，不能与前五项相加。没有时间戳时 `G=?`；MoltenVK 等主机驱动可能使用主机时钟推算，不能据此证明 A830 shader 耗时。各段快照近似读取，不保证状态行采样时来自同一帧。`VSYNC SW=实测/请求Hz late=累计次数` 记录软件通知，不代表面板 TE/vblank。
 
 完成消息可选附带计时数据；旧内核返回长度不支持时只探测一次并退回原格式。内核先校验长度、保留位、进程和序号；失败帧不覆盖成功帧计时。没有新增逐帧内核调用。保留 525 MHz 原厂 OPP、120 Hz 软件请求和 SYSMEM 颜色修复。主机 SMMU/GMU、所有权/兼容协议、计时字段、状态行边界、控制台像素保留、60/120 Hz 定时器及提交背压回归通过；真实 Metal host 路径和生产编译将在云端验证。新镜像实测后再判断耗时集中于 A/S/E/Q/W/G 哪一段。
 
 main 工作流第 1 次构建（41312075987）在主机 user-client 测试链接时发现缺少 `native_adreno_now_us`。生产 `NativeAdrenoPublish.cpp` 已实现该函数；Linux 的弱符号规则掩盖了测试替身缺项。给现有测试接入同一个模拟时钟后，完整 Clang/ASan/UBSan A830 回归通过。此修正只影响测试，将重新执行完整构建。
+
+面板控制边界再次核对：`UEFI-Pagani_SM8750/Platforms/OnePlus/oneplus13tPkg/oneplus13t.dsc` 设置 `USE_CUSTOM_DISPLAY_DRIVER=0`，选择 `SimpleFbDxe`。该驱动只公布一个 framebuffer 模式，`FrameBufferSetMode` 直接返回成功，没有切换 DSI 时序。`NativeLegacyDisplay::getRefreshAttributes` 与定时器使用 `sheng-vsync` 生成软件刷新信息；`PaganiPanel` 目前实现亮度和电源控制，未实现动态刷新切换。因而当前 120 Hz 请求不能证明物理面板已切到 120 Hz，实际频率仍需 DSI/TE 读数。Run 91 单帧 20.1 ms 交接也超过 120 FPS 的 8.33 ms 预算；先用新分段计时定位呈现耗时，再评估本机面板切换方案。
+
+main 第 2 次构建（41312611105）通过全部主机前置回归、完整内核和预链接、iOS Turnip、Metal bridge、插件/daemon 编译签名及 owner trust 生成。Data 安装因设备脚本仍传递上游已删除的 `--clients` 参数而停止，真实 Metal host 回归尚未运行。已按当前 `add-gpu-plugin-data.py` 接口移除过时参数；插件本身已使用上游客户端发布策略，不再读取旧 clients 文件。后续复用本次匹配的内核和基础 Data，重新构建/安装用户态并执行 host 回归。

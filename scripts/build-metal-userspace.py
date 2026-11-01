@@ -71,8 +71,8 @@ def build(tree, data, trust, output):
     output.mkdir(parents=True)
     env = dict(os.environ, PYTHONPATH=os.pathsep.join(
         [str(tree / 'drivers/PaganiDarwinBoot/Test'), os.environ.get('PYTHONPATH', '')]))
-    run(sys.executable, scripts / 'add-gpu-plugin-data.py', '--publish', '--clients',
-        'iconservicesagent,WidgetRenderer_Default,PosterBoard', data, output / 'data.dbrdisk', env=env)
+    run(sys.executable, scripts / 'add-gpu-plugin-data.py', '--publish',
+        data, output / 'data.dbrdisk', env=env)
     shutil.copyfile(tree / 'build/adreno-metal-plugin/owner-trust.bundle', output / 'owner-trust.bundle')
     print('PASS: A830 plugin built and staged; rendering and presentation require device verification')
 
