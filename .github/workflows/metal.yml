@@ -110,6 +110,10 @@ jobs:
           python3 ../UniXNU-Pagani_SM8750/scripts/test-gpu-firmware.py
           python3 ../UniXNU-Pagani_SM8750/scripts/check-gmu.py
           python3 scripts/check-adreno-a830.py
+          python3 scripts/check-metal-shared-cache.py
+          python3 ../UniXNU-Pagani_SM8750/scripts/check-gpu-trace.py
+          python3 ../UniXNU-Pagani_SM8750/scripts/test-gpu-trace-export.py
+          python3 ../UniXNU-Pagani_SM8750/scripts/test-gpu-presenter.py
           python3 scripts/check-turnip-submit-backpressure.py --output "$UNIXNU_OUTDIR/logs/submit-pressure"
           python3 ../UniXNU-Pagani_SM8750/scripts/test-stage7.py --tree "$UNIXNU_TREE"
           python3 ../UniXNU-Pagani_SM8750/scripts/test-peripherals.py --tree "$UNIXNU_TREE"
@@ -195,7 +199,7 @@ jobs:
           checkout(tree / '.cache/gpu-reference/metal2vulkan', pin['repository'], pin['commit'])
           PY
           rustup toolchain install 1.98.0 --profile minimal
-      - name: Verify Metal heap reuse and scanout on the build host
+      - name: Verify Metal interfaces, compiler, heap reuse and scanout on the build host
         working-directory: source/UniXNU
         run: |
           cd "$UNIXNU_TREE"

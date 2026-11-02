@@ -1487,3 +1487,13 @@ XnuPrelink 的 62 项测试、运行时输入 4 项、参考内核缓存 4 项�
 用户要求将所有本地仓库更改推送到云端，再只读研究 UniXNU 组织 GPU 更新，暂不修改代码。已将现有源码分别提交并推送：主仓 `7422fe1`、SM8750 common `669bcee`、Pagani drivers `d7cbac3`、UEFI `1d3ab3bc`；三个新建个人 fork 的 `a830-sm8750` 分支分别为 Adreno740 `1baf6d3`、AdrenoMetal `403e69e`、AdrenoFirmware `505d0a1`。UEFI 保持私有，没有向 UniXNU 上游推送或创建 PR。主仓更新三个 GPU 子模块的个人 fork 地址及提交引用，设备更新 SoC feed 和 Pagani 子模块引用；这些是发布已有源码所需的元数据。
 
 提交前后的 118 个原有源码/文档文件逐字节一致，随后仅补充发布记录。没有新增运行逻辑、触发新内核构建或操作手机。DarwinBoot 中的 Python `__pycache__` 属于本机测试缓存，不上传；构建产物、固件二进制和本地私有配置保持原处理方式。本次直接发布不替换 main-3 的冻结输入及实机记录，不能据此扩大之前的硬件验证结论。
+
+## 2026-11-03 A830 iPadOS 17 GPU feature candidate
+
+Adapted the selected upstream shared-cache, Metal interface/compiler and frame-diagnostic changes to the existing 21H461 profile. Same-UID writable shader caches share immutable version-keyed entries; sandbox denial keeps the existing per-container path. Compiler patches preserve specialized link names, share large indexed constant tables and expose allocation sizes. Frontend additions retain heap alias ownership, requested multisampling and the A830 six-SP configuration.
+
+Frame records join Metal command IDs to runtime/Vulkan submissions, kernel fences and scanout request IDs. Completed IOSurface samples preserve format/color metadata, and the actual NativeMobileDisplay presenter samples the completed GPU scanout mapping without changing the overlay. Per producer/stage, at most three samples are retained, at least 30 seconds apart. Stage-3 BGRX samples are at most 64×64; they do not establish hardware latch timing.
+
+Diagnostics remain disabled by default. With `sheng-gpu-trace=1 sheng-gpu-pixels=1`, the board exports once to `/private/var/root/gpu.trace.bin` and `gpu.pixels.bin` after 180 seconds; `pagani-gpu-export` selects 1–3600 seconds or 0 to disable export. Files use exclusive creation and mode 0600; write/close failures are logged. RAM Data is volatile, so collect files before reboot and decode with `scripts/decode-gpu-trace.py`. NativeUfs stays read-only.
+
+Local checks passed: existing A830 ring/CP/IRQ/GMU/memory/context/user-client suite; shared-cache directory fallback and concurrent import; bounded trace store/ABI/decoder; presenter ownership, failed-completion exclusion, raw sampling, bounds and rate limits; RAM Data writer partial/error paths; existing submit-backpressure positive/negative controls. All 26 translator patches and the complete Mesa patch series apply to their pinned revisions. Production kernel/Metal build and macOS interface/compiler/pixel regressions are delegated to the full `metal.yml` run; device behavior and speedup remain untested. No phone operation is part of this change.

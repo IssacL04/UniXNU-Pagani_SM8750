@@ -45,7 +45,11 @@ def build(tree, kernelcache):
                                        'Sm8750GpuZap.c', 'Sm8750SocInfo.c', 'Sm8750GpuSmmu.c')]
     sources += [firmware / name for name in ('AdrenoFirmware.c', 'AdrenoHfi.c', 'AdrenoHfiStartup.c', 'AdrenoHfiVotes.c')]
     sources += sorted(smmu.glob('ArmSmmu4K*.c'))
-    sources += [pm4 / 'AdrenoPM4.c', board / 'PaganiGpuVotes.c', board / 'PaganiGpu.cpp']
+    sources += [pm4 / 'AdrenoPM4.c', board / 'PaganiGpuVotes.c', board / 'PaganiGpu.cpp', board / 'PaganiGpuTrace.cpp']
+    source_hash = hashlib.sha256()
+    for path in sorted(set(sources) | set(gpu.glob('*.h')) | set(gpu.glob('*.inc'))):
+        source_hash.update(path.name.encode() + b'\0' + path.read_bytes())
+    build_id = '0x' + source_hash.hexdigest()[:16] + 'ULL'
     includes = [gpu, soc, firmware, pm4, smmu, board, out / 'firmware', tree / '.cache/xnu-work/osfmk',
                 tree / 'drivers/BootProgress']
     with tempfile.TemporaryDirectory(prefix='a830-', dir=out) as directory:
@@ -64,6 +68,7 @@ def build(tree, kernelcache):
                 elif not value.startswith('-W'):
                     command.append(value)
             command += ['-mgeneral-regs-only', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter',
+                        '-DNATIVE_GPU_BUILD_ID=' + build_id,
                         '-Wno-c99-designator', '-Wno-reorder-init-list', '-Wno-deprecated-enum-enum-conversion']
             for include in includes:
                 command += ['-I', str(include)]

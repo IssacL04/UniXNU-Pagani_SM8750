@@ -47,6 +47,7 @@ extern "C" volatile uint64_t native_gop_gpu_completions,native_gop_gpu_failures,
 extern "C" volatile uint32_t native_gop_gpu_timing_us[6];
 extern "C" volatile uint64_t native_gop_vsync[3];
 extern "C" int boot_log_export_put(uint32_t,uint32_t,uint32_t,const void *,uint32_t) {return -1;}
+extern "C" void pagani_gpu_trace_start();
 
 namespace {
 struct Window {
@@ -368,7 +369,7 @@ extern "C" int pagani_gpu_start() {
     g.attempted=true;
     int rc=start();
     if(rc) {boot_progress_display_status(current_stage,uint32_t(rc));IOLog("Pagani GPU stopped at %s: %d\n",current_stage,rc);}
-    else stage("GPU Metal registered",NativeAdrenoChipA830);
+    else {stage("GPU Metal registered",NativeAdrenoChipA830);pagani_gpu_trace_start();}
     __atomic_store_n(&startup_result,rc,__ATOMIC_RELEASE);
     return rc;
 }

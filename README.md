@@ -36,6 +36,8 @@ On build 50, the phone reached the lock screen; short power presses switch the s
 
 The next main candidate integrates current UniXNU/Adreno sources, suppresses steady-frame progress traffic and adds per-stage frame timings plus observed software VSYNC rate. Production build and device measurements are pending; the current device baseline is Run 91 above.
 
+The 2026-11-03 A830 candidate adds same-UID shader-cache reuse, Metal resource/compiler compatibility fixes and opt-in frame/pixel diagnostics for iPadOS 17 (21H461). It preserves the existing 525 MHz, SYSMEM and requested-multisampling policies. For a diagnostic boot, add `sheng-gpu-trace=1 sheng-gpu-pixels=1`; `pagani-gpu-export=180` exports once after GPU startup (seconds, 1–3600; 0 disables export). The kernel creates `/private/var/root/gpu.trace.bin` and `gpu.pixels.bin` with mode 0600 on RAM Data. Retrieve both during the same boot, then run `python3 scripts/decode-gpu-trace.py <directory>`; reboot discards them. Trace collection does not enable UFS writes. Full production build and device validation are recorded in STAGE6.md.
+
 ## Workspace and inputs
 
 Keep `UniXNU/`, `UniXNU-Pagani_SM8750/`, `UniXNU-Pagani-Drivers/`, `UniXNU-sm8750-common/` and `UEFI-Pagani_SM8750/` as sibling checkouts. `upstream.rev` pins the maintained main fork used by CI. Read [AGENTS.md](AGENTS.md) and the [migration guide](https://unixnu.com/porting/migration).

@@ -18,8 +18,26 @@ source = r'''
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
+#include <vector>
 #include <initializer_list>
 #include "NativeGOPWire.h"
+#define NATIVE_GPU_TRACE_OPTIONAL
+#include "NativeGpuTrace.h"
+static void *IOMalloc(size_t n) {return malloc(n);}
+static void IOFree(void *p,size_t) {free(p);}
+static bool traceOn=true;
+static unsigned pixelPieces;
+static NativeGpuPixelHeader lastPixel;
+static std::vector<uint8_t> pixelBytes;
+extern "C" int native_gpu_trace_enabled() {return traceOn;}
+extern "C" void native_gpu_trace_record(uint32_t,uint32_t,const uint64_t *,uint32_t) {}
+extern "C" int native_gpu_pixel_put(const NativeGpuPixelPiece *p,uint32_t pid) {
+    assert(pid==0 && p->header.stage==3 && p->header.flags==1 && p->header.format==80);
+    if(!p->offset)pixelBytes.clear();
+    assert(p->offset==pixelBytes.size());lastPixel=p->header;++pixelPieces;
+    pixelBytes.insert(pixelBytes.end(),p->data,p->data+p->bytes);return 0;
+}
 using IOReturn=int;
 using task_t=void *;
 constexpr task_t TASK_NULL=nullptr;
@@ -46,9 +64,11 @@ struct IOService {};
 struct IOMemoryMap {
     static unsigned live;
     unsigned refs=1;
+    uint32_t pixels[4096]{};
     IOMemoryMap() {++live;}
     void retain() {++refs;}
-    uint64_t getVirtualAddress() {return 0x100000;}
+    uint64_t getVirtualAddress() {return reinterpret_cast<uintptr_t>(pixels);}
+    uint64_t getPhysicalAddress() {return 0x90000000;}
     uint64_t getLength() {return 16384;}
     void release() {assert(live && refs);if(!--refs){--live;delete this;}}
 };
@@ -68,6 +88,7 @@ static uint64_t native_gop_wait_stats[7];
 static void native_legacy_gpu_complete(void *p,int status) {assert(p);++doneCalls;doneStatus=status;}
 class NativeGOPPresenter {
 public:
+    IOMemoryMap *mapping=nullptr;
 ''' + fields + r'''
     bool offer(void *,IOMemoryDescriptor *,uint64_t,uint32_t,uint32_t);
     static IOReturn handoffCall(uint32_t,task_t,const void *,size_t,void *,size_t);
@@ -137,6 +158,26 @@ static void lifecycle() {
     assert(!IOMemoryMap::live && !taskRefs && !preserved && !lock.held);
     for(auto &f:frames)assert(f.refs==1);
     p.abandonSwap(other);assert(!IOMemoryMap::live && !taskRefs);
+    // Sampling follows a successful delivered completion and precedes the next offer.
+    p.mapping=new IOMemoryMap;p.capturePixels=true;traceOn=false;
+    for(unsigned i=0;i<4096;++i)p.mapping->pixels[i]=i+0xff000000;
+    p.captureScanout(1);assert(!pixelPieces && !p.captured);
+    traceOn=true;p.mode.stride=252;p.captureScanout(1);assert(!pixelPieces);
+    p.mode.stride=256;p.mode.height=65;p.captureScanout(1);assert(!pixelPieces);
+    p.mode.height=64;
+    assert(p.waitSwap(first,1,&swap)==kIOReturnTimeout);
+    assert(p.offer(&p,&frame,256,64,64) && !p.waitSwap(first,1,&swap));
+    assert(!pixelPieces && !p.completeSwap(first,swap.sequence,kIOReturnAborted) && !pixelPieces);
+    assert(p.offer(&p,&frame,256,64,64) && !p.waitSwap(first,1,&swap));
+    assert(!p.completeSwap(first,swap.sequence,0) && pixelPieces==16 && p.captured==1);
+    assert(lastPixel.capture==swap.sequence && pixelBytes.size()==16384);
+    assert(!memcmp(pixelBytes.data(),p.mapping->pixels,16384));
+    p.captureScanout(100);assert(pixelPieces==16);
+    ticks+=30000000000ull;p.captureScanout(101);assert(pixelPieces==32);
+    ticks+=30000000000ull;p.captureScanout(102);assert(pixelPieces==48);
+    ticks+=30000000000ull;p.captureScanout(103);assert(pixelPieces==48);
+    p.abandonSwap();p.mapping->release();p.mapping=nullptr;
+    assert(!IOMemoryMap::live && !taskRefs);
     uint32_t spans[4];
     for(NGPOverlay b: {NGPOverlay{4,12},NGPOverlay{0,0},NGPOverlay{0,64},NGPOverlay{65,1},NGPOverlay{63,UINT32_MAX}}) {
         ngp_visible_rows(64,b,spans);
@@ -188,7 +229,7 @@ with tempfile.TemporaryDirectory(prefix='pagani-presenter-') as directory:
         src.write_text(content)
         binary = work / name
         subprocess.run([os.environ.get('CXX', 'c++'), '-std=c++17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
-                        '-Wno-misleading-indentation', '-fsanitize=address,undefined', '-I',
+                        '-Wno-misleading-indentation', '-Wno-address', '-fsanitize=address,undefined', '-I',
                         str(DRIVERS / 'NativeMobileDisplay'), src, '-o', binary], check=True)
         subprocess.run([binary], check=True)
 print('PASS: actual presenter ownership, bounds, completion, map/close fallback and GPU-ready startup gates')
