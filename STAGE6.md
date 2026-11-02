@@ -1504,3 +1504,6 @@ Run 5 产物已下载到 `out/oneplus13t/actions/metal-main-5/`。新内核为 1
 
 
 [Metal run 6](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/41489269223) 已通过 A830 Metal/Turnip 生产构建、签名及 Data 打包；其内核和基础 Data 与 Run 5 逐字节一致。实际 macOS 回归已通过 heap 所有权与复用、旧代码反例、QoS、诊断开关、半浮点与 BGRA scanout 像素检查。新增接口用例在 normal 模式异常结束，stdout/stderr 均为空，当前日志不足以确定原因。主机检查现记录退出码，启用已有崩溃探针，并在信号退出后用 LLDB 获取线程回溯；独立编译器用例提前执行。成功、断言失败和信号退出三条报告路径已用实际脚本片段验证。下一轮只验证这组已完成的产物，不重建生产驱动。
+
+
+[Metal run 7](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/41497593374) 的两项编译器回归均通过；接口进程以 `-11` 退出。LLDB 将崩溃定位到 `AppleParavirtGPUMetalIOGPUFamily`，调用链为 MoltenVK 1.4.2 共享纹理绑定时的 CPU 上传，尚未运行到 viewport 用例。主机接口测试现设置 `MVK_CONFIG_USE_MTLHEAP=0`，改用 MoltenVK 普通资源分配；这个兼容性假设等待下一轮 CI 验证。所有像素断言保留，生产 A830/iPadOS 17 源码与产物不变。
