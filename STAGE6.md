@@ -1501,3 +1501,6 @@ XnuPrelink 的 62 项测试、运行时输入 4 项、参考内核缓存 4 项�
 [Metal run 5](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/41480595247) 使用设备 `9d1b88b` 发布的七仓库源码引用，重新编译完整内核，没有复用旧内核。macOS 基础检查、XNU 编译和预链接已通过。Metal 阶段在 Rust 桥接编译时发现四个 heap alias 导出重复定义；现已删除新增的重复实现和声明，原有四个函数与此前可用版本逐字一致，全部 170 个 C 导出名均唯一。源码修复为 AdrenoMetal `a4aa33c`，主仓引用为 `4b610e1`；Adreno740 `c61a603` 和 Pagani drivers `f501737` 保持不变。
 
 Run 5 产物已下载到 `out/oneplus13t/actions/metal-main-5/`。新内核为 128503808 字节，包含追踪快照、像素快照及板级导出符号；内核、配置和基础 RAM Data 的 UUID 均为 `74E4C2F4-1B15-4EB5-8477-FFC6DB383C3E`，没有部分生成的 Metal Data。修复仅涉及用户态桥接，下一轮复用这个新内核和配套基础 Data，重新构建 Metal/Turnip 并运行完整主机回归。本轮未操作手机，实际兼容性、帧率与缓存收益尚未测量。
+
+
+[Metal run 6](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/41489269223) 已通过 A830 Metal/Turnip 生产构建、签名及 Data 打包；其内核和基础 Data 与 Run 5 逐字节一致。实际 macOS 回归已通过 heap 所有权与复用、旧代码反例、QoS、诊断开关、半浮点与 BGRA scanout 像素检查。新增接口用例在 normal 模式异常结束，stdout/stderr 均为空，当前日志不足以确定原因。主机检查现记录退出码，启用已有崩溃探针，并在信号退出后用 LLDB 获取线程回溯；独立编译器用例提前执行。成功、断言失败和信号退出三条报告路径已用实际脚本片段验证。下一轮只验证这组已完成的产物，不重建生产驱动。
