@@ -1488,12 +1488,16 @@ XnuPrelink 的 62 项测试、运行时输入 4 项、参考内核缓存 4 项�
 
 提交前后的 118 个原有源码/文档文件逐字节一致，随后仅补充发布记录。没有新增运行逻辑、触发新内核构建或操作手机。DarwinBoot 中的 Python `__pycache__` 属于本机测试缓存，不上传；构建产物、固件二进制和本地私有配置保持原处理方式。本次直接发布不替换 main-3 的冻结输入及实机记录，不能据此扩大之前的硬件验证结论。
 
-## 2026-11-03 A830 iPadOS 17 GPU feature candidate
+## A830 iPadOS 17 GPU 三项适配（2026-11-03）
 
-Adapted the selected upstream shared-cache, Metal interface/compiler and frame-diagnostic changes to the existing 21H461 profile. Same-UID writable shader caches share immutable version-keyed entries; sandbox denial keeps the existing per-container path. Compiler patches preserve specialized link names, share large indexed constant tables and expose allocation sizes. Frontend additions retain heap alias ownership, requested multisampling and the A830 six-SP configuration.
+将上游共享着色器缓存、Metal 资源接口与编译器修复、帧诊断适配到现有 A830 / iPadOS 17（21H461）。同 UID 进程可复用带版本标识的不可变缓存；沙箱拒绝共享目录时回退到原有容器目录。编译器保留特化链接名称，共享大型索引常量表；前端补齐资源分配大小等接口，同时保留 heap alias 所有权、调用方请求的多重采样和 A830 六 SP 配置。
 
-Frame records join Metal command IDs to runtime/Vulkan submissions, kernel fences and scanout request IDs. Completed IOSurface samples preserve format/color metadata, and the actual NativeMobileDisplay presenter samples the completed GPU scanout mapping without changing the overlay. Per producer/stage, at most three samples are retained, at least 30 seconds apart. Stage-3 BGRX samples are at most 64×64; they do not establish hardware latch timing.
+帧记录通过明确的 ID 连接 Metal 命令、runtime/Vulkan 提交、内核 fence 和 scanout 请求。完成后的 IOSurface 采样保留格式与颜色元数据；实际 NativeMobileDisplay presenter 从已完成的 GPU scanout 映射采样，保留现有诊断叠层。每个生产者和阶段最多保存三份采样，间隔至少 30 秒；第三阶段 BGRX 网格最多为 64×64，不能据此确认硬件锁存时刻。
 
-Diagnostics remain disabled by default. With `sheng-gpu-trace=1 sheng-gpu-pixels=1`, the board exports once to `/private/var/root/gpu.trace.bin` and `gpu.pixels.bin` after 180 seconds; `pagani-gpu-export` selects 1–3600 seconds or 0 to disable export. Files use exclusive creation and mode 0600; write/close failures are logged. RAM Data is volatile, so collect files before reboot and decode with `scripts/decode-gpu-trace.py`. NativeUfs stays read-only.
+诊断默认关闭。启用 `sheng-gpu-trace=1 sheng-gpu-pixels=1` 后，板级代码在 GPU 启动 180 秒后导出一次 `/private/var/root/gpu.trace.bin` 和 `gpu.pixels.bin`；`pagani-gpu-export` 可设置 1 至 3600 秒，0 关闭导出。文件采用排他创建和 0600 权限，写入或关闭失败会记录日志。RAM Data 随重启丢失，须在同一次启动中取出文件，再运行 `scripts/decode-gpu-trace.py` 解码。NativeUfs 继续只读。
 
-Local checks passed: existing A830 ring/CP/IRQ/GMU/memory/context/user-client suite; shared-cache directory fallback and concurrent import; bounded trace store/ABI/decoder; presenter ownership, failed-completion exclusion, raw sampling, bounds and rate limits; RAM Data writer partial/error paths; existing submit-backpressure positive/negative controls. All 26 translator patches and the complete Mesa patch series apply to their pinned revisions. Production kernel/Metal build and macOS interface/compiler/pixel regressions are delegated to the full `metal.yml` run; device behavior and speedup remain untested. No phone operation is part of this change.
+本地检查已通过：原有 A830 ring、CP、IRQ、GMU、内存、上下文与 user-client 回归；缓存目录回退与并发导入；有界追踪存储、ABI 和解码；presenter 所有权、失败完成排除、原始像素采样、映射边界与限频；RAM Data 部分写入及错误路径；现有提交背压的正反对照。26 个 translator 补丁及完整 Mesa 补丁序列均可应用到固定版本。
+
+[Metal run 5](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/41480595247) 使用设备 `9d1b88b` 发布的七仓库源码引用，重新编译完整内核，没有复用旧内核。macOS 基础检查、XNU 编译和预链接已通过。Metal 阶段在 Rust 桥接编译时发现四个 heap alias 导出重复定义；现已删除新增的重复实现和声明，原有四个函数与此前可用版本逐字一致，全部 170 个 C 导出名均唯一。源码修复为 AdrenoMetal `a4aa33c`，主仓引用为 `4b610e1`；Adreno740 `c61a603` 和 Pagani drivers `f501737` 保持不变。
+
+Run 5 产物已下载到 `out/oneplus13t/actions/metal-main-5/`。新内核为 128503808 字节，包含追踪快照、像素快照及板级导出符号；内核、配置和基础 RAM Data 的 UUID 均为 `74E4C2F4-1B15-4EB5-8477-FFC6DB383C3E`，没有部分生成的 Metal Data。修复仅涉及用户态桥接，下一轮复用这个新内核和配套基础 Data，重新构建 Metal/Turnip 并运行完整主机回归。本轮未操作手机，实际兼容性、帧率与缓存收益尚未测量。
