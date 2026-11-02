@@ -1507,3 +1507,10 @@ Run 5 产物已下载到 `out/oneplus13t/actions/metal-main-5/`。新内核为 1
 
 
 [Metal run 7](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/41497593374) 的两项编译器回归均通过；接口进程以 `-11` 退出。LLDB 将崩溃定位到 `AppleParavirtGPUMetalIOGPUFamily`，调用链为 MoltenVK 1.4.2 共享纹理绑定时的 CPU 上传，尚未运行到 viewport 用例。主机接口测试现设置 `MVK_CONFIG_USE_MTLHEAP=0`，改用 MoltenVK 普通资源分配；这个兼容性假设等待下一轮 CI 验证。所有像素断言保留，生产 A830/iPadOS 17 源码与产物不变。
+
+
+[Metal run 8](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/41502995541) 于 2026-11-03 03:16（Asia/Shanghai）全部成功。A830 基础、共享缓存、有界追踪、RAM Data 导出和完成帧采样检查均通过；真实 macOS 回归通过两项编译器用例、heap 复用与旧代码反例、QoS／诊断开关、半浮点与 BGRA scanout 像素，以及 normal／single 两种接口模式的资源、swizzle、viewport、mip／slice 拷贝、回调和队列复用检查。关闭测试进程的 MoltenVK placement heap 后，共享纹理 CPU 上传不再触发 AppleParavirt 崩溃。相同配置已同步到另一个接口测试入口；其 Python 语法和配置一致性检查通过，未重复执行整个扩展 frontend 套件。
+
+本轮冻结输入为设备提交 `d414fff` 中的纯源码包，包含主仓 `c6fe84d`、Adreno740 `c61a603`、AdrenoMetal `a4aa33c`、Pagani drivers `f501737`。完整 XNU／预链接已在 Run 5 重新构建，生产 Metal／Turnip、签名和 Data 已在 Run 6 完成；Run 8 复用并验证这组配套产物。目标保持 A830 六 SP、iPadOS 17（21H461），诊断默认关闭，调用方多重采样请求保持原样。
+
+云端产物为 `oneplus13t-metal-8`，artifact ID `13171172812`，压缩包 110162524 字节。下载本轮复核副本时，GitHub 存储返回 `503 Egress is over the account limit`；本地已经保存并校验同一组 Run 6 生产产物，位于 `out/oneplus13t/actions/metal-main-6/`。本轮未制作新 boot.img，也未启动或刷写手机。实际缓存收益、系统兼容性和帧率仍待实机验证；诊断快照写入 RAM Data，重启即丢失。
