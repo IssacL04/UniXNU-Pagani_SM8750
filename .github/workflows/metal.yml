@@ -168,6 +168,17 @@ jobs:
             --unixnu "$PWD" --tree "$UNIXNU_TREE" --out "$UNIXNU_TREE/build/a830-host-tests" \
             --firmware ../UniXNU-Pagani_SM8750/.cache/firmware/pkx110-gpu \
             --pins ../UniXNU-Pagani_SM8750/scripts/data/sm8750-gpu-inputs.json
+      - name: Check imported XNU fixes with the built source and compile records
+        if: ${{ inputs.reuse_run_id == '' }}
+        working-directory: source/UniXNU
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+        run: |
+          for patch in app-exec-count bindfs-vget bootstrap-tables checkdirs-kernproc compressor-thrashing shutdown-progress; do
+            python3 "../UniXNU-Pagani_SM8750/scripts/test-$patch-patch.py" --inputs "$UNIXNU_OUTDIR/xnu-inputs.json"
+          done
+          python3 ../UniXNU-Pagani_SM8750/scripts/test-vm-page-limits-patch.py \
+            --inputs "$UNIXNU_OUTDIR/xnu-inputs.json" --tree "$UNIXNU_TREE"
       - name: Download the matching kernel and base Data
         id: reuse
         if: ${{ inputs.reuse_run_id != '' }}
