@@ -1514,3 +1514,18 @@ Run 5 产物已下载到 `out/oneplus13t/actions/metal-main-5/`。新内核为 1
 本轮冻结输入为设备提交 `d414fff` 中的纯源码包，包含主仓 `c6fe84d`、Adreno740 `c61a603`、AdrenoMetal `a4aa33c`、Pagani drivers `f501737`。完整 XNU／预链接已在 Run 5 重新构建，生产 Metal／Turnip、签名和 Data 已在 Run 6 完成；Run 8 复用并验证这组配套产物。目标保持 A830 六 SP、iPadOS 17（21H461），诊断默认关闭，调用方多重采样请求保持原样。
 
 云端产物为 `oneplus13t-metal-8`，artifact ID `13171172812`，压缩包 110162524 字节。下载本轮复核副本时，GitHub 存储返回 `503 Egress is over the account limit`；本地已经保存并校验同一组 Run 6 生产产物，位于 `out/oneplus13t/actions/metal-main-6/`。本轮未制作新 boot.img，也未启动或刷写手机。实际缓存收益、系统兼容性和帧率仍待实机验证；诊断快照写入 RAM Data，重启即丢失。
+
+
+## Main Metal run 8 重新下载与临时启动（2026-11-04）
+
+用户确认 fastboot 已连接，并明确授权下载后直接测试。Run 8 产物重新下载成功，ZIP SHA-256 与 GitHub artifact digest `a9f9d0c56359cb8eeb20598316401c0b040dee8da8a162f60bfc7597ca8e4872` 一致；新下载的内核、Metal Data 和 owner trust 与此前 Run 6 生产输入逐字节相同。使用同一 Data UUID `74E4C2F4-1B15-4EB5-8477-FFC6DB383C3E`，重新生成 ADT 和 176 MiB FAT 载荷，并复用 main-3 实机验证过的 UEFI／stock DTB。启动参数与 main-3 完全一致，诊断追踪继续默认关闭。
+
+镜像为 `out/oneplus13t/boot/metal-main-8/boot.img`，100446208 字节，SHA-256 `b74d9ddd0e1443317038d38c7d8415d049fda65046b70efcb24c3a2d4d95b101`。FAT 内核／Data／trust 和启动参数回读、Android v4 gzip／UEFI／DTB／内嵌载荷逐字节回读均通过，Android ramdisk 为零。
+
+首次尝试前确认设备为 `3B15BB01BAT00000`、product `sun`、`is-userspace=no`。16:24:27 的 `fastboot boot` 在 Sending 阶段返回 `Write to device failed in SendBuffer() (no link)`，未执行到 Booting；日志为 `out/oneplus13t/boot/metal-main-8/fastboot-boot-20261104-162427.log`。随后设备仍可枚举，但 `getvar product` 在 10 秒后超时；Windows 未遗留 fastboot 进程。已请用户重新连接 USB 并保持 fastboot，等待重试。未刷写分区，也没有本轮 XNU 启动或 GPU 实机结果。
+
+用户重新插拔 USB 并确认仍在 fastboot 后，`getvar product` 再次在 10 秒后超时。Windows 将同一序列号识别为 `Android Bootloader Interface`，驱动状态为 `OK`，没有遗留 fastboot 进程占用；设备可枚举但命令通道仍无响应。已请用户重启手机并重新进入 fastboot，再继续临时启动。
+
+用户重启手机并重新进入 fastboot 后，命令通信恢复：`product=sun`、`is-userspace=no` 均正常返回。16:36:11 重试同一已校验镜像，Sending 2.296 秒和 Booting 0.336 秒均返回 `OKAY`，总计 2.985 秒；未刷写任何分区。日志为 `out/oneplus13t/boot/metal-main-8/fastboot-boot-20261104-163611.log`。当前确认 bootloader 已接受临时启动，已请求用户确认桌面、颜色和诊断文字；系统及 GPU 运行结果等待观察。
+
+用户随后确认：“已进入桌面，颜色和文字正常”。这项观察确认本轮系统进入桌面、颜色正常且底部诊断文字可读；尚未提供 GPU 提交／完成计数、帧率或帧耗时，不能据此量化性能提升。共享缓存收益和追踪导出也尚未在手机上验证。
