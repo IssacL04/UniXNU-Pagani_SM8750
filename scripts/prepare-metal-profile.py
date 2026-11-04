@@ -47,7 +47,7 @@ def prepare(output, soc):
     board['board']['description'] = 'OnePlus 13T A830/Metal candidate; hardware qualification pending'
     extras = ['Adreno830', 'AdrenoMetal', 'PaganiAdsp', 'PaganiAudio', 'PaganiBattery', 'PaganiHaptics',
               'PaganiSensors', 'PaganiSpeaker', 'PaganiWifi', 'PaganiBt', 'PaganiCamera', 'PaganiTorch']
-    board['components']['include'] += extras
+    board['components']['include'] += extras + ['AdrenoFirmware']
     board['kernel']['defconfig'] = 'oneplus13t_metal_defconfig'
     board['kernel']['archives'] += ['component:Adreno830', 'build-pagani-gpu.py',
                                     *('component:' + name for name in extras[2:])]

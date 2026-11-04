@@ -46,6 +46,9 @@ with tempfile.TemporaryDirectory(prefix='pagani-metal-profile-') as directory:
     assert modules[('kit', 'ArmSmmu4K')].path == ROOT / 'modules/ArmSmmu4K'
     smmu_header = (modules[('kit', 'ArmSmmu4K')].path / 'ArmSmmu4KLive.h').read_text()
     assert 'size_t capacity_pages;' in smmu_header and 'volatile uint64_t *mapping;' in smmu_header
+    firmware_kit = modules[('kit', 'AdrenoFirmware')].path
+    assert (firmware_kit / 'AdrenoHfiVotes.c').is_file()
+    assert (firmware_kit / 'AdrenoHfiVotes.h').is_file()
     plan = archive_plan(context)
     components = [entry['id'] for kind, entry in plan if kind == 'component']
     assert components.count('Adreno830') == 1
