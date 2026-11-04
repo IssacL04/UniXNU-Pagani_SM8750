@@ -101,6 +101,11 @@ jobs:
           echo "UNIXNU_TREE=$OUTPUT/tree" >> "$GITHUB_ENV"
           echo "PYTHONPATH=$PWD/scripts" >> "$GITHUB_ENV"
           ./unixnu status --json > "$OUTPUT/status.json"
+      - name: Prepare the Wi-Fi stack sources
+        run: |
+          bash "$UNIXNU_TREE/drivers/PaganiWifi/Ath12kWifi/tools/fetch-sources.sh"
+          git -C "$UNIXNU_TREE/drivers/PaganiWifi/Ath12kWifi/deps/linux" rev-parse HEAD
+          git -C "$UNIXNU_TREE/drivers/PaganiWifi/Ath12kWifi/deps/freebsd" rev-parse HEAD
       - name: Check A830 and baseline display/input contracts
         working-directory: source/UniXNU
         env:
