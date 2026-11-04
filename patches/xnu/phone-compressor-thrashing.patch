@@ -1,0 +1,48 @@
+--- a/osfmk/vm/vm_compressor.c
++++ b/osfmk/vm/vm_compressor.c
+@@ -2418,8 +2418,8 @@
+ uint32_t compressor_eval_period_in_msecs = 250;
+ uint32_t compressor_sample_min_in_msecs = 500;
+ uint32_t compressor_sample_max_in_msecs = 10000;
+-uint32_t compressor_thrashing_threshold_per_10msecs = 50;
+-uint32_t compressor_thrashing_min_per_10msecs = 20;
++uint32_t compressor_thrashing_threshold_per_10msecs = VM_THRASHING_PAGES(50);
++uint32_t compressor_thrashing_min_per_10msecs = VM_THRASHING_PAGES(20);
+ 
+ /* When true, reset sample data next chance we get. */
+ static boolean_t        compressor_need_sample_reset = FALSE;
+--- a/osfmk/vm/vm_compressor.h
++++ b/osfmk/vm/vm_compressor.h
+@@ -508,6 +508,18 @@
+ #else /* !XNU_TARGET_OS_OSX */
+ #define COMPRESSOR_FREE_RESERVED_LIMIT          128
+ #endif /* !XNU_TARGET_OS_OSX */
++
++/*
++ * Both thrashing detectors compare page counts per period, with values tuned
++ * on 16 KiB pages: decompressions (compute_swapout_target_age) and pages read
++ * back soon after their eviction (vm_phantom_cache_check_pressure). What they
++ * stand for is bytes per second, the data decompressed or read twice, and a
++ * 4 KiB kernel counts four pages for the same data. Scaled, they trip at the
++ * rate they trip at on a 16 KiB device (78 and 62 MiB/s, not 19 and 15), and
++ * a jetsam for thrashing means the same thing. Neither sees a page without an
++ * active compressor: the phantom cache is not even set up then.
++ */
++#define VM_THRASHING_PAGES(pages_16k)           ((pages_16k) * (16384 / ARM_PGBYTES))
+ 
+ uint32_t vm_compressor_get_encode_scratch_size(void) __pure2;
+ uint32_t vm_compressor_get_decode_scratch_size(void) __pure2;
+--- a/osfmk/vm/vm_phantom_cache.c
++++ b/osfmk/vm/vm_phantom_cache.c
+@@ -35,9 +35,9 @@
+ 
+ 
+ uint32_t phantom_cache_eval_period_in_msecs = 250;
+-uint32_t phantom_cache_thrashing_threshold_ssd = 1000;
++uint32_t phantom_cache_thrashing_threshold_ssd = VM_THRASHING_PAGES(1000);
+ #if !XNU_TARGET_OS_OSX
+-uint32_t phantom_cache_thrashing_threshold = 500;
++uint32_t phantom_cache_thrashing_threshold = VM_THRASHING_PAGES(500);
+ #else /* !XNU_TARGET_OS_OSX */
+ uint32_t phantom_cache_thrashing_threshold = 50;
+ #endif /* !XNU_TARGET_OS_OSX */

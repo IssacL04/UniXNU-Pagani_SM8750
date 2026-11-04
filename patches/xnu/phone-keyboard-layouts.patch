@@ -1,0 +1,38 @@
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -7233,6 +7233,10 @@
+ volatile int native_gpu_addon3_status = -1;
+ volatile int native_gpu_addon4_stage = 0;
+ volatile int native_gpu_addon4_status = -1;
++volatile int native_gpu_addon5_stage = 0;
++volatile int native_gpu_addon5_status = -1;
++/* BootProgress's ramoops trace (U lines), on boards that link it. */
++extern void boot_progress_trace(const char *text) __attribute__((weak_import));
+ static void
+ native_gpu_addon_mount(proc_t p, user_addr_t scratch, user_addr_t offset, const char *source, size_t source_size,
+     const char *point, size_t point_size, const char *visible, const char *own, volatile int *stage, volatile int *status)
+@@ -7699,6 +7703,24 @@
+ 	native_gpu_addon_mount(p, scratch, 0xd00, collections_source, sizeof(collections_source), collections_point,
+ 	    sizeof(collections_point), "/Library/Wallpaper/Collections/Bokeh.wallpaperCollection/WallpaperCollection.plist",
+ 	    "/Library/Wallpaper/Collections/Collections~iphone.plist", &native_gpu_addon4_stage, &native_gpu_addon4_status);
++	/* TextInputUI decodes the keyboard layouts from KBLayouts_<iPhone|iPad>.dat in its bundle, chosen by the device class. The iPad
++	 * root has only KBLayouts_iPad.dat, so the iPhone identity's keyboard has no layout (and with a fix-up returning the iPad file,
++	 * the iPad's key geometry under the phone's keyboard: nothing can be typed). The owner overlay holds KBLayouts_iPhone.dat of the
++	 * iOS 17.7 iPhone root (21H16, the same 21H train), shown over the bundle like the collections above. Without
++	 * /private/var/ngpu/textinputui-layouts nothing is mounted. */
++	static const char layouts_source[] = "/private/var/ngpu/textinputui-layouts",
++	    layouts_point[] = "/System/Library/PrivateFrameworks/TextInputUI.framework";
++	native_gpu_addon_mount(p, scratch, 0xb00, layouts_source, sizeof(layouts_source), layouts_point, sizeof(layouts_point),
++	    "/System/Library/PrivateFrameworks/TextInputUI.framework/KBLayouts_iPad.dat",
++	    "/System/Library/PrivateFrameworks/TextInputUI.framework/KBLayouts_iPhone.dat", &native_gpu_addon5_stage,
++	    &native_gpu_addon5_status);
++	/* The two phone overlays in the boot log: stage 5 status 0 is mounted with both layers visible; stage 1 is no source directory. */
++	if (boot_progress_trace) {
++		char line[96];
++		snprintf(line, sizeof(line), "overlay wallpaper stage %d status %d, keyboard stage %d status %d", native_gpu_addon4_stage,
++		    native_gpu_addon4_status, native_gpu_addon5_stage, native_gpu_addon5_status);
++		boot_progress_trace(line);
++	}
+ 	native_cryptex_os_view(p, scratch);
+ 	native_gestalt_cache_drop(p, scratch);
+ 	native_ls_store_drop(p, scratch);

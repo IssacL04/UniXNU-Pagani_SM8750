@@ -1,0 +1,32 @@
+--- a/osfmk/arm64/cpu.c
++++ b/osfmk/arm64/cpu.c
+@@ -119,6 +119,18 @@
+ //  1 : normal
+ //  2 : overhead simulation (delay & flags)
+ TUNABLE(unsigned int, wfi, "wfi", 1);
++#if !defined(APPLE_ARM64_ARCH_FAMILY)
++/*
++ * pagani-idle-flush=0 skips platform_cache_idle_enter() in cpu_idle. On this
++ * non-Apple target (no __ARM_COHERENT_IO__) it cleans and invalidates the L1
++ * D-cache by set/way (FlushPoU_Dcache) at every idle entry of every CPU once
++ * more than one CPU runs. The SM8750 cores keep their caches coherent through
++ * WFI and the PSCI retention states (Linux does no cache maintenance there;
++ * a power-down is the PSCI implementation's to flush). 1, the default, keeps
++ * the flush.
++ */
++static TUNABLE(unsigned int, idle_cache_flush, "pagani-idle-flush", 1);
++#endif /* !defined(APPLE_ARM64_ARCH_FAMILY) */
+ #if DEVELOPMENT || DEBUG
+
+ // wfi_flags
+@@ -584,7 +596,9 @@
+
+ 	if (wfi) {
+ #if !defined(APPLE_ARM64_ARCH_FAMILY)
+-		platform_cache_idle_enter();
++		if (idle_cache_flush) {
++			platform_cache_idle_enter();
++		}
+ #endif
+
+ #if DEVELOPMENT || DEBUG

@@ -39,6 +39,10 @@
 #define PAGANI_PON_POWER 0x80
 #define PAGANI_PON_VOLUME_UP 0x40
 #define PAGANI_GPIO_VOLUME_DOWN 1
+// Plus key (left side, Android gpio-keys "oplus_magic_buttom", BTN_TRIGGER_HAPPY32): TLMM GPIO 97, active low with an external
+// pull-up; the Android pinctrl state is function gpio, bias-disable, 6 mA (drive field 2), and gpio-keys debounces it for 32 ms.
+#define PAGANI_PLUS_KEY_GPIO 97
+#define PAGANI_PLUS_KEY_DRIVE 2
 #define PAGANI_DSI_BASE 0xae94000ULL
 #define PAGANI_BRIGHTNESS_MAX 0xdbb
 #define PAGANI_BRIGHTNESS_DEFAULT 0x599

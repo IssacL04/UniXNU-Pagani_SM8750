@@ -1,0 +1,222 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -9067,12 +9067,17 @@ native_system_apps_show(proc_t p, user_addr_t scratch)
+ 	}
+ 	native_system_apps_sentinel = error;
+ 	static const char source[] = "/private/var/staged_system_apps", point[] = "/Applications";
++	/* LaunchServices needs file IDs to register the plug-ins of these bundles: the view is the one bindfs mount that has them (bind_vfsops.c
++	 * bindfs_vget), unless boot-arg pagani-bindfs-vget=0. "file ids" in the line below: the mounts of this boot that do. */
++	extern volatile int native_bindfs_file_ids, native_bindfs_file_id_mounts;
++	native_bindfs_file_ids = 1;
+ 	native_gpu_addon_mount(p, scratch, 0x800, source, sizeof(source), point, sizeof(point), "/Applications/Preferences.app",
+ 	    "/Applications/MobileCal.app", &native_system_apps_stage, &native_system_apps_status);
++	native_bindfs_file_ids = 0;
+ 	if (boot_progress_trace) {
+ 		char line[96];
+-		snprintf(line, sizeof(line), "system apps view stage %d status %d, migration sentinel %d", native_system_apps_stage,
+-		    native_system_apps_status, native_system_apps_sentinel);
++		snprintf(line, sizeof(line), "system apps view stage %d status %d, migration sentinel %d, file ids %d", native_system_apps_stage,
++		    native_system_apps_status, native_system_apps_sentinel, native_bindfs_file_id_mounts);
+ 		boot_progress_trace(line);
+ 	}
+ }
+diff --git a/bsd/miscfs/bindfs/bind_vfsops.c b/bsd/miscfs/bindfs/bind_vfsops.c
+--- a/bsd/miscfs/bindfs/bind_vfsops.c
++++ b/bsd/miscfs/bindfs/bind_vfsops.c
+@@ -75,10 +75,20 @@
+ #include <sys/param.h>
+ 
+ #include <IOKit/IOBSD.h>
++#include <os/atomic_private.h>
++#include <pexpert/pexpert.h>
+ 
+ #include "bindfs.h"
+ 
+ volatile int native_bindfs_boot_mount = 0;
++/* phone-bindfs-vget.patch. Set by a boot-time view around its mount() call when what it shows must have file IDs (kern_exec.c
++ * native_system_apps_show). Boot-arg pagani-bindfs-vget: 0 no view has them, 1 (default) the views that ask, 2 every boot-time view (an
++ * experiment, for the case that a view other than /Applications turns out to matter). Mounts that came up with it, and what bindfs_vget did
++ * (calls, resolved), for the boot log and PaganiDiag's status line. */
++volatile int native_bindfs_file_ids = 0;
++volatile int native_bindfs_file_id_mounts = 0;
++volatile uint32_t native_bindfs_vget_calls;
++volatile uint32_t native_bindfs_vget_resolved;
+ 
+ #define BINDFS_ENTITLEMENT "com.apple.private.bindfs-allow"
+ 
+@@ -234,7 +244,14 @@ bindfs_mount(struct mount * mp, __unused vnode_t devvp, user_addr_t user_data, v
+ 
+ 	xmp->bindm_flags = BINDM_CASEINSENSITIVE; /* default to case insensitive */
+ 	if (native_bindfs_boot_mount) {
++		uint32_t file_ids = 1;
++		(void)PE_parse_boot_argn("pagani-bindfs-vget", &file_ids, sizeof(file_ids));
+ 		xmp->bindm_flags |= BINDM_FORCE_ROOT;
++		if (file_ids >= 2 || (file_ids == 1 && native_bindfs_file_ids)) {
++			/* mount_lookupby_volfsid only finds a mount with MNTK_PATH_FROM_ID. See bindfs_vget. */
++			xmp->bindm_flags |= BINDM_PATH_FROM_ID;
++			mp->mnt_kern_flag |= MNTK_PATH_FROM_ID;
++		}
+ 	}
+ 
+ 	error = bindfs_vfs_getlowerattr(vnode_mount(lowerrootvp), &vfa, ctx);
+@@ -286,6 +303,10 @@ bindfs_mount(struct mount * mp, __unused vnode_t devvp, user_addr_t user_data, v
+ 	 * mirror */
+ 	MAC_PERFORM(mount_label_associate, cred, vnode_mount(lowerrootvp), vfs_mntlabel(mp));
+ 
++	if (xmp->bindm_flags & BINDM_PATH_FROM_ID) {
++		os_atomic_inc(&native_bindfs_file_id_mounts, relaxed);
++	}
++
+ 	BINDFSDEBUG("lower %s, alias at %s\n", sp->f_mntfromname, sp->f_mntonname);
+ 	return 0;
+ 
+@@ -416,13 +437,14 @@ bindfs_vfs_getattr(struct mount * mp, struct vfs_attr * vfap, vfs_context_t ctx)
+ 	if (bindfs_vfs_getlowerattr(vnode_mount(bind_mp->bindm_lowerrootvp), &vfa, ctx) == 0) {
+ 		if (VFSATTR_IS_SUPPORTED(&vfa, f_capabilities)) {
+ 			memcpy(&capabilities, &vfa.f_capabilities, sizeof(capabilities));
+-			/* don't support vget */
+-			capabilities.capabilities[VOL_CAPABILITIES_FORMAT] &= ~(VOL_CAP_FMT_PERSISTENTOBJECTIDS | VOL_CAP_FMT_PATH_FROM_ID);
++			/* don't support vget, unless this mount does: file IDs are the lower file system's and bindfs_vget resolves them. */
++			if (!(bind_mp->bindm_flags & BINDM_PATH_FROM_ID)) {
++				capabilities.capabilities[VOL_CAPABILITIES_FORMAT] &= ~(VOL_CAP_FMT_PERSISTENTOBJECTIDS | VOL_CAP_FMT_PATH_FROM_ID);
++				capabilities.valid[VOL_CAPABILITIES_FORMAT] &= ~(VOL_CAP_FMT_PERSISTENTOBJECTIDS | VOL_CAP_FMT_PATH_FROM_ID);
++			}
+ 
+ 			capabilities.capabilities[VOL_CAPABILITIES_FORMAT] |= VOL_CAP_FMT_HIDDEN_FILES; /* Always support UF_HIDDEN */
+ 
+-			capabilities.valid[VOL_CAPABILITIES_FORMAT] &= ~(VOL_CAP_FMT_PERSISTENTOBJECTIDS | VOL_CAP_FMT_PATH_FROM_ID);
+-
+ 			capabilities.valid[VOL_CAPABILITIES_FORMAT] |= VOL_CAP_FMT_HIDDEN_FILES; /* Always support UF_HIDDEN */
+ 
+ 			/* dont' support interfaces that only make sense on a writable file system
+@@ -542,6 +564,92 @@ bindfs_vfs_start(__unused struct mount * mp, __unused int flags, __unused vfs_co
+ 	return 0;
+ }
+ 
++/*
++ * Lookup by file ID (fsgetpath, volfs paths, openbyid_np), after bindfs_vget of UniXNU-sheng (patches/xnu-12377/zzzz-sheng-ipados27-
++ * bringup.patch, BSD-2-Clause-Patent). Why a boot view needs it, read from 21H461: on a volume without PATH_FROM_ID CoreServicesInternal
++ * keeps no file ID (_kCFURLFileIDKey), so -[FSNode initWithURL:flags:error:] with flag 1 returns nil, _LSAddBundlePlugins never parses a
++ * plug-in's executable, the plug-in is registered with platform 0 and finds no extension point, and chronod ignores a widget extension as
++ * restricted. A volume that says PATH_FROM_ID must also answer: bindfs reports the lower file system's file IDs, so get the lower vnode,
++ * take its path relative to the bound root and look that path up from our root. The vnode returned is ours, named and parented under the
++ * mount point, as build_path needs. An ID outside the bound tree is not found (ENOENT: fsgetpath then asks the covered volume, which holds
++ * the other half of a union). Differences from the original: the root's own ID BIND_ROOT_INO resolves; the lower path may enter the file
++ * system (a vnode VFS_VGET just made has no cached parent); the lower root is held while its path is taken; the walk does not cross a
++ * mount and runs with the kernel's context, because VFS_VGET authorizes nothing and fsgetpath_internal applies the caller's policy to
++ * the result (a caller's sandbox would otherwise decide what a file ID resolves to); our root is held across that walk.
++ */
++static int
++bindfs_vget(struct mount * mp, ino64_t ino, struct vnode ** vpp, vfs_context_t ctx)
++{
++	struct bind_mount * bindm = MOUNTTOBINDMOUNT(mp);
++	vnode_t lowerroot;
++	vnode_t lowervp = NULLVP;
++	char * lowerpath = NULL;
++	char * rootpath = NULL;
++	const char * relative = NULL;
++	size_t rootlen;
++	int len, error;
++
++	*vpp = NULLVP;
++	if (bindm == NULL || !(bindm->bindm_flags & BINDM_PATH_FROM_ID)) {
++		return ENOTSUP;
++	}
++	os_atomic_inc(&native_bindfs_vget_calls, relaxed);
++	lowerroot = bindm->bindm_lowerrootvp;
++	if (ino == BIND_ROOT_INO) {
++		error = bindfs_root(mp, vpp, ctx);
++		goto done;
++	}
++	error = vnode_getwithref(lowerroot);
++	if (error) {
++		goto done;
++	}
++	error = VFS_VGET(vnode_mount(lowerroot), ino, &lowervp, ctx);
++	if (error) {
++		vnode_put(lowerroot);
++		goto done;
++	}
++	if (lowervp == lowerroot) {
++		vnode_put(lowervp);
++		vnode_put(lowerroot);
++		error = bindfs_root(mp, vpp, ctx);
++		goto done;
++	}
++	lowerpath = zalloc(ZV_NAMEI);
++	rootpath = zalloc(ZV_NAMEI);
++	len = MAXPATHLEN;
++	error = vn_getpath_fsenter(lowervp, lowerpath, &len);
++	vnode_put(lowervp);
++	if (error == 0) {
++		len = MAXPATHLEN;
++		error = vn_getpath_fsenter(lowerroot, rootpath, &len);
++	}
++	vnode_put(lowerroot);
++	if (error == 0) {
++		rootlen = strlen(rootpath);
++		if (rootlen == 1 && rootpath[0] == '/') {
++			relative = lowerpath + 1;
++		} else if (strncmp(lowerpath, rootpath, rootlen) == 0 && lowerpath[rootlen] == '/') {
++			relative = lowerpath + rootlen + 1;
++		}
++		if (relative && *relative) {
++			error = vnode_getwithref(bindm->bindm_rootvp);
++			if (error == 0) {
++				error = vnode_lookupat(relative, VNODE_LOOKUP_NOFOLLOW | VNODE_LOOKUP_NOCROSSMOUNT, vpp, vfs_context_kernel(), bindm->bindm_rootvp);
++				vnode_put(bindm->bindm_rootvp);
++			}
++		} else {
++			error = ENOENT;
++		}
++	}
++	zfree(ZV_NAMEI, lowerpath);
++	zfree(ZV_NAMEI, rootpath);
++done:
++	if (error == 0) {
++		os_atomic_inc(&native_bindfs_vget_resolved, relaxed);
++	}
++	return error;
++}
++
+ extern const struct vnodeopv_desc bindfs_vnodeop_opv_desc;
+ 
+ const struct vnodeopv_desc * bindfs_vnodeopv_descs[] = {
+@@ -555,6 +663,7 @@ struct vfsops bindfs_vfsops = {
+ 	.vfs_root               = bindfs_root,
+ 	.vfs_getattr            = bindfs_vfs_getattr,
+ 	.vfs_sync               = bindfs_sync,
++	.vfs_vget               = bindfs_vget,
+ 	.vfs_init               = bindfs_init,
+ 	.vfs_sysctl             = NULL,
+ 	.vfs_setattr            = NULL,
+diff --git a/bsd/miscfs/bindfs/bind_vnops.c b/bsd/miscfs/bindfs/bind_vnops.c
+--- a/bsd/miscfs/bindfs/bind_vnops.c
++++ b/bsd/miscfs/bindfs/bind_vnops.c
+@@ -81,7 +81,6 @@
+ 
+ #include "bindfs.h"
+ 
+-#define BIND_ROOT_INO 2
+ 
+ vop_t * bindfs_vnodeop_p = NULL;
+ 
+diff --git a/bsd/miscfs/bindfs/bindfs.h b/bsd/miscfs/bindfs/bindfs.h
+--- a/bsd/miscfs/bindfs/bindfs.h
++++ b/bsd/miscfs/bindfs/bindfs.h
+@@ -84,8 +84,14 @@
+ /* Owner boot overlay (native_bindfs_boot_mount): report every file as owned by root:wheel. The backing directory is owner data made
+  * without root; launchd and the loader expect system-directory content to be root owned. Mode bits are left as they are. */
+ #define BINDM_FORCE_ROOT 0x80000000ULL
++/* Owner boot overlay whose file IDs resolve (bind_vfsops.c bindfs_vget): the lower volume's persistent object IDs and paths from IDs are
++ * reported and the mount takes MNTK_PATH_FROM_ID. Without it a mount strips both, as the original does, and no path reaches bindfs_vget. */
++#define BINDM_PATH_FROM_ID 0x40000000ULL
+ #define BINDM_CASEINSENSITIVE 0x0000000000000002
+ 
++/* What a mount's root reports as its file ID (bindfs_getattr, bindfs_readdir). */
++#define BIND_ROOT_INO 2
++
+ typedef int (*vop_t)(void *);
+ 
+ struct bind_mount {

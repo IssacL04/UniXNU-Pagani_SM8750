@@ -1,0 +1,567 @@
+--- a/bsd/kern/kdebug.c
++++ b/bsd/kern/kdebug.c
+@@ -66,6 +66,28 @@
+ 
+ extern unsigned int wake_nkdbufs;
+ extern unsigned int trace_wrap;
++
++/*
++ * Keyboard trace (boot-arg pagani-kbtrace=1, phone-keyboard-trace.patch version 2): the shared typefilter allows only the
++ * keyboard subclass of UIKit and kbd (and with =3 UIKit's event-dispatch subclass) and the commpage reports tracing on, so
++ * user space makes kdebug_trace syscalls for those points alone; kdebug_trace64 counts them per process, times the pairs
++ * (UIKit task queue, kbd input, autocorrection, inline completions, language model) and BootProgress logs "kbt" U lines
++ * (pagani_kbtrace.h). Tracing itself (kdebug_enable) stays off, nothing is recorded in trace buffers.
++ */
++#include <kern/thread_call.h>
++#include <pexpert/pexpert.h>
++#include "pagani_kbtrace.h"
++extern void boot_progress_trace(const char *text) __attribute__((weak_import));
++static bool pagani_kbtrace_on;
++static bool pagani_kbtrace_signposts;   /* pagani-kbtrace=3: also UIKit's signpost subclass 0x2b87 (every frame of every UIKit app) */
++static struct pagani_kbt pagani_kbt;
++static uint32_t pagani_kbt_pending;
++static uint32_t pagani_kbt_call_state;  /* 0 not set up, 1 being set up, 2 ready: set up at the first point, after thread calls */
++/* Allocated at the first point: thread_call_data_t and thread_call_setup are MACH_KERNEL_PRIVATE, out of reach of bsd/. */
++static thread_call_t pagani_kbt_call;
++static LCK_SPIN_DECLARE(pagani_kbt_lock, &kdebug_lck_grp);
++static void pagani_kbtrace_note(struct proc *p, uint32_t code, uint64_t arg1, uint64_t arg2);
++static void pagani_kbtrace_flush(thread_call_param_t p0, thread_call_param_t p1);
+ 
+ // Coprocessors (or "IOP"s)
+ //
+@@ -1007,6 +1029,9 @@
+ kdebug_trace64(__unused struct proc *p, struct kdebug_trace64_args *uap,
+     __unused int32_t *retval)
+ {
++	if (__improbable(pagani_kbtrace_on)) {
++		pagani_kbtrace_note(p, uap->code, uap->arg1, uap->arg2);
++	}
+ 	if (__probable(kdebug_enable == 0)) {
+ 		return 0;
+ 	}
+@@ -1577,6 +1602,15 @@
+ 	kdbg_clear();
+ 	typefilter_reject_all(kdbg_typefilter);
+ 	typefilter_allow_class(kdbg_typefilter, DBG_TRACE);
++	/* Keyboard trace: every ktrace session ends here, with the shared filter back to DBG_TRACE alone while the commpage still says
++	 * TRACE|TYPEFILTER; open the keyboard points again or the counts stop without a word. */
++	if (pagani_kbtrace_on && !kdebug_enable) {
++		typefilter_allow_csc(kdbg_typefilter, PAGANI_KBT_CSC_KEYBOARD);
++		if (pagani_kbtrace_signposts) {
++			typefilter_allow_csc(kdbg_typefilter, PAGANI_KBT_CSC_EVENTS);
++		}
++		commpage_update_kdebug_state();
++	}
+ }
+ 
+ void
+@@ -1750,6 +1784,11 @@
+ 		if (kd_control_trace.kdc_flags & KDBG_CONTINUOUS_TIME) {
+ 			state |= KDEBUG_COMMPAGE_CONTINUOUS;
+ 		}
++	} else if (pagani_kbtrace_on && kdbg_typefilter &&
++	    !typefilter_is_debugid_allowed(kdbg_typefilter, KDBG_CODE(DBG_MACH, 0, 0))) {
++		/* Keyboard trace: user space checks the typefilter, which allows only the keyboard points. Once a ktrace reset
++		 * opened the filter to everything (kdbg_disable_typefilter), the trace switches itself off here. */
++		state = KDEBUG_COMMPAGE_ENABLE_TRACE | KDEBUG_COMMPAGE_ENABLE_TYPEFILTER;
+ 	}
+ 	return state;
+ }
+@@ -2743,9 +2782,83 @@
+ 	    MPSC_DAEMON_INIT_NONE);
+ 
+ 	kdebug_trace_start(n_events, filter_desc, opts);
++
++	uint32_t kbtrace = 0;
++	/* 1: the keyboard subclass alone; 3: also 0x2b87, UIKit's signpost subclass (sendEvent, but also the update cycle, animations and
++	 * scrolling: a dozen syscalls a frame in every animating UIKit process, so only for a short keyboard diagnosis). */
++	if (!kdebug_enable && PE_parse_boot_argn("pagani-kbtrace", &kbtrace, sizeof(kbtrace)) && (kbtrace == 1 || kbtrace == 3)) {
++		typefilter_reject_all(kdbg_typefilter);
++		typefilter_allow_class(kdbg_typefilter, DBG_TRACE);
++		typefilter_allow_csc(kdbg_typefilter, PAGANI_KBT_CSC_KEYBOARD);
++		pagani_kbtrace_signposts = kbtrace == 3;
++		if (pagani_kbtrace_signposts) {
++			typefilter_allow_csc(kdbg_typefilter, PAGANI_KBT_CSC_EVENTS);
++		}
++		pagani_kbtrace_on = true;
++		commpage_update_kdebug_state();         /* a no-op this early; commpage_populate() writes the state later */
++	}
+ }
+ 
++/* Summaries (and lat lines) of the processes whose counts (timed pairs) changed since their last ones; runs
++ * PAGANI_KBT_FLUSH_MS after the first unreported event. Lines are built under the lock and logged after it. */
+ static void
++pagani_kbtrace_flush(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
++{
++	os_atomic_store(&pagani_kbt_pending, 0, relaxed);
++	for (unsigned i = 0; i < PAGANI_KBT_SLOTS; i++) {
++		char line[PAGANI_KBT_LINE];
++		lck_spin_lock_grp(&pagani_kbt_lock, &kdebug_lck_grp);
++		int have = pagani_kbt_take_dirty(&pagani_kbt, i, line, sizeof(line));
++		lck_spin_unlock(&pagani_kbt_lock);
++		if (have && boot_progress_trace) {
++			boot_progress_trace(line);
++		}
++		lck_spin_lock_grp(&pagani_kbt_lock, &kdebug_lck_grp);
++		have = pagani_kbt_take_lat(&pagani_kbt, i, line, sizeof(line));
++		lck_spin_unlock(&pagani_kbt_lock);
++		if (have && boot_progress_trace) {
++			boot_progress_trace(line);
++		}
++	}
++}
++
++static void
++pagani_kbtrace_note(struct proc *p, uint32_t code, uint64_t arg1, uint64_t arg2)
++{
++	int kind = pagani_kbt_kind(code, arg1);
++	if (kind < 0 || p == NULL) {
++		return;
++	}
++	uint64_t now = mach_absolute_time(), ns = 0;
++	absolutetime_to_nanoseconds(now, &ns);
++	char line[PAGANI_KBT_LINE];
++	lck_spin_lock_grp(&pagani_kbt_lock, &kdebug_lck_grp);
++	int announce = pagani_kbt_count(&pagani_kbt, proc_pid(p), proc_best_name(p), kind, arg2, ns / NSEC_PER_USEC, line,
++	    sizeof(line));
++	lck_spin_unlock(&pagani_kbt_lock);
++	if (announce && boot_progress_trace) {
++		boot_progress_trace(line);
++	}
++	if (os_atomic_load(&pagani_kbt_call_state, acquire) != 2) {
++		if (!os_atomic_cmpxchg(&pagani_kbt_call_state, 0, 1, acquire)) {
++			return;         /* another thread is setting the call up and schedules the summary */
++		}
++		thread_call_t call = thread_call_allocate(pagani_kbtrace_flush, NULL);
++		if (call == NULL) {
++			os_atomic_store(&pagani_kbt_call_state, 0, release);         /* the next point tries again */
++			return;
++		}
++		pagani_kbt_call = call;
++		os_atomic_store(&pagani_kbt_call_state, 2, release);
++	}
++	if (os_atomic_cmpxchg(&pagani_kbt_pending, 0, 1, relaxed)) {
++		uint64_t interval = 0;
++		nanoseconds_to_absolutetime((uint64_t)PAGANI_KBT_FLUSH_MS * NSEC_PER_MSEC, &interval);
++		thread_call_enter_delayed(pagani_kbt_call, now + interval);
++	}
++}
++
++static void
+ kdbg_set_typefilter_string(const char *filter_desc)
+ {
+ 	char *end = NULL;
+--- /dev/null
++++ b/bsd/kern/pagani_kbtrace.h
+@@ -0,0 +1,411 @@
++/* SPDX-License-Identifier: BSD-2-Clause-Patent */
++/*
++ * Keyboard trace for the iPhone identity (boot-arg pagani-kbtrace=1, phone-keyboard-trace.patch), version 2.
++ *
++ * 21H461 UIKit and kbd mark every stage of a key press with a kdebug point. They are syscalls only while the commpage says
++ * tracing is on and the shared typefilter allows their class/subclass; the patch allows the keyboard subclass 0x2bae (and
++ * with pagani-kbtrace=3 also 0x2b87) and counts the points per process here. Counted kinds (debug id, function qualifier
++ * bits ignored; UIKitCore / TextInputCore 21H461 call sites in sysfix/keyboard/NOTES.md):
++ *   ev    -[UIApplication sendEvent:] of a touches event                     (0x2b8701ac, arg1 bits 0..7 = event type 0)
++ *   set   -[UIKeyboardSceneDelegate setKeyWindowSceneInputViews:...]         (0x2bae0010, the keyboard is being shown)
++ *   dn    -[UIKeyboardLayout touchDown:] (touch reached the key layout)      (0x2bae006c) / its task finished (0x2bae0070)
++ *   dr    -[UIKeyboardLayout touchDragged:]                                   (0x2bae0074)
++ *   up    -[UIKeyboardLayout touchUp:]                                        (0x2bae007c) / its task finished (0x2bae0080)
++ *   task  -[UIKeyboardTaskEntry execute:] begin (0x2bae0024) / task block returned (0x2bae0028)
++ *   in    -[UIKeyboardImpl handleKeyboardInput:executionContext:] (0x2bae0084) / kbd answered (0x2bae0088)
++ *   cand  -[UIKeyboardImpl generateCandidatesAsynchronouslyWithRange:...] (0x2bae00a4) / back (0x2bae00a8); only input
++ *         methods with candidate selection (marked text) take this path, English predictions do not
++ *   hw    -[UIKeyboardImpl _handleKeyEvent:executionContext:] (0x2bae001c)
++ *   ac    -[UIKeyboardAutocorrectionController setNeedsAutocorrection] (0x2bae008c) / its deferred request task finished,
++ *         i.e. kbd answered the autocorrection/prediction request (0x2bae0090): the English QuickType path
++ *   kop   kbd (TextInputCore) operation begin (0x2bae0034) / end (0x2bae0038), arg2 = operation (pagani_kbt_op_lat)
++ * Version 2 adds ac and kop and times the pairs: every begin is queued per process and latency group, every end takes the
++ * oldest queued begin of its group, and the pair's duration goes into count / sum / max / >=100 ms / >=400 ms. The "lat"
++ * line prints them, so a log tells where a slow key spends its time (UIKit task queue, kbd input, kbd autocorrection,
++ * inline completions, language model) without any trace session.
++ * Pure C without kernel dependencies so the host test compiles the same code (sysfix/keyboard/test-phone-keyboard-trace.py).
++ */
++#ifndef PAGANI_KBTRACE_H
++#define PAGANI_KBTRACE_H
++
++#include <stddef.h>
++#include <stdint.h>
++
++#define PAGANI_KBT_CSC_KEYBOARD 0x2baeu /* class 0x2b (DBG_ARIADNE), UIKit/TextInput keyboard subclass 0xae */
++#define PAGANI_KBT_CSC_EVENTS   0x2b87u /* UIKit signpost subclass 0x87: sendEvent, also update cycle, animation, scrolling */
++#define PAGANI_KBT_SLOTS        8
++#define PAGANI_KBT_LINE         400     /* longest summary 273, lat lines 298 (UIKit) and 349 (kbd) at their display maxima */
++#define PAGANI_KBT_FLUSH_MS     4000    /* a changed process is summarized this long after its first unreported event */
++#define PAGANI_KBT_RING         8       /* queued begins per process and latency group (older ones are dropped, counted lost) */
++#define PAGANI_KBT_SHOW_MAX     99999u  /* displayed numbers saturate here */
++
++enum {
++	PAGANI_KBT_EV, PAGANI_KBT_SET, PAGANI_KBT_DN, PAGANI_KBT_DN_DONE, PAGANI_KBT_DR, PAGANI_KBT_UP, PAGANI_KBT_UP_DONE,
++	PAGANI_KBT_TASK, PAGANI_KBT_TASK_RET, PAGANI_KBT_IN, PAGANI_KBT_IN_DONE, PAGANI_KBT_CAND, PAGANI_KBT_CAND_DONE,
++	PAGANI_KBT_HWKEY, PAGANI_KBT_AC, PAGANI_KBT_AC_DONE, PAGANI_KBT_KOP, PAGANI_KBT_KOP_DONE, PAGANI_KBT_KINDS
++};
++
++static const char *const pagani_kbt_kind_names[PAGANI_KBT_KINDS] = {
++	"ev", "set", "dn", "dn-done", "dr", "up", "up-done", "task", "task-ret", "in", "in-done", "cand", "cand-done", "hwkey",
++	"ac", "ac-done", "kop", "kop-done",
++};
++
++/* Latency groups: six UIKit pairs (in the app that shows the keyboard) and seven kbd operations. */
++enum {
++	PAGANI_KBT_LAT_DN, PAGANI_KBT_LAT_UP, PAGANI_KBT_LAT_IN, PAGANI_KBT_LAT_AC, PAGANI_KBT_LAT_CAND, PAGANI_KBT_LAT_TASK,
++	PAGANI_KBT_LAT_KSYNC, PAGANI_KBT_LAT_KIN, PAGANI_KBT_LAT_KAC, PAGANI_KBT_LAT_KCAND, PAGANI_KBT_LAT_KHIT,
++	PAGANI_KBT_LAT_KIC, PAGANI_KBT_LAT_KLM, PAGANI_KBT_LATS
++};
++
++static const char *const pagani_kbt_lat_names[PAGANI_KBT_LATS] = {
++	"dn", "up", "in", "ac", "cand", "task", "ksync", "kin", "kac", "kcand", "khit", "kic", "klm",
++};
++
++struct pagani_kbt_lat {
++	uint64_t begin_us[PAGANI_KBT_RING];   /* queued begins, oldest at head */
++	uint64_t sum_us;                      /* of the completed pairs */
++	uint64_t max_us;
++	uint32_t n;                           /* completed pairs */
++	uint32_t n100, n400;                  /* of them, at least 100 ms / 400 ms */
++	uint32_t lost;                        /* begins pushed out of a full queue, ends without a begin */
++	uint8_t  head, queued;
++};
++
++struct pagani_kbt_slot {
++	int32_t  pid;                       /* 0: free */
++	char     name[17];
++	uint8_t  dirty;                     /* counts changed since the last summary */
++	uint8_t  lat_dirty;                 /* a pair completed or a begin was queued since the last lat line */
++	uint64_t used_ms;                   /* last event, for recycling the least recently used slot */
++	uint32_t seen;                      /* kinds already announced (bit per kind) */
++	uint32_t n[PAGANI_KBT_KINDS];
++	struct pagani_kbt_lat lat[PAGANI_KBT_LATS];
++};
++
++struct pagani_kbt {
++	struct pagani_kbt_slot slot[PAGANI_KBT_SLOTS];
++	uint32_t recycled;                  /* slots taken over from another process */
++};
++
++/* The counted kind of a kdebug point, or -1. The function qualifier bits (DBG_FUNC_START/END) are ignored. */
++static inline int
++pagani_kbt_kind(uint32_t code, uint64_t arg1)
++{
++	switch (code & ~3u) {
++	case 0x2b8701acu: return (arg1 & 0xff) == 0 ? PAGANI_KBT_EV : -1;
++	case 0x2bae0010u: return PAGANI_KBT_SET;
++	case 0x2bae006cu: return PAGANI_KBT_DN;
++	case 0x2bae0070u: return PAGANI_KBT_DN_DONE;
++	case 0x2bae0074u: return PAGANI_KBT_DR;
++	case 0x2bae007cu: return PAGANI_KBT_UP;
++	case 0x2bae0080u: return PAGANI_KBT_UP_DONE;
++	case 0x2bae0024u: return PAGANI_KBT_TASK;
++	case 0x2bae0028u: return PAGANI_KBT_TASK_RET;
++	case 0x2bae0084u: return PAGANI_KBT_IN;
++	case 0x2bae0088u: return PAGANI_KBT_IN_DONE;
++	case 0x2bae00a4u: return PAGANI_KBT_CAND;
++	case 0x2bae00a8u: return PAGANI_KBT_CAND_DONE;
++	case 0x2bae001cu: return PAGANI_KBT_HWKEY;
++	case 0x2bae008cu: return PAGANI_KBT_AC;
++	case 0x2bae0090u: return PAGANI_KBT_AC_DONE;
++	case 0x2bae0034u: return PAGANI_KBT_KOP;
++	case 0x2bae0038u: return PAGANI_KBT_KOP_DONE;
++	default: return -1;
++	}
++}
++
++/*
++ * The latency group of a kbd operation (arg2 of 0x2bae0034/0x2bae0038, TextInputCore 21H461), or -1 for the operations not
++ * timed (nested helpers whose pairs would overlap the groups below):
++ *   0x00 -[TIKeyboardInputManagerWrapper syncToKeyboardState:completionHandler:]                     ksync
++ *   0x01 -[TIKeyboardInputManagerWrapper generateAutocorrectionsWithKeyboardState:...] -> its reply   kac
++ *   0x03 -[TIKeyboardInputManagerWrapper generateCandidatesWithKeyboardState:...] -> its reply        kcand
++ *   0x07 -[TIKeyboardInputManagerWrapper performHitTestForTouchEvent(s):...]                          khit
++ *   0x10 -[TIKeyboardInputManager finishGeneratingInlineCompletions:completion:syncResponse:]         kic
++ *   0x65 -[TIKeyboardInputManagerPolymorph handleKeyboardInput:...] (super call -> completion)        kin
++ *   0xc8 TIInlineCompletionGeneratorImpl::_inlineCompletionsWithLM, 0xc9 / 0xca KB::LanguageModelStr::
++ *        conditional_likelihood(_batched), 0xcb predictions, 0xcc predictions_with_stems, 0xcd stub predictions   klm
++ */
++static inline int
++pagani_kbt_op_lat(uint64_t op)
++{
++	switch (op) {
++	case 0x00: return PAGANI_KBT_LAT_KSYNC;
++	case 0x01: return PAGANI_KBT_LAT_KAC;
++	case 0x03: return PAGANI_KBT_LAT_KCAND;
++	case 0x07: return PAGANI_KBT_LAT_KHIT;
++	case 0x10: return PAGANI_KBT_LAT_KIC;
++	case 0x65: return PAGANI_KBT_LAT_KIN;
++	case 0xc8: case 0xc9: case 0xca: case 0xcb: case 0xcc: case 0xcd: return PAGANI_KBT_LAT_KLM;
++	default: return -1;
++	}
++}
++
++/* The latency group a kind begins (*end = 0) or ends (*end = 1), or -1. */
++static inline int
++pagani_kbt_lat_of(int kind, uint64_t arg2, int *end)
++{
++	*end = kind == PAGANI_KBT_DN_DONE || kind == PAGANI_KBT_UP_DONE || kind == PAGANI_KBT_IN_DONE ||
++	    kind == PAGANI_KBT_AC_DONE || kind == PAGANI_KBT_CAND_DONE || kind == PAGANI_KBT_TASK_RET ||
++	    kind == PAGANI_KBT_KOP_DONE;
++	switch (kind) {
++	case PAGANI_KBT_DN: case PAGANI_KBT_DN_DONE: return PAGANI_KBT_LAT_DN;
++	case PAGANI_KBT_UP: case PAGANI_KBT_UP_DONE: return PAGANI_KBT_LAT_UP;
++	case PAGANI_KBT_IN: case PAGANI_KBT_IN_DONE: return PAGANI_KBT_LAT_IN;
++	case PAGANI_KBT_AC: case PAGANI_KBT_AC_DONE: return PAGANI_KBT_LAT_AC;
++	case PAGANI_KBT_CAND: case PAGANI_KBT_CAND_DONE: return PAGANI_KBT_LAT_CAND;
++	case PAGANI_KBT_TASK: case PAGANI_KBT_TASK_RET: return PAGANI_KBT_LAT_TASK;
++	case PAGANI_KBT_KOP: case PAGANI_KBT_KOP_DONE: return pagani_kbt_op_lat(arg2);
++	default: return -1;
++	}
++}
++
++/* A begin (queued; a full queue drops its oldest begin) or an end (pairs with the oldest queued begin). Returns 1 when the
++ * group changed. Durations from clocks of two CPUs never go negative. */
++static inline int
++pagani_kbt_lat_note(struct pagani_kbt_lat *l, int end, uint64_t now_us)
++{
++	if (!end) {
++		if (l->queued == PAGANI_KBT_RING) {
++			l->head = (uint8_t)((l->head + 1) % PAGANI_KBT_RING);
++			l->queued--;
++			if (l->lost != UINT32_MAX) {
++				l->lost++;
++			}
++		}
++		l->begin_us[(l->head + l->queued) % PAGANI_KBT_RING] = now_us;
++		l->queued++;
++		return 1;
++	}
++	if (!l->queued) {
++		if (l->lost != UINT32_MAX) {
++			l->lost++;
++		}
++		return 1;
++	}
++	uint64_t begin = l->begin_us[l->head];
++	l->head = (uint8_t)((l->head + 1) % PAGANI_KBT_RING);
++	l->queued--;
++	uint64_t d = now_us > begin ? now_us - begin : 0;
++	if (l->n != UINT32_MAX) {
++		l->n++;
++		l->sum_us += d;
++		if (d >= 100000) {
++			l->n100++;
++		}
++		if (d >= 400000) {
++			l->n400++;
++		}
++	}
++	if (d > l->max_us) {
++		l->max_us = d;
++	}
++	return 1;
++}
++
++/* Bounded appends; the line stays NUL-terminated however small it is. */
++static inline size_t
++pagani_kbt_put(char *line, size_t size, size_t at, const char *s)
++{
++	while (*s && at + 1 < size) {
++		line[at++] = *s++;
++	}
++	if (size) {
++		line[at < size ? at : size - 1] = '\0';
++	}
++	return at;
++}
++
++static inline size_t
++pagani_kbt_put_u(char *line, size_t size, size_t at, uint64_t v)
++{
++	char digits[21];
++	unsigned n = 0;
++	do {
++		digits[n++] = (char)('0' + v % 10);
++		v /= 10;
++	} while (v && n < sizeof(digits));
++	char text[22];
++	unsigned i = 0;
++	while (n) {
++		text[i++] = digits[--n];
++	}
++	text[i] = '\0';
++	return pagani_kbt_put(line, size, at, text);
++}
++
++/* A displayed number, saturated at PAGANI_KBT_SHOW_MAX. */
++static inline size_t
++pagani_kbt_put_show(char *line, size_t size, size_t at, uint64_t v)
++{
++	return pagani_kbt_put_u(line, size, at, v > PAGANI_KBT_SHOW_MAX ? PAGANI_KBT_SHOW_MAX : v);
++}
++
++/* "kbt <name>[<pid>] <what>" header shared by all line kinds. */
++static inline size_t
++pagani_kbt_head(char *line, size_t size, const struct pagani_kbt_slot *s, const char *what)
++{
++	size_t at = pagani_kbt_put(line, size, 0, "kbt ");
++	at = pagani_kbt_put(line, size, at, s->name[0] ? s->name : "?");
++	at = pagani_kbt_put(line, size, at, "[");
++	at = pagani_kbt_put_u(line, size, at, (uint64_t)(s->pid > 0 ? s->pid : 0));
++	at = pagani_kbt_put(line, size, at, "] ");
++	return pagani_kbt_put(line, size, at, what);
++}
++
++/* Cumulative counts of one process:
++ * "kbt Notes[412] sum ev 12 set 1 dn 3/2 dr 0 up 3/2 task 9/9 in 2/2 cand 0/0 hw 0 ac 2/2 kop 0/0" (version 1 ended at hw). */
++static inline size_t
++pagani_kbt_summary(const struct pagani_kbt_slot *s, char *line, size_t size)
++{
++	static const struct { const char *label; int a, b; } fields[] = {
++		{" ev ", PAGANI_KBT_EV, -1}, {" set ", PAGANI_KBT_SET, -1}, {" dn ", PAGANI_KBT_DN, PAGANI_KBT_DN_DONE},
++		{" dr ", PAGANI_KBT_DR, -1}, {" up ", PAGANI_KBT_UP, PAGANI_KBT_UP_DONE},
++		{" task ", PAGANI_KBT_TASK, PAGANI_KBT_TASK_RET}, {" in ", PAGANI_KBT_IN, PAGANI_KBT_IN_DONE},
++		{" cand ", PAGANI_KBT_CAND, PAGANI_KBT_CAND_DONE}, {" hw ", PAGANI_KBT_HWKEY, -1},
++		{" ac ", PAGANI_KBT_AC, PAGANI_KBT_AC_DONE}, {" kop ", PAGANI_KBT_KOP, PAGANI_KBT_KOP_DONE},
++	};
++	size_t at = pagani_kbt_head(line, size, s, "sum");
++	for (unsigned i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
++		at = pagani_kbt_put(line, size, at, fields[i].label);
++		at = pagani_kbt_put_u(line, size, at, s->n[fields[i].a]);
++		if (fields[i].b >= 0) {
++			at = pagani_kbt_put(line, size, at, "/");
++			at = pagani_kbt_put_u(line, size, at, s->n[fields[i].b]);
++		}
++	}
++	return at;
++}
++
++/*
++ * The timed pairs of one process, groups with any data only:
++ * "kbt Spotlight[347] lat up 15/120/572/3/1 in 12/4/30/0/0 q1" = group, completed pairs / average ms / largest ms /
++ * pairs >= 100 ms / pairs >= 400 ms, then " q<n>" begins still queued and " l<n>" lost ones when not 0. Numbers saturate
++ * at 99999. Returns 0 (nothing written) when no group has data.
++ */
++static inline size_t
++pagani_kbt_latency(const struct pagani_kbt_slot *s, char *line, size_t size)
++{
++	size_t at = 0;
++	for (unsigned g = 0; g < PAGANI_KBT_LATS; g++) {
++		const struct pagani_kbt_lat *l = &s->lat[g];
++		if (!l->n && !l->queued && !l->lost) {
++			continue;
++		}
++		if (!at) {
++			at = pagani_kbt_head(line, size, s, "lat");
++		}
++		at = pagani_kbt_put(line, size, at, " ");
++		at = pagani_kbt_put(line, size, at, pagani_kbt_lat_names[g]);
++		at = pagani_kbt_put(line, size, at, " ");
++		at = pagani_kbt_put_show(line, size, at, l->n);
++		at = pagani_kbt_put(line, size, at, "/");
++		at = pagani_kbt_put_show(line, size, at, l->n ? l->sum_us / l->n / 1000 : 0);
++		at = pagani_kbt_put(line, size, at, "/");
++		at = pagani_kbt_put_show(line, size, at, l->max_us / 1000);
++		at = pagani_kbt_put(line, size, at, "/");
++		at = pagani_kbt_put_show(line, size, at, l->n100);
++		at = pagani_kbt_put(line, size, at, "/");
++		at = pagani_kbt_put_show(line, size, at, l->n400);
++		if (l->queued) {
++			at = pagani_kbt_put(line, size, at, " q");
++			at = pagani_kbt_put_u(line, size, at, l->queued);
++		}
++		if (l->lost) {
++			at = pagani_kbt_put(line, size, at, " l");
++			at = pagani_kbt_put_show(line, size, at, l->lost);
++		}
++	}
++	if (!at && size) {
++		line[0] = '\0';
++	}
++	return at;
++}
++
++/*
++ * Counts one event of process pid at now_us (microseconds; the "first" lines print milliseconds as version 1 did) and,
++ * for the kinds that begin or end a timed pair, feeds the latency group (arg2: the kbd operation of kop / kop-done).
++ * The first event of each kind in a process is announced at once (returns 1 with "kbt Notes[412] first dn @523411ms" in
++ * line), so the order in which the stages are first reached survives; later events only mark the process dirty for the
++ * next summary (pagani_kbt_take_dirty). Returns 0 when nothing is to be logged now. A process that does not have a slot
++ * takes a free one, else the least recently used one (counted in recycled).
++ */
++static inline int
++pagani_kbt_count(struct pagani_kbt *t, int32_t pid, const char *name, int kind, uint64_t arg2, uint64_t now_us, char *line,
++    size_t size)
++{
++	if (kind < 0 || kind >= PAGANI_KBT_KINDS || pid <= 0) {
++		return 0;
++	}
++	uint64_t now_ms = now_us / 1000;
++	struct pagani_kbt_slot *s = NULL, *victim = NULL;
++	for (unsigned i = 0; i < PAGANI_KBT_SLOTS; i++) {
++		struct pagani_kbt_slot *c = &t->slot[i];
++		if (c->pid == pid) {
++			s = c;
++			break;
++		}
++		if (c->pid == 0) {
++			if (!victim || victim->pid != 0) {
++				victim = c;     /* the first free slot beats any used one */
++			}
++		} else if (!victim || (victim->pid != 0 && c->used_ms < victim->used_ms)) {
++			victim = c;             /* else the least recently used one */
++		}
++	}
++	if (!s) {
++		s = victim;
++		if (s->pid != 0) {
++			t->recycled++;
++		}
++		*s = (struct pagani_kbt_slot){ .pid = pid };
++		for (unsigned i = 0; name && name[i] && i + 1 < sizeof(s->name); i++) {
++			s->name[i] = name[i];
++		}
++	}
++	s->used_ms = now_ms;
++	if (s->n[kind] != UINT32_MAX) {
++		s->n[kind]++;
++	}
++	s->dirty = 1;
++	int end;
++	int g = pagani_kbt_lat_of(kind, arg2, &end);
++	if (g >= 0 && pagani_kbt_lat_note(&s->lat[g], end, now_us)) {
++		s->lat_dirty = 1;
++	}
++	if (s->seen & (1u << kind)) {
++		return 0;
++	}
++	s->seen |= 1u << kind;
++	size_t at = pagani_kbt_head(line, size, s, "first ");
++	at = pagani_kbt_put(line, size, at, pagani_kbt_kind_names[kind]);
++	at = pagani_kbt_put(line, size, at, " @");
++	at = pagani_kbt_put_u(line, size, at, now_ms);
++	(void)pagani_kbt_put(line, size, at, "ms");
++	return 1;
++}
++
++/* The summary of slot i when it changed since its last summary (returns 1 and clears the mark), else 0. */
++static inline int
++pagani_kbt_take_dirty(struct pagani_kbt *t, unsigned i, char *line, size_t size)
++{
++	if (i >= PAGANI_KBT_SLOTS || !t->slot[i].pid || !t->slot[i].dirty) {
++		return 0;
++	}
++	t->slot[i].dirty = 0;
++	pagani_kbt_summary(&t->slot[i], line, size);
++	return 1;
++}
++
++/* The lat line of slot i when its timed pairs changed since its last lat line (returns 1 and clears the mark), else 0. */
++static inline int
++pagani_kbt_take_lat(struct pagani_kbt *t, unsigned i, char *line, size_t size)
++{
++	if (i >= PAGANI_KBT_SLOTS || !t->slot[i].pid || !t->slot[i].lat_dirty) {
++		return 0;
++	}
++	t->slot[i].lat_dirty = 0;
++	return pagani_kbt_latency(&t->slot[i], line, size) != 0;
++}
++
++#endif /* PAGANI_KBTRACE_H */

@@ -117,6 +117,17 @@ jobs:
           python3 scripts/check-turnip-submit-backpressure.py --output "$UNIXNU_OUTDIR/logs/submit-pressure"
           python3 ../UniXNU-Pagani_SM8750/scripts/test-stage7.py --tree "$UNIXNU_TREE"
           python3 ../UniXNU-Pagani_SM8750/scripts/test-peripherals.py --tree "$UNIXNU_TREE"
+          python3 ../UniXNU-Pagani_SM8750/scripts/prepare-pagani-gpu-inputs.py \
+            --live-dtb ../UniXNU-Pagani_SM8750/sysinfo/live.dtb --soc ../UniXNU-sm8750-common --check
+          python3 "$UNIXNU_TREE/drivers/PaganiArmDTPlatform/Test/check-platform-host.py" --no-mutants
+          c++ -std=c++17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+            "$UNIXNU_TREE/drivers/PaganiArmCpu/Test/scmi-perf.cpp" -o /tmp/scmi-perf-test
+          /tmp/scmi-perf-test
+          for driver in battery haptics speaker bt wifi torch camera; do
+            directory=$(python3 -c 'import sys; print("Pagani" + sys.argv[1].capitalize())' "$driver")
+            python3 "$UNIXNU_TREE/drivers/$directory/Test/check-pagani-$driver-host.py"
+          done
+          python3 "$UNIXNU_TREE/drivers/PaganiAdsp/Test/check-pagani-adsp-host.py" --adreno830 "$UNIXNU_TREE/drivers/Adreno830"
           cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
             -I "$UNIXNU_TREE/drivers/PaganiDarwinBoot/DarwinBootPkg/Driver" \
             "$UNIXNU_TREE/drivers/BootProgress/Test/console.c" -o /tmp/boot-progress-test
@@ -147,6 +158,16 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           ./unixnu kernel -j 3 2>&1 | tee "$UNIXNU_OUTDIR/logs/kernel.log"
+      - name: Check the integrated A830 driver against host peers and XNU records
+        if: ${{ inputs.reuse_run_id == '' }}
+        working-directory: source/UniXNU
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+        run: |
+          python3 "$UNIXNU_TREE/drivers/Adreno830/tests/run-host-tests.py" \
+            --unixnu "$PWD" --tree "$UNIXNU_TREE" --out "$UNIXNU_TREE/build/a830-host-tests" \
+            --firmware ../UniXNU-Pagani_SM8750/.cache/firmware/pkx110-gpu \
+            --pins ../UniXNU-Pagani_SM8750/scripts/data/sm8750-gpu-inputs.json
       - name: Download the matching kernel and base Data
         id: reuse
         if: ${{ inputs.reuse_run_id != '' }}

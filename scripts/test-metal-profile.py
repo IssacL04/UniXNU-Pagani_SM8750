@@ -24,7 +24,7 @@ with tempfile.TemporaryDirectory(prefix='pagani-metal-profile-') as directory:
     prepare(profile, SOC)
     prepare(profile, SOC)
     board = tomllib.loads((profile / 'board.toml').read_text())
-    assert board['kernel']['archives'].count('component:Adreno740') == 1
+    assert board['kernel']['archives'].count('component:Adreno830') == 1
     assert 'com.apple.iokit.IOGPUFamily' in board['kernel']['prelink']['roots']
     assert 'pagani-gpu=1' in board['payload']['kernel_args']
     assert board['payload']['kernel_args'].count('sheng-vsync=120') == 1
@@ -45,9 +45,17 @@ with tempfile.TemporaryDirectory(prefix='pagani-metal-profile-') as directory:
     assert modules[('driver', 'PaganiPanel')].path == (ROOT.parent / 'UniXNU-Pagani-Drivers/drivers/PaganiPanel').resolve()
     plan = archive_plan(context)
     components = [entry['id'] for kind, entry in plan if kind == 'component']
-    assert components.count('Adreno740') == 1
-    assert components.index('Adreno740') > components.index('NativeMobileDisplay')
-    assert not any(kind == 'script' and entry.startswith('build-pagani-gpu') for kind, entry in plan)
+    assert components.count('Adreno830') == 1
+    assert components.index('Adreno830') > components.index('NativeMobileDisplay')
+    assert any(kind == 'script' and entry.startswith('build-pagani-gpu') for kind, entry in plan)
+    assert 'Adreno740' not in board['components']['include']
+    assert {'PaganiAdsp', 'PaganiAudio', 'PaganiBattery', 'PaganiHaptics', 'PaganiSensors',
+            'PaganiSpeaker', 'PaganiWifi', 'PaganiBt', 'PaganiCamera', 'PaganiTorch'} <= set(components)
+    assert board['userdata'] == tomllib.loads(baseline['board.toml'].decode())['userdata']
+    assert 'pagani-battery=1' in board['payload']['kernel_args']
+    assert 'pagani-cpufreq=2' in board['payload']['kernel_args']
+    for prefix in ('pagani-adsp=', 'pagani-wifi=', 'pagani-bt=', 'pagani-haptics=', 'pagani-cam=', 'pagani-fb-flip='):
+        assert not any(arg.startswith(prefix) for arg in board['payload']['kernel_args'])
     assert all((ROOT / name).read_bytes() == data for name, data in baseline.items())
     checkout = runpy.run_path(str(ROOT / 'scripts/build-metal-userspace.py'))['checkout']
     source = out / 'source'

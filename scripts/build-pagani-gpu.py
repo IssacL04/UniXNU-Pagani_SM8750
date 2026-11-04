@@ -1,105 +1,159 @@
 #!/usr/bin/env python3
-"""Build the A830 board/backend archive from the prepared XNU compilation records."""
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+"""Append the OnePlus 13T board glue and the pinned gen80000 firmware to build/adreno830/libAdreno830.a.
+
+Runs in the tree after the Adreno830 component recipe (board.toml [kernel] archives; ARCHITECTURE 7.1.3). It compiles
+kits/oneplus13t/PaganiGpuBoard.cpp (the strong pagani_gpu_start over Stage7Probe's weak default) with the kernel's own
+compile record, and embeds the four images as strong definitions over the driver's weak zero-length defaults, each
+page aligned and only after its length and SHA-256 match scripts/data/sm8750-gpu-inputs.json. The firmware is read
+from the ignored .cache/firmware/pkx110-gpu and never enters Git. --no-firmware links the glue alone (CI without the
+vendor files); the driver then refuses to start in S0.
+"""
 import argparse
 import hashlib
 import json
-from pathlib import Path
-import runpy
+import re
+import struct
 import subprocess
-import sys
-import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]   # the build tree (scripts are copied into it)
+RECORD = ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/iokit/DEVELOPMENT/IOPlatformExpert.cpo.json'
+ARCHIVE = ROOT / 'build/adreno830/libAdreno830.a'
+OUT = ROOT / 'build/pagani-gpu'
+PINS = ROOT / 'scripts/data/sm8750-gpu-inputs.json'
+# Same policy as the driver (Adreno830 scripts/build-adreno830.py); no warning is accepted.
+WARNINGS = ['-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-Wno-c99-designator', '-Wno-reorder-init-list',
+            '-Wno-deprecated-enum-enum-conversion', '-Wno-unnecessary-virtual-specifier', '-Wno-sign-conversion',
+            '-Wno-shorten-64-to-32']
+HEADER_NAMES = {'native_adreno_firmware_image': 'GMU', 'native_adreno_sqe_firmware_image': 'SQE',
+                'native_adreno_aqe_firmware_image': 'AQE', 'native_adreno_zap_image': 'ZAP'}
 
 
-def build(tree, kernelcache):
-    board = (tree / 'kits/oneplus13t').resolve()
-    device = board.parent
-    sys.path.insert(0, str(tree / 'scripts'))
-    sys.path.insert(0, str(tree / 'kits/NativePrelink'))
-    from original_stage7 import OriginalImage
-    original = OriginalImage(kernelcache)
-    abi = json.loads((tree / 'scripts/data/ioaccelerator-base-abi.json').read_text())
-    original.family_text('com.apple.iokit.IOGPUFamily', abi['original_iogpu_text_sha256'])
-    for address, digest in abi['original_entry_sha256'].items():
-        if hashlib.sha256(original.read(int(address, 16), 32)).hexdigest() != digest:
-            raise ValueError('IOAcceleratorES original entry differs: ' + address)
-    records = tree / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837'
-    recipes = {}
-    for suffix, name in (('.c', 'bsd/DEVELOPMENT/bsd_init.o.json'),
-                         ('.cpp', 'iokit/DEVELOPMENT/IOPlatformExpert.cpo.json')):
-        path = records / name
-        if not path.is_file():
-            raise ValueError('Prepare the production XNU compile records first: ' + str(path))
-        recipes[suffix] = json.loads(path.read_text().strip().rstrip(','))
-    subprocess.run([sys.executable, device / 'scripts/prepare-gpu-opps.py', '--check'], check=True)
-    out = tree / 'build/adreno740'
-    out.mkdir(parents=True, exist_ok=True)
-    subprocess.run([sys.executable, device / 'scripts/prepare-gpu-firmware.py', '--output', out / 'firmware'], check=True)
-    compile_command = runpy.run_path(str(tree / 'scripts/build-arm-platform.py'))['compile_command']
-    check_object = runpy.run_path(str(device / 'scripts/build-gmu.py'))['check_object']
-    gpu, soc = tree / 'drivers/Adreno740', tree / 'kits/Sm8750Platform'
-    firmware, pm4, smmu = [tree / 'kits' / name for name in ('AdrenoFirmware', 'AdrenoPM4', 'ArmSmmu4K')]
-    sources = [gpu / ('NativeAdreno' + name + '.cpp') for name in (
-        'A830HwInit', 'CpInit', 'Cpu', 'GmuContext', 'GmuMemory', 'GpuContext', 'Irq', 'Memory',
-        'Publish', 'Pwrup', 'Preempt', 'Ring', 'Sha256', 'SmmuContext', 'SmmuMemory', 'Submit', 'Timer', 'UserClient', 'Vm')]
-    sources += [soc / name for name in ('Sm8750Gmu.c', 'Sm8750GmuCommandDb.c', 'Sm8750GpuPower.c',
-                                       'Sm8750GpuZap.c', 'Sm8750SocInfo.c', 'Sm8750GpuSmmu.c')]
-    sources += [firmware / name for name in ('AdrenoFirmware.c', 'AdrenoHfi.c', 'AdrenoHfiStartup.c', 'AdrenoHfiVotes.c')]
-    sources += sorted(smmu.glob('ArmSmmu4K*.c'))
-    sources += [pm4 / 'AdrenoPM4.c', board / 'PaganiGpuVotes.c', board / 'PaganiGpu.cpp', board / 'PaganiGpuTrace.cpp']
-    source_hash = hashlib.sha256()
-    for path in sorted(set(sources) | set(gpu.glob('*.h')) | set(gpu.glob('*.inc'))):
-        source_hash.update(path.name.encode() + b'\0' + path.read_bytes())
-    build_id = '0x' + source_hash.hexdigest()[:16] + 'ULL'
-    includes = [gpu, soc, firmware, pm4, smmu, board, out / 'firmware', tree / '.cache/xnu-work/osfmk',
-                tree / 'drivers/BootProgress']
-    with tempfile.TemporaryDirectory(prefix='a830-', dir=out) as directory:
-        work = Path(directory)
-        objects = []
-        failures = []
-        for source in sources:
-            record = recipes[source.suffix]
-            obj = work / (source.stem + '.o')
-            args = iter(compile_command(record, source, obj)); command = []
-            for value in args:
-                if value == '-Xclang':
-                    option = next(args)
-                    if not option.startswith('-W'):
-                        command += [value, option]
-                elif not value.startswith('-W'):
-                    command.append(value)
-            command += ['-mgeneral-regs-only', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter',
-                        '-DNATIVE_GPU_BUILD_ID=' + build_id,
-                        '-Wno-c99-designator', '-Wno-reorder-init-list', '-Wno-deprecated-enum-enum-conversion']
-            for include in includes:
-                command += ['-I', str(include)]
-            if subprocess.run(command, cwd=record['directory']).returncode:
-                failures.append(source.name)
-                continue
-            check_object(obj)
-            objects.append(obj)
-        if failures:
-            raise ValueError('A830 compilation failed: ' + ', '.join(failures))
-        obj = work / 'firmware.o'
-        subprocess.run(['xcrun', 'clang', '-target', 'arm64-apple-ios17.0', '-c', out / 'firmware/firmware.S', '-o', obj], check=True)
-        check_object(obj); objects.append(obj)
-        archive = work / 'libAdreno740.a'
-        subprocess.run(['xcrun', 'ar', 'rcs', archive, *objects], check=True)
-        archive.replace(out / archive.name)
-    # Reuses the qualified original base ABI; the initializer is explicitly staged.
-    subprocess.run([sys.executable, tree / 'scripts/build-adreno740-accelerator.py'], check=True)
-    defined = subprocess.check_output(['xcrun', 'nm', '-g', out / 'libAdreno740.a'], text=True)
-    for name in ('pagani_gpu_start', 'Sm8750GmuColdStart', 'native_adreno_publish', 'native_adreno_accelerator_allocate'):
-        if ' T _' + name not in defined:
-            raise ValueError('Required archive definition absent: ' + name)
-    print('PASS: A830 board/backend and staged accelerator compiled; device execution remains untested')
+def fail(message):
+    raise SystemExit('build-pagani-gpu: ' + message)
+
+
+def pins_header(pins):
+    """PaganiGpuFirmwarePins.h: the SHA-256 pins the driver checks at boot (S0), embedded or not."""
+    header = ['// Generated by scripts/build-pagani-gpu.py from scripts/data/sm8750-gpu-inputs.json.', '#pragma once',
+              '#include <stdint.h>']
+    for name, entry in pins['files'].items():
+        digest = bytes.fromhex(entry['sha256'])
+        header.append(f'inline constexpr uint8_t PAGANI_GPU_FW_{HEADER_NAMES[entry["symbol"]]}_SHA256[32]={{'
+                      + ','.join(f'{b:#04x}' for b in digest) + f'}};  // {name}, {entry["bytes"]} bytes')
+    return '\n'.join(header) + '\n'
+
+
+def firmware_assembly(pins, directory, section):
+    """Page-aligned .incbin of each pinned image with its _size word; refuses a missing or different file."""
+    assembly, embedded = ['// Generated by scripts/build-pagani-gpu.py: the pinned gen80000 images, page aligned.',
+                          f'.section {section}'], {}
+    for name, entry in pins['files'].items():
+        path = directory / name
+        data = path.read_bytes() if path.is_file() else b''
+        if len(data) != entry['bytes'] or sha(data) != entry['sha256']:
+            fail(f'{path} is missing or does not match its pin ({entry["bytes"]} bytes, sha256 {entry["sha256"]}); '
+                 'copy the PKX110 vendor firmware there, or build with --no-firmware')
+        label = '_' + entry['symbol']
+        assembly += ['.p2align 12', f'.globl {label}', f'{label}:', f'.incbin {json.dumps(str(path.resolve()))}',
+                     f'{label}_end:', '.p2align 3', f'.globl {label}_size', f'{label}_size:', f'.quad {label}_end-{label}']
+        embedded[name] = {'bytes': len(data), 'sha256': entry['sha256'], 'symbol': entry['symbol']}
+    return '\n'.join(assembly) + '\n', embedded
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def compile_board(record, source, obj):
+    arguments, command, i = record['arguments'], [], 0
+    while i < len(arguments):
+        value = arguments[i]
+        if value == record['file']:
+            command.append(str(source))
+        elif value == '-o':
+            command += ['-o', str(obj)]
+            i += 1
+        elif value in ('-MF', '-MJ', '-MT', '-MQ'):
+            i += 1
+        elif value == '-Xclang' and i + 1 < len(arguments) and arguments[i + 1].startswith('-W'):
+            i += 1
+        elif not value.startswith('-W') and value not in ('-MD', '-MP', '-MMD'):
+            command.append(value)
+        i += 1
+    command += ['-I', str(ROOT / 'kits/oneplus13t'), '-I', str(ROOT / 'drivers/Adreno830'), '-I', str(ROOT / 'kits/Sm8750Platform'),
+                '-I', str(OUT), '-I', str(ROOT / '.cache/xnu-work/osfmk'), *WARNINGS]
+    obj.unlink(missing_ok=True)
+    result = subprocess.run(command, cwd=record['directory'], capture_output=True, text=True)
+    output = (result.stdout + result.stderr).strip()
+    if result.returncode or 'warning:' in output:
+        fail(f'{source}:\n{output[-4000:]}')
+    data = obj.read_bytes()
+    if struct.unpack_from('<4I', data)[:4] != (0xfeedfacf, 0x100000c, 0, 1):
+        fail(f'{obj}: not an ARM64 Mach-O object')
+
+
+def symbols(path):
+    output = subprocess.run(['xcrun', 'nm', '-m', str(path)], check=True, capture_output=True, text=True).stdout
+    defined = {}
+    for line in output.splitlines():
+        match = re.search(r'\((?:__\w+,[^)]+|absolute)\) (weak )?(?:private )?external (?:\[[^\]]*\] )*(\S+)', line)
+        if match:
+            name, kind = match.group(2), 'weak' if match.group(1) else 'strong'
+            defined[name] = 'strong' if defined.get(name) == 'strong' else kind
+    return defined
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--no-firmware', action='store_true', help='link the board glue without the vendor firmware')
+    args = parser.parse_args()
+    if not ARCHIVE.is_file():
+        fail(f'{ARCHIVE} missing; list "component:Adreno830" before this script in [kernel] archives')
+    if not RECORD.is_file():
+        fail(f'{RECORD} missing; run the XNU bootstrap pass first')
+    record = json.loads(RECORD.read_text().strip().rstrip(','))
+    pins = json.loads(PINS.read_text())['firmware']
+    directory = ROOT / pins['directory']
+    OUT.mkdir(parents=True, exist_ok=True)
+
+    (OUT / 'PaganiGpuFirmwarePins.h').write_text(pins_header(pins))
+
+    objects, embedded = [], {}
+    board = OUT / 'PaganiGpuBoard.o'
+    compile_board(record, ROOT / 'kits/oneplus13t/PaganiGpuBoard.cpp', board)
+    objects.append(board)
+    trace = OUT / 'PaganiGpuTrace.o'
+    compile_board(record, ROOT / 'kits/oneplus13t/PaganiGpuTrace.cpp', trace)
+    objects.append(trace)
+    if not args.no_firmware:
+        assembly, embedded = firmware_assembly(pins, directory, '__DATA_CONST,__const')
+        source = OUT / 'firmware.S'
+        source.write_text(assembly)
+        firmware = OUT / 'firmware.o'
+        subprocess.run(['xcrun', 'clang', '-target', 'arm64-apple-ios17.0', '-Wno-incompatible-sysroot', '-c', str(source),
+                        '-o', str(firmware)], check=True)
+        objects.append(firmware)
+    subprocess.run(['xcrun', 'ar', 'rcs', str(ARCHIVE), *map(str, objects)], check=True)
+
+    defined = symbols(ARCHIVE)
+    problems = [] if defined.get('_pagani_gpu_start') == 'strong' else ['_pagani_gpu_start must be a strong definition']
+    for entry in pins['files'].values():
+        for name in ('_' + entry['symbol'], '_' + entry['symbol'] + '_size'):
+            wanted = 'weak' if args.no_firmware else 'strong'
+            if defined.get(name) != wanted:
+                problems.append(f'{name} is {defined.get(name, "undefined")}, expected {wanted}')
+    if problems:
+        fail('archive check failed:\n  ' + '\n  '.join(problems))
+    report = {'archive': str(ARCHIVE.relative_to(ROOT)), 'archive_sha256': sha(ARCHIVE.read_bytes()),
+              'board_source_sha256': sha((ROOT / 'kits/oneplus13t/PaganiGpuBoard.cpp').read_bytes()),
+              'inputs_header_sha256': sha((ROOT / 'kits/oneplus13t/PaganiGpuInputs.h').read_bytes()),
+              'firmware': embedded, 'no_firmware': args.no_firmware}
+    (OUT / 'build-report.json').write_text(json.dumps(report, indent=2) + '\n')
+    what = 'no firmware (S0 refuses to start)' if args.no_firmware else f'{len(embedded)} pinned firmware images'
+    print(f'PASS: PaganiGpuBoard (strong pagani_gpu_start) and {what} appended to {ARCHIVE.relative_to(ROOT)}')
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--tree', type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument('--kernelcache', type=Path, required=True)
-    args = parser.parse_args()
-    try:
-        build(args.tree.resolve(), args.kernelcache.resolve())
-    except (OSError, ValueError) as error:
-        parser.exit(1, str(error) + '\n')
+    main()

@@ -99,6 +99,132 @@ int main(){
     subprocess.run([str(binary)], check=True, env=dict(os.environ, ASAN_OPTIONS='detect_leaks=0'))
 
 
+def check_solid_state(tree, work):
+    """The actual declaration of both block drivers against what the storage stack does with it: IOBlockStorageDriver::handleStart reads the
+    property of its provider when registerService matches it, DKIOCISSOLIDSTATE walks up from the media, and that answer picks the throttle table."""
+    def function(text, head):
+        at = text.index(head)
+        return text[at:text.index('\n}\n', at) + 3]
+    ufs = (tree / 'drivers/NativeUfs/NativeUfs.cpp').read_text()
+    ram = (tree / 'drivers/NativeRamBlock/NativeRamBlock.cpp').read_text()
+    ufs_declare = function(ufs, 'static void declareSolidState (IOService *device)')
+    ufs_start = function(ufs, 'bool NativeUfsBlock::start (IOService *provider)')
+    ram_declare = function(ram, 'static void declareSolidState(IOService *device)')
+    ram_start = function(ram, 'bool NativeRamBlock::start(IOService *provider)')
+    # Both before the one call that lets the driver match; the RAM start is too long a function for the harness.
+    for start, declare in ((ufs_start, 'declareSolidState (this);\n  registerService ();'), (ram_start, 'declareSolidState(this);\n  registerService();')):
+        assert start.count('registerService') == 1 and declare in start, start
+    assert '<IOKit/storage/IOStorageDeviceCharacteristics.h>' in ufs and '<IOKit/storage/IOStorageDeviceCharacteristics.h>' in ram
+    header = tree / 'build/storage-abi/include/IOKit/storage/IOStorageDeviceCharacteristics.h'
+    if header.exists():
+        for key, value in (('kIOPropertyDeviceCharacteristicsKey', 'Device Characteristics'), ('kIOPropertyMediumTypeKey', 'Medium Type'),
+                           ('kIOPropertyMediumTypeSolidStateKey', 'Solid State')):
+            assert re.search(r'#define\s+' + key + r'\s+"' + value + '"', header.read_text()), key
+    harness = r'''
+#include <cassert>
+#include <cstring>
+#include <map>
+#include <string>
+#define kIOPropertyDeviceCharacteristicsKey "Device Characteristics"
+#define kIOPropertyMediumTypeKey "Medium Type"
+#define kIOPropertyMediumTypeSolidStateKey "Solid State"
+#define OSSafeReleaseNULL(object) do { if (object) (object)->release(); (object) = nullptr; } while (0)
+static int live, failDictionary, failString, failSet;
+struct OSObject {
+  int count = 1; virtual ~OSObject() {}
+  OSObject() { ++live; }
+  void retain() { ++count; }
+  void release() { if (!--count) { --live; delete this; } }
+};
+struct OSString : OSObject {
+  std::string text;
+  static OSString *withCString(const char *value) { if (failString) return nullptr; auto *s = new OSString; s->text = value; return s; }
+};
+struct OSDictionary : OSObject {
+  std::map<std::string, OSObject *> entries;
+  ~OSDictionary() { for (auto &entry : entries) entry.second->release(); }
+  static OSDictionary *withCapacity(unsigned) { return failDictionary ? nullptr : new OSDictionary; }
+  bool setObject(const char *key, OSObject *value) { if (failSet) return false; value->retain(); entries[key] = value; return true; }
+  OSObject *getObject(const char *key) { auto at = entries.find(key); return at == entries.end() ? nullptr : at->second; }
+};
+struct IOService {
+  std::map<std::string, OSObject *> properties;
+  IOService *parent = nullptr;
+  virtual ~IOService() { for (auto &entry : properties) entry.second->release(); }
+  void setProperty(const char *key, OSObject *value) { value->retain(); properties[key] = value; }
+  OSObject *getProperty(const char *key) { auto at = properties.find(key); return at == properties.end() ? nullptr : at->second; }
+  // getProperty(key, gIOServicePlane): this entry, then up the providers.
+  OSObject *searchProperty(const char *key) { for (IOService *entry = this; entry; entry = entry->parent) if (OSObject *found = entry->getProperty(key)) return found; return nullptr; }
+  bool start(IOService *provider) { parent = provider; return true; }
+};
+static bool characteristicsSolidState(OSObject *object)
+{
+  auto *dictionary = dynamic_cast<OSDictionary *>(object);
+  auto *string = dictionary ? dynamic_cast<OSString *>(dictionary->getObject(kIOPropertyMediumTypeKey)) : nullptr;
+  return string && string->text == kIOPropertyMediumTypeSolidStateKey;
+}
+// IOBlockStorageDriver::handleStart, from registerService's matching: the provider's own property, nothing below or above it.
+static bool driverSolidState;
+struct IOBlockStorageDevice : IOService {
+  void registerService() { driverSolidState = characteristicsSolidState(getProperty(kIOPropertyDeviceCharacteristicsKey)); }
+};
+struct NativeUfsBlock : IOBlockStorageDevice {
+  bool online = false; void *bounce = this, *windowLock = this;
+  bool start(IOService *provider);
+};
+// spec_vnops.c: throttle_init_throttle_period, tier 2 (background QoS) in ms; 85 is the rhythm the logs show.
+static int tier2Period(int isssd) { return isssd ? 15 : 85; }
+'''
+    harness += ufs_declare.replace('declareSolidState', 'ufsDeclare') + ram_declare.replace('declareSolidState', 'ramDeclare')
+    harness += '#define declareSolidState ufsDeclare\n' + ufs_start + '#undef declareSolidState\n'
+    harness += r'''
+// An APFS volume: IOMedia on the container on the partition on the whole disk on the driver on the device.
+static int isSolidState(IOService *device)
+{
+  static IOService driver, whole, partition, container, volume;
+  driver.parent = device; whole.parent = &driver; partition.parent = &whole; container.parent = &partition; volume.parent = &container;
+  return characteristicsSolidState(volume.searchProperty(kIOPropertyDeviceCharacteristicsKey));
+}
+static void ufs(int expected)
+{
+  {
+    IOService owner; NativeUfsBlock block;
+    driverSolidState = !expected;
+    assert(block.start(&owner) && block.online);
+    assert(driverSolidState == !!expected);
+    assert(isSolidState(&block) == expected);
+    assert(tier2Period(isSolidState(&block)) == (expected ? 15 : 85));
+  }
+  assert(live == 0);
+}
+static void ram(int expected)
+{
+  {
+    IOBlockStorageDevice device;
+    ramDeclare(&device);
+    device.registerService();
+    assert(driverSolidState == !!expected && isSolidState(&device) == expected);
+  }
+  assert(live == 0);
+}
+int main()
+{
+  ufs(1); ram(1);
+  // No memory for the property: the device still comes up, as a disk, as it did before.
+  failDictionary = 1; ufs(0); ram(0); failDictionary = 0;
+  failString = 1; ufs(0); ram(0); failString = 0;
+  failSet = 1; ufs(0); ram(0); failSet = 0;
+}
+'''
+    path = work / 'solid-state.cpp'
+    path.write_text(harness)
+    binary = work / 'solid-state'
+    subprocess.run([os.environ.get('CXX', 'c++'), '-std=c++17', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-Wno-overloaded-virtual',
+                    '-fsanitize=address,undefined', str(path), '-o', str(binary)], check=True)
+    subprocess.run([str(binary)], check=True, env=dict(os.environ, ASAN_OPTIONS='detect_leaks=0'))  # `live` counts them
+    print('PASS: both block drivers declare solid state before registerService; the throttle table follows')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--tree', type=Path, required=True)
@@ -124,9 +250,9 @@ def main():
         work = Path(directory)
         raw = work / 'source.raw'
         raw.write_bytes(bytes(4096))
-        ctx = SimpleNamespace(work=work, board={'userdata': {'partition': 'unixnu', 'first_lba': 44928768,
+        ctx = SimpleNamespace(work=work, args=SimpleNamespace(object=[]), board={'userdata': {'partition': 'unixnu', 'first_lba': 44928768,
             'last_lba': 61705983, 'windows': [{'name': 'OS', 'component': 'OS'}, {'name': 'SystemOS', 'component': 'Cryptex1,SystemOS'}]}})
-        source = SimpleNamespace(remote=False, extract=lambda _: raw)
+        source = SimpleNamespace(remote=False, member=lambda _: None, disk_image=lambda _: raw)
         with patch.object(userdata, 'tool'), patch.object(userdata, 'Ipsw', return_value=source), \
                 patch.object(userdata, 'image_size', return_value=4096), patch.object(userdata, 'attach', return_value=str(raw)), \
                 patch.object(userdata.subprocess, 'run'):
@@ -141,6 +267,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='stage6-') as directory:
         check_arm64_asm(device, tree, Path(directory))
         check_gpu_addon(tree, Path(directory))
+        check_solid_state(tree, Path(directory))
         for name in ('Sm8750', 'LunDiscovery', 'RootCommands', 'RootDiagnostics', 'RootLayout', 'SmmuTakeover', 'RootWindowRead', 'TransferPoll'):
             binary = Path(directory) / name
             command = [os.environ.get('CXX', 'c++'), '-std=c++17', '-Wall', '-Wextra', '-Werror',

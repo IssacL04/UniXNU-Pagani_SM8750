@@ -1,0 +1,37 @@
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -7235,6 +7235,9 @@
+ volatile int native_gpu_addon4_status = -1;
+ volatile int native_gpu_addon5_stage = 0;
+ volatile int native_gpu_addon5_status = -1;
++/* The OnePlus 13T audio overlay (pagani-audio-addon-mount.patch): stage and status, as for the addons above. */
++volatile int native_audio_addon_stage = 0;
++volatile int native_audio_addon_status = -1;
+ /* BootProgress's ramoops trace (U lines), on boards that link it. */
+ extern void boot_progress_trace(const char *text) __attribute__((weak_import));
+ static void
+@@ -7721,6 +7724,24 @@
+ 		    native_gpu_addon4_status, native_gpu_addon5_stage, native_gpu_addon5_status);
+ 		boot_progress_trace(line);
+ 	}
++	/* The OnePlus 13T audio server plug-in (PaganiAudio.driver, UniXNU-Pagani-Drivers drivers/PaganiAudio) beside the system's: the
++	 * audio server (audiomxd) loads every driver bundle in /System/Library/Audio/Plug-Ins/HAL. The owner overlay /private/var/ngpu/audio
++	 * (drivers/PaganiAudio/scripts/add-pagani-audio-data.py) is shown over the directory like the overlays above, only with boot-arg
++	 * pagani-audio (the kernel service the plug-in opens runs only then). Its mount arguments take scratch 0xe40..0xf58, clear of every
++	 * other use of the page. Stage 5 status 0: mounted with the system's BuiltinAudioPlugin.driver and the owner's plug-in visible;
++	 * stage 1: no source directory (a Data seed without the plug-in). */
++	uint32_t audio_enabled = 0;
++	if (PE_parse_boot_argn("pagani-audio", &audio_enabled, sizeof(audio_enabled)) && audio_enabled) {
++		static const char audio_source[] = "/private/var/ngpu/audio", audio_point[] = "/System/Library/Audio/Plug-Ins/HAL";
++		native_gpu_addon_mount(p, scratch, 0xe40, audio_source, sizeof(audio_source), audio_point, sizeof(audio_point),
++		    "/System/Library/Audio/Plug-Ins/HAL/BuiltinAudioPlugin.driver", "/System/Library/Audio/Plug-Ins/HAL/PaganiAudio.driver/Info.plist",
++		    &native_audio_addon_stage, &native_audio_addon_status);
++		if (boot_progress_trace) {
++			char line[64];
++			snprintf(line, sizeof(line), "overlay audio stage %d status %d", native_audio_addon_stage, native_audio_addon_status);
++			boot_progress_trace(line);
++		}
++	}
+ 	native_cryptex_os_view(p, scratch);
+ 	native_gestalt_cache_drop(p, scratch);
+ 	native_ls_store_drop(p, scratch);

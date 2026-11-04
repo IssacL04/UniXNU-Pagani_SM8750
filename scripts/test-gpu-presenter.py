@@ -9,10 +9,11 @@ ROOT = Path(__file__).resolve().parents[1]
 DRIVERS = ROOT.parent / 'UniXNU-Pagani-Drivers/drivers'
 presenter = (DRIVERS / 'NativeMobileDisplay/NativeGOPPresenter.cpp').read_text()
 fields = presenter.split('    IOMemoryMap *mapping=nullptr;', 1)[1].split('public:', 1)[0]
+cache = 'void NativeGOPPresenter::dropFrames()' + presenter.split('void NativeGOPPresenter::dropFrames()', 1)[1].split('IOReturn NativeGOPPresenter::transfer(', 1)[0]
 methods = presenter.split('bool NativeGOPPresenter::offer(', 1)[1].split('extern "C" void native_gop_presenter_set_source', 1)[0]
 handoff = 'IOReturn NativeGOPPresenter::handoffCall(' + presenter.split('IOReturn NativeGOPPresenter::handoffCall(', 1)[1].split('IOMemoryDescriptor *NativeGOPPresenter::handoffMemory()', 1)[0]
 board = (DRIVERS / 'Stage7Probe/Stage7Probe.cpp').read_text()
-startup = board.split('static void startGpuPresenter(', 1)[1].split('static bool console(', 1)[0]
+startup = board.split('static void startPresenter(', 1)[1].split('static bool console(', 1)[0]
 source = r'''
 #include <cassert>
 #include <cstdint>
@@ -22,6 +23,8 @@ source = r'''
 #include <vector>
 #include <initializer_list>
 #include "NativeGOPWire.h"
+#include "NativeGOPMappingCache.h"
+#include "../BootProgress/PeripheralStatus.h"
 #define NATIVE_GPU_TRACE_OPTIONAL
 #include "NativeGpuTrace.h"
 static void *IOMalloc(size_t n) {return malloc(n);}
@@ -39,16 +42,19 @@ extern "C" int native_gpu_pixel_put(const NativeGpuPixelPiece *p,uint32_t pid) {
     pixelBytes.insert(pixelBytes.end(),p->data,p->data+p->bytes);return 0;
 }
 using IOReturn=int;
-using task_t=void *;
+struct task {};
+using task_t=task *;
+struct OSObject {};
 constexpr task_t TASK_NULL=nullptr;
 constexpr int kIOReturnSuccess=0,kIOReturnUnsupported=1,kIOReturnBadArgument=2,kIOReturnBusy=3,
     kIOReturnTimeout=4,kIOReturnNotReady=5,kIOReturnNoMemory=6,kIOReturnAborted=7;
 constexpr int kMillisecondScale=1,THREAD_ABORTSAFE=0,THREAD_AWAKENED=1,kIOMapAnywhere=1;
 static unsigned taskRefs,doneCalls;
 static int doneStatus;
-static bool mapFails,preserved;
-static void native_legacy_overlay_rows(uint32_t *first,uint32_t *rows) {*first=4;*rows=12;}
-static void native_legacy_overlay_preserve(int value) {preserved=value;}
+static bool mapFails;
+int boot_progress_gpu_band(unsigned *first,unsigned *last) {*first=4;*last=16;return 1;}
+static void native_legacy_frame_stage(unsigned,uint64_t){}
+static void native_legacy_display_event(unsigned){}
 static void task_reference(task_t t) {assert(t);++taskRefs;}
 static void task_deallocate(task_t t) {assert(t && taskRefs);--taskRefs;}
 static uint64_t ticks=10;
@@ -84,31 +90,36 @@ struct IOMemoryDescriptor {
 static uint64_t native_gop_gpu_offers,native_gop_gpu_completions,native_gop_gpu_failures,native_gop_gpu_abandoned;
 static uint64_t native_gop_gpu_last_ns,native_gop_gpu_maps,native_gop_gpu_map_hits;
 static uint32_t native_gop_gpu_timing_us[6]={0,0,0,0,0,UINT32_MAX};
-static uint64_t native_gop_wait_stats[7];
-static void native_legacy_gpu_complete(void *p,int status) {assert(p);++doneCalls;doneStatus=status;}
+static uint64_t native_gop_wait_stats[7],native_gop_map_stats[8];
+static void native_legacy_gpu_complete_timed(void *p,int status,uint64_t,uint64_t) {assert(p);++doneCalls;doneStatus=status;}
 class NativeGOPPresenter {
 public:
     IOMemoryMap *mapping=nullptr;
 ''' + fields + r'''
-    bool offer(void *,IOMemoryDescriptor *,uint64_t,uint32_t,uint32_t);
+    bool offer(void *,IOMemoryDescriptor *,uint64_t,uint32_t,uint32_t,OSObject *surface=nullptr,uint64_t targetOffset=0);
+    uint32_t cacheMapping(task_t,OSObject *,IOMemoryDescriptor *,IOMemoryMap **);
+    static void handoffClosed(task_t);
     static IOReturn handoffCall(uint32_t,task_t,const void *,size_t,void *,size_t);
 };
 static NativeGOPPresenter *gHandoff;
+''' + cache + r'''
 bool NativeGOPPresenter::offer(''' + methods + handoff + r'''
 static void lifecycle() {
     IOLock lock;
-    NativeGOPPresenter p;p.gate=&lock;p.online=true;p.gpuMode=true;
+    NativeGOPPresenter p;p.gate=&lock;IOLock frameLock;p.framesLock=&frameLock;p.scanoutBytes=3*16384;p.online=true;p.gpuMode=true;
     gHandoff=&p;
     p.mode={NGP_VERSION,NGP_BGRX8888,64,64,256,16384};
     IOMemoryDescriptor frame,failedFrame;
-    task_t first=reinterpret_cast<void *>(1),other=reinterpret_cast<void *>(2);
+    task_t first=reinterpret_cast<task_t>(1),other=reinterpret_cast<task_t>(2);
     NGPSwap swap{};NGPOverlay band{};
     assert(!p.offer(&p,&frame,256,64,64));
     assert(p.waitSwap(nullptr,1,&swap)==kIOReturnBadArgument);
     assert(p.waitSwap(first,1,&swap)==kIOReturnTimeout && taskRefs==1);
     assert(p.waitSwap(other,1,&swap)==kIOReturnBusy && taskRefs==1);
-    assert(p.overlay(other,&band)==kIOReturnBusy && !preserved);
-    assert(!p.overlay(first,&band) && preserved && band.first==4 && band.rows==12);
+    assert(!p.handoffCall(NGP_METHOD_BAND,first,nullptr,0,&band,sizeof band) && band.first==4 && band.rows==12);
+    NGPBand extended{};
+    assert(!p.handoffCall(NGP_METHOD_BAND,first,nullptr,0,&extended,sizeof extended) && extended.y0==4 && extended.y1==16);
+    assert(!p.offer(&p,&frame,256,64,64,nullptr,16384));
     assert(!p.offer(&p,&frame,252,64,64) && !p.offer(&p,&frame,256,63,64));
     assert(!p.offer(&p,&frame,UINT64_MAX,64,64));
     assert(p.offer(&p,&frame,256,64,64) && frame.refs==2);
@@ -118,7 +129,7 @@ static void lifecycle() {
     const auto id=swap.reserved;
     assert(p.completeSwap(other,swap.sequence,0)==kIOReturnBadArgument);
     assert(p.completeSwap(first,swap.sequence+1,0)==kIOReturnBadArgument && !doneCalls);
-    p.abandonSwap(other);assert(frame.refs==3 && !doneCalls && preserved);
+    p.abandonSwap(other);assert(frame.refs==3 && !doneCalls);
     NGPCompleteTimed timing={{swap.sequence,0,0},11,22,33,44,55,0};
     for(size_t size:{0u,15u,17u,39u,41u})
         assert(p.handoffCall(NGP_METHOD_COMPLETE_SWAP,first,&timing,size,nullptr,0)==kIOReturnBadArgument && !doneCalls);
@@ -141,23 +152,29 @@ static void lifecycle() {
     assert(!p.handoffCall(NGP_METHOD_COMPLETE_SWAP,first,&legacy,sizeof legacy,nullptr,0) && doneCalls==2 && native_gop_gpu_map_hits==1);
     assert(native_gop_gpu_timing_us[0]==0 && native_gop_gpu_timing_us[1]==0 && native_gop_gpu_timing_us[5]==UINT32_MAX);
     assert(p.offer(&p,&failedFrame,256,64,64));
-    assert(p.waitSwap(first,1,&swap)==kIOReturnNoMemory && doneCalls==3 && doneStatus==kIOReturnAborted);
-    assert(!p.gpuClient && !taskRefs && frame.refs==1 && failedFrame.refs==1 && !preserved && !IOMemoryMap::live);
+    assert(p.waitSwap(first,1,&swap)==kIOReturnTimeout && doneCalls==3 && doneStatus==kIOReturnNoMemory);
+    assert(p.gpuClient && taskRefs==2 && frame.refs==2 && failedFrame.refs==1 && IOMemoryMap::live==1);
+    p.abandonSwap(first);assert(!taskRefs && frame.refs==1 && !IOMemoryMap::live);
     mapFails=false;IOMemoryDescriptor frames[7];
     assert(p.waitSwap(other,1,&swap)==kIOReturnTimeout);
-    assert(!p.overlay(other,&band));
     for(unsigned i=0;i<7;i++) {
         assert(p.offer(&p,&frames[i],256,64,64) && !p.waitSwap(other,1,&swap));
-        assert((swap.reserved!=0)==(i<6));
+        assert(swap.reserved);
         assert(!p.completeSwap(other,swap.sequence,0));
     }
-    assert(IOMemoryMap::live==6 && frames[6].refs==1);
+    assert(IOMemoryMap::live==6 && frames[0].refs==1 && frames[6].refs==2);
     assert(p.offer(&p,&frames[0],256,64,64) && !p.waitSwap(other,1,&swap) && swap.reserved);
-    p.abandonSwap(first);assert(p.swap.offered && preserved);
+    p.abandonSwap(first);assert(p.swap.offered);
     p.abandonSwap(other);
-    assert(!IOMemoryMap::live && !taskRefs && !preserved && !lock.held);
+    assert(!IOMemoryMap::live && !taskRefs && !lock.held);
     for(auto &f:frames)assert(f.refs==1);
     p.abandonSwap(other);assert(!IOMemoryMap::live && !taskRefs);
+    uint64_t target=0;
+    assert(p.waitSwap(first,1,&swap,&target)==kIOReturnTimeout);
+    assert(p.offer(&p,&frame,256,64,64,nullptr,16384));
+    assert(!p.waitSwap(first,1,&swap,&target) && target==16384);
+    assert(!p.completeSwap(first,swap.sequence,0));
+    p.abandonSwap(first);assert(!IOMemoryMap::live && !taskRefs);
     // Sampling follows a successful delivered completion and precedes the next offer.
     p.mapping=new IOMemoryMap;p.capturePixels=true;traceOn=false;
     for(unsigned i=0;i<4096;++i)p.mapping->pixels[i]=i+0xff000000;
@@ -192,7 +209,7 @@ static void lifecycle() {
 startup_source = r'''
 #include <cassert>
 #include <cstdint>
-static bool gpuReady,flag,registration=true,initOk=true,attachOk=true,startOk=true;
+static bool flag,registration=true,initOk=true,attachOk=true,startOk=true;
 static unsigned allocations,releases,detaches;
 struct IOService {
     static IOService *getResourceService() {static IOService home;return &home;}
@@ -210,16 +227,15 @@ static IOService *native_gop_presenter_create() {++allocations;static IOService 
 static void native_gop_presenter_set_source(IOService *,IOService *nub) {assert(nub);}
 static void progress(const char *,uint64_t) {}
 #define OSSafeReleaseNULL(p) do {if(p)(p)->release();p=nullptr;}while(0)
-static void startGpuPresenter(''' + startup + r'''
+static void startPresenter(''' + startup + r'''
 int main() {
     IOService nub;
-    startGpuPresenter(&nub);assert(!allocations);
-    flag=true;startGpuPresenter(&nub);assert(!allocations);
-    gpuReady=true;registration=false;startGpuPresenter(&nub);assert(!allocations);
-    registration=true;initOk=false;startGpuPresenter(&nub);assert(releases==1 && !gpuPresenter);
-    initOk=true;attachOk=false;startGpuPresenter(&nub);assert(releases==2 && !detaches);
-    attachOk=true;startOk=false;startGpuPresenter(&nub);assert(releases==3 && detaches==1 && !gpuPresenter);
-    startOk=true;startGpuPresenter(&nub);assert(gpuPresenter && allocations==4 && releases==3);
+    startPresenter(&nub);assert(!allocations);
+    flag=true;registration=false;startPresenter(&nub);assert(!allocations);
+    registration=true;initOk=false;startPresenter(&nub);assert(releases==1 && !gpuPresenter);
+    initOk=true;attachOk=false;startPresenter(&nub);assert(releases==2 && !detaches);
+    attachOk=true;startOk=false;startPresenter(&nub);assert(releases==3 && detaches==1 && !gpuPresenter);
+    startOk=true;startPresenter(&nub);assert(gpuPresenter && allocations==4 && releases==3);
 }
 '''
 with tempfile.TemporaryDirectory(prefix='pagani-presenter-') as directory:
@@ -232,4 +248,4 @@ with tempfile.TemporaryDirectory(prefix='pagani-presenter-') as directory:
                         '-Wno-misleading-indentation', '-Wno-address', '-fsanitize=address,undefined', '-I',
                         str(DRIVERS / 'NativeMobileDisplay'), src, '-o', binary], check=True)
         subprocess.run([binary], check=True)
-print('PASS: actual presenter ownership, bounds, completion, map/close fallback and GPU-ready startup gates')
+print('PASS: actual presenter ownership, bounds, completion, map/close fallback and presenter startup lifecycle')

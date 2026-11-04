@@ -373,12 +373,12 @@ extern "C" int pagani_gpu_start() {
     __atomic_store_n(&startup_result,rc,__ATOMIC_RELEASE);
     return rc;
 }
-extern "C" int pagani_gpu_status(char lines[PAGANI_GPU_ROWS][PAGANI_STATUS_BYTES]) {
+extern "C" int pagani_gpu_status(char lines[PAGANI_LEGACY_GPU_ROWS][PAGANI_STATUS_BYTES]) {
     const char *name=__atomic_load_n(&current_stage,__ATOMIC_ACQUIRE);
     const int rc=__atomic_load_n(&startup_result,__ATOMIC_ACQUIRE);
     snprintf(lines[0],PAGANI_STATUS_BYTES,"%s rc=%08x",name,
         uint32_t(rc));
-    for(unsigned i=4;i<PAGANI_GPU_ROWS;++i)lines[i][0]=0;
+    for(unsigned i=4;i<PAGANI_LEGACY_GPU_ROWS;++i)lines[i][0]=0;
     if(!rc && g.gmu.gpu_oob_held && !g.gmu.poisoned) {
         uint32_t busy;
         // Gen8 GMUAO bit 23 is GPUBUSYIGNAHB; SP_STATUS has no verified active-core decoding.

@@ -1,0 +1,37 @@
+--- a/osfmk/vm/vm_compressor.h
++++ b/osfmk/vm/vm_compressor.h
+@@ -504,7 +504,11 @@
+ 
+ 
+ #if !XNU_TARGET_OS_OSX
++#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__
++#define COMPRESSOR_FREE_RESERVED_LIMIT          112     /* native 4 KiB: the bytes of 28 pages of 16 KiB, see VM_PAGE_FREE_RESERVED_LIMIT */
++#else /* !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__ */
+ #define COMPRESSOR_FREE_RESERVED_LIMIT          28
++#endif /* !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__ */
+ #else /* !XNU_TARGET_OS_OSX */
+ #define COMPRESSOR_FREE_RESERVED_LIMIT          128
+ #endif /* !XNU_TARGET_OS_OSX */
+--- a/osfmk/vm/vm_pageout.c
++++ b/osfmk/vm/vm_pageout.c
+@@ -244,9 +244,20 @@
+ #endif  /* VM_PAGE_FREE_MIN */
+ 
+ #if !XNU_TARGET_OS_OSX
++#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__
++/*
++ * Native 4 KiB: these limits count pages, and what they are there for counts bytes, so the numbers of a 16 KiB iPhone left a quarter of its
++ * buffer: pageout woke at 5.9 MiB free, stopped at 7.8 MiB, and only 128 pages stood between a burst of allocations and vm_page_wait. Four times the
++ * numbers are the same 23 and 31 MiB, and with COMPRESSOR_FREE_RESERVED_LIMIT the same 2 MiB of reserve.
++ */
++#define VM_PAGE_FREE_RESERVED_LIMIT     400
++#define VM_PAGE_FREE_MIN_LIMIT          6000
++#define VM_PAGE_FREE_TARGET_LIMIT       8000
++#else /* !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__ */
+ #define VM_PAGE_FREE_RESERVED_LIMIT     100
+ #define VM_PAGE_FREE_MIN_LIMIT          1500
+ #define VM_PAGE_FREE_TARGET_LIMIT       2000
++#endif /* !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__ */
+ #else /* !XNU_TARGET_OS_OSX */
+ #define VM_PAGE_FREE_RESERVED_LIMIT     1700
+ #define VM_PAGE_FREE_MIN_LIMIT          3500

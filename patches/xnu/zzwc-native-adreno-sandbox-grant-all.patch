@@ -1,0 +1,47 @@
+--- a/iokit/Kernel/IOUserClient.cpp
++++ b/iokit/Kernel/IOUserClient.cpp
+@@ -4359,6 +4359,17 @@
+ 	return false;
+ }
+ 
++/*
++ * The open path's grant: the process list above, or every process when the service carries NativeSandboxGrantAll = true (the A830
++ * driver's accelerator: every app and extension may run its Metal plugin, which decides itself which processes get a device by the
++ * seed's NativeAdrenoMetal.clients). Only opening a user client of that service is affected; setting its properties is not.
++ */
++static bool
++native_sandbox_grant_open(IOService * service)
++{
++	return native_sandbox_grant(service) || service->getProperty("NativeSandboxGrantAll") == kOSBooleanTrue;
++}
++
+ kern_return_t
+ is_io_service_open_extended(
+ 	io_object_t _service,
+@@ -4387,7 +4398,7 @@
+ 	}
+ 
+ #if CONFIG_MACF
+-	if (!native_sandbox_grant(service) && mac_iokit_check_open_service(kauth_cred_get(), service, connect_type) != 0) {
++	if (!native_sandbox_grant_open(service) && mac_iokit_check_open_service(kauth_cred_get(), service, connect_type) != 0) {
+ 		return kIOReturnNotPermitted;
+ 	}
+ #endif
+@@ -4547,7 +4558,7 @@
+ 			}
+ #if CONFIG_MACF
+ 			/* The service's grant (native_sandbox_grant) stands in for the sandbox's verdict on the render server's open. */
+-			else if (!native_sandbox_grant(service)
++			else if (!native_sandbox_grant_open(service)
+ 			    && 0 != mac_iokit_check_open(kauth_cred_get(), client, connect_type)) {
+ 				IOLog("IOUC %s failed MACF in process %s\n",
+ 				    client->getMetaClass()->getClassName(), creatorNameCStr);
+@@ -4556,7 +4567,7 @@
+ #endif
+ 
+ 			if ((kIOReturnSuccess == res)
+-			    && !native_sandbox_grant(service)
++			    && !native_sandbox_grant_open(service)
+ 			    && gIOUCFilterCallbacks
+ 			    && gIOUCFilterCallbacks->io_filter_resolver) {
+ 				io_filter_policy_t filterPolicy;

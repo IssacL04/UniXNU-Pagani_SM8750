@@ -1,0 +1,52 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -352,6 +352,19 @@
+  * path is what tells them apart.
+  */
+ int pagani_app_execs = 0;
++/*
++ * phone-shutdown-progress.patch. A shutdown's unmounts in the boot log: their printfs only reach the msgbuf, which ended 3 s short of the panic of
++ * run 20261031-223924, and the records of the log come through a panic. In this file because it is built with the log on: vfs_subr.c is not one of
++ * the objects the second pass of scripts/build-xnu-4k-baseline.sh rebuilds, the macro would stay empty there without a word.
++ */
++void pagani_shutdown_progress(const char *stage, const char *name, uint64_t value);
++
++void
++pagani_shutdown_progress(const char *stage, const char *name, uint64_t value)
++{
++	boot_progress_root(stage, name, value);
++}
++
+ 
+ 
+ #define USER_ADDR_ALIGN(addr, val) \
+diff --git a/bsd/vfs/vfs_subr.c b/bsd/vfs/vfs_subr.c
+--- a/bsd/vfs/vfs_subr.c
++++ b/bsd/vfs/vfs_subr.c
+@@ -4239,6 +4239,8 @@
+ 	int     u_only_non_system;
+ };
+ 
++extern void pagani_shutdown_progress(const char *stage, const char *name, uint64_t value);
++
+ static int
+ unmount_callback(mount_t mp, void *arg)
+ {
+@@ -4255,13 +4257,16 @@ unmount_callback(mount_t mp, void *arg)
+ 	if (uip->u_only_non_system
+ 	    && ((mp->mnt_flag & MNT_ROOTFS) || (mp->mnt_kern_flag & MNTK_SYSTEM))) { //MNTK_BACKS_ROOT
+ 		printf("unmount(%d) %s skipped\n", uip->u_only_non_system, mntname);
++		pagani_shutdown_progress("unmount skipped", mntname, uip->u_only_non_system);
+ 		mount_iterdrop(mp);     // VFS_ITERATE_CB_DROPREF
+ 	} else {
+ 		printf("unmount(%d) %s\n", uip->u_only_non_system, mntname);
++		pagani_shutdown_progress("unmount enter", mntname, uip->u_only_non_system);
+ 
+ 		mount_ref(mp, 0);
+ 		mount_iterdrop(mp);     // VFS_ITERATE_CB_DROPREF
+ 		error = dounmount(mp, MNT_FORCE, 1, vfs_context_current());
++		pagani_shutdown_progress("unmount returned", mntname, (uint64_t)error);
+ 		if (error) {
+ 			uip->u_errs++;
+ 			printf("Unmount of %s failed (%d)\n", mntname ? mntname:"?", error);

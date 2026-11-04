@@ -1,0 +1,105 @@
+--- a/osfmk/arm/pmap/pmap.h
++++ b/osfmk/arm/pmap/pmap.h
+@@ -116,10 +116,15 @@
+  */
+ #define BOOTSTRAP_TABLE_SIZE (ARM_PGBYTES * 34)
+ #elif !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__
+-/* Native 4 KiB: two roots plus up to seven L2 pages per 6 GiB mapping.
+- * The physical and virtual bases may each straddle an extra 1 GiB region.
++/* Native 4 KiB: two roots, one L2 page per 1 GiB of the V=P and of the KVA
++ * mapping, whose bases may each straddle an extra 1 GiB region, and the L2
++ * page of early_boot_progress_map's framebuffer map, taken from the same pool.
++ * With the kernel 45.5 MiB into the window that is 16 pages for 6 GiB, 20 for
++ * 8 GiB and 30 for the 13 GiB of contiguous DRAM. The window size is the
++ * image's (ADT darwinboot-memory-size), so the pool does not follow it: only
++ * the tables of the window in use are written, and start.s stops at its end.
+  */
+-#define BOOTSTRAP_TABLE_SIZE (ARM_PGBYTES * 16)
++#define BOOTSTRAP_TABLE_SIZE (ARM_PGBYTES * 34)
+ #else /* defined(ARM_LARGE_MEMORY) */
+ #define BOOTSTRAP_TABLE_SIZE (ARM_PGBYTES * 8)
+ #endif /* defined(ARM_LARGE_MEMORY) */
+--- a/osfmk/arm64/start.s
++++ b/osfmk/arm64/start.s
+@@ -627,10 +627,69 @@
+ 	create_bootstrap_mapping x14, x15, x5, x3, x2, x9, x10, x11, x12, x13
+ 
+ 	b Lbootstrap_tables_ready
++/*
++ * bootstrap_smc
++ *
++ * An SMCCC fast call over SMC #0, nothing but registers.
++ *   arg0 - Function ID (SMC32)
++ *   arg1 - x1
++ *   arg2 - x2
++ */
++.macro bootstrap_smc
++	movz	x0, #(($0) >> 16), lsl #16
++	movk	x0, #(($0) & 0xffff)
++	mov		x1, #($1)
++	mov		x2, #($2)
++	mov		x3, #0
++	smc		#0
++.endmacro
++
++	/*
++	 * The window does not fit the pool, or the pool has no page left for the
++	 * map of the screen. Going on would write over the kernel globals behind
++	 * bootstrap_pagetables, and nothing can report it or recover later: the
++	 * boot log, the timed reset and the watchdog all start after arm_vm_init.
++	 * So back to Android at once, with no button to hold. An image started
++	 * with fastboot boot lasts one boot, so this cannot loop.
++	 *
++	 * PSCI SYSTEM_RESET: SMC32 0x84000009 over SMC #0. /psci says "smc" (the
++	 * conduit the boot log prints, the one Android uses), so Gunyah takes it
++	 * at EL2 as the firmware call of the HLOS VM; HVC would be a Gunyah
++	 * hypercall, not PSCI. It is the call Android's cold reboot ends in and
++	 * the one every PSCI reset of RamoopsLog.c really ends in: SYSTEM_RESET2
++	 * is advertised but returns -1 on this phone, and only after Gunyah has
++	 * begun to take the VM off (VM_OFF_FLAGS_RESET_MAY_FAIL), so it is left
++	 * out here.
++	 *
++	 * The MMU and the caches are off and this runs at its physical address
++	 * with interrupts masked. Hence registers only: no load or store, no stack
++	 * or call, no boot-args or device tree (the conduit is therefore fixed
++	 * here), and x4-x17 mean nothing across an SMC. VBAR_EL1 still points at
++	 * the early vectors, so an SMC that traps ends on their screen. Nothing
++	 * needs flushing: no log exists yet and no UFS command can be in flight.
++	 *
++	 * Gunyah does not return from it for the HLOS VM, and no run has seen it
++	 * return. Should it, the same as RamoopsLog.c's reset_retry: the Gunyah
++	 * watchdog with its shortest bite and no pets (GunyahWdog.h: SET_TIME
++	 * with bark and bite in ms, CONTROL 3 enables), and the call again once a
++	 * second until one of them takes the phone down.
++	 */
+ Lbootstrap_tables_exhausted:
+-	// MMU is still off. Stop with the offending cursor/end preserved for
+-	// the early debugger rather than corrupting memory or forging a map.
+-	b Lbootstrap_tables_exhausted
++	bootstrap_smc 0x84000009, 0, 0
++	bootstrap_smc 0x86000008, 2000, 4000
++	bootstrap_smc 0x86000005, 3, 0
++1:
++	mrs		x4, CNTFRQ_EL0
++	isb
++	mrs		x5, CNTVCT_EL0
++	add		x5, x5, x4
++2:
++	isb
++	mrs		x6, CNTVCT_EL0
++	cmp		x6, x5
++	b.lo	2b
++	bootstrap_smc 0x84000009, 0, 0
++	b		1b
+ Lbootstrap_tables_ready:
+ #if XNU_EARLY_BOOT_PROGRESS
+ 	// start_first_cpu has selected virtual stacks before enabling the MMU.
+@@ -645,7 +704,7 @@
+ 	add x2, x25, #(BOOTSTRAP_TABLE_BYTES >> 12), lsl #12
+ 	bl EXT(early_boot_progress_map)
+ 	cbnz x0, 1f
+-	brk #0xe01
++	b Lbootstrap_tables_exhausted
+ 1:
+ 	mov lr, x28
+ 	mov sp, x27

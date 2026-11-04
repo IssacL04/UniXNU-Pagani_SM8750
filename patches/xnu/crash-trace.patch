@@ -1,0 +1,177 @@
+--- a/bsd/kern/kern_sig.c
++++ b/bsd/kern/kern_sig.c
+@@ -133,6 +133,11 @@ extern int thread_enable_fpe(thread_t act, int onoff);
+ extern kern_return_t get_signalact(task_t, thread_t *, int);
+ extern unsigned int get_useraddr(void);
+ extern boolean_t task_did_exec(task_t task);
++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS && defined(__arm64__)
++/* UniXNU crash trace (osfmk/kern/bsd_kern.c): the user state and frame chain of the thread taking a fatal signal. */
++extern void boot_progress_crash_signal(int pid, const char *name, int signum, int exception, uint64_t code,
++    uint64_t subcode);
++#endif
+ extern boolean_t task_is_exec_copy(task_t task);
+ extern void vm_shared_region_reslide_stale(boolean_t driverkit);
+ 
+@@ -3095,6 +3100,14 @@ postsig_locked(int signum)
+ 			p->p_sigacts.ps_sig = signum;
+ 			proc_signalend(p, 1);
+ 			proc_unlock(p);
++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS && defined(__arm64__)
++			/*
++			 * UniXNU crash trace: this thread takes the signal (for a fault, the faulting thread with the fault's user
++			 * state); log its registers and frame chain before the core dump and the exit tear anything down.
++			 */
++			boot_progress_crash_signal(proc_getpid(p), p->p_name, signum, ut->uu_exception,
++			    (uint64_t)ut->uu_code, (uint64_t)ut->uu_subcode);
++#endif
+ 			if (task_is_driver(proc_task(p))) {
+ 				coredump_flags |= COREDUMP_FULLFSYNC;
+ 			}
+--- a/osfmk/kern/bsd_kern.c
++++ b/osfmk/kern/bsd_kern.c
+@@ -1526,3 +1526,145 @@ bsd_to_mach_failure(int bsd_err)
+ 		return KERN_FAILURE;
+ 	}
+ }
++
++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS && defined(__arm64__)
++#include <vm/vm_shared_region.h>
++
++/*
++ * UniXNU crash trace (the OnePlus 13T device repository's patches/xnu/crash-trace.patch). postsig_locked calls
++ * boot_progress_crash_signal for a fatal signal whose default action dumps core, on the thread taking the signal, with the
++ * proc unlocked, before the core dump and the exit: for a fault that is the faulting thread and its user state is still the
++ * fault's (far and esr of the abort), for abort() the thread in __pthread_kill. It hands the user registers, the task's
++ * shared region and main executable and two readers (copyin; the file mapping holding an address) to BootProgress
++ * (boot_progress_crash, CrashTrace.h), which walks the frame chain and writes the ramoops X records. Without BootProgress the
++ * weak default below makes it a no-op. Keep both structures identical to BootProgress CrashTrace.h.
++ */
++#define BOOT_PROGRESS_CRASH_VERSION 1u
++
++struct boot_progress_crash_image {
++	uint64_t start, end;                    /* the file mapping that holds the address: [start, end) */
++	uint64_t offset;                        /* its offset in the file at start */
++	char name[40];                          /* the file's name, NUL-terminated, cut to fit */
++};
++
++struct boot_progress_crash {
++	uint32_t size, version;
++	int32_t pid, signal;
++	const char *name;
++	uint64_t time_ms;
++	uint64_t thread_id;
++	uint64_t pc, lr, fp, sp, x0, x1, far;
++	uint32_t esr, cpsr;
++	int32_t exception, reserved;
++	uint64_t code, subcode;
++	uint64_t user_limit;
++	uint64_t cache_start, cache_end;
++	uint64_t cache_slide;
++	uint64_t main_header;
++	void *context;
++	int (*read)(void *context, uint64_t address, void *buffer, uint32_t bytes);
++	int (*image)(void *context, uint64_t address, struct boot_progress_crash_image *image);
++};
++
++struct vnode;
++extern int vnode_getwithvid(struct vnode *, uint32_t);
++extern int vnode_put(struct vnode *);
++extern const char *vnode_getname(struct vnode *);
++extern void vnode_putname(const char *);
++
++void boot_progress_crash(const struct boot_progress_crash *crash);
++void boot_progress_crash_signal(int pid, const char *name, int signum, int exception, uint64_t code, uint64_t subcode);
++
++/* BootProgress supplies the report; this default keeps the kernel linking without it. */
++__attribute__((weak)) void
++boot_progress_crash(const struct boot_progress_crash *crash)
++{
++	(void)crash;
++}
++
++static int
++crash_trace_read(void *context, uint64_t address, void *buffer, uint32_t bytes)
++{
++	(void)context;
++	return copyin((user_addr_t)address, buffer, bytes) == 0 ? 0 : -1;
++}
++
++/* The vnode-backed mapping that holds address (fill_procregioninfo_onlymappedvnodes may return a later one) and its file's name. */
++static int
++crash_trace_image(void *context, uint64_t address, struct boot_progress_crash_image *image)
++{
++	struct proc_regioninfo_internal info;
++	uintptr_t vnode = 0;
++	uint32_t vid = 0;
++
++	bzero(&info, sizeof(info));
++	if (!fill_procregioninfo_onlymappedvnodes((task_t)context, address, &info, &vnode, &vid) || vnode == 0 ||
++	    address < info.pri_address || address - info.pri_address >= info.pri_size) {
++		return 0;
++	}
++	image->start = info.pri_address;
++	image->end = info.pri_address + info.pri_size;
++	image->offset = info.pri_offset;
++	image->name[0] = '\0';
++	struct vnode *vp = (struct vnode *)vnode;
++	if (vnode_getwithvid(vp, vid) == 0) {
++		const char *name = vnode_getname(vp);
++		if (name != NULL) {
++			strlcpy(image->name, name, sizeof(image->name));
++			vnode_putname(name);
++		}
++		vnode_put(vp);
++	}
++	return 1;
++}
++
++void
++boot_progress_crash_signal(int pid, const char *name, int signum, int exception, uint64_t code, uint64_t subcode)
++{
++	thread_t thread = current_thread();
++	task_t task = current_task();
++	struct arm_saved_state *state = get_user_regs(thread);
++	struct boot_progress_crash crash;
++	uint64_t nanoseconds = 0;
++
++	if (state == NULL || !is_saved_state64(state)) {
++		return;
++	}
++	bzero(&crash, sizeof(crash));
++	crash.size = sizeof(crash);
++	crash.version = BOOT_PROGRESS_CRASH_VERSION;
++	crash.pid = pid;
++	crash.signal = signum & 0x7f;
++	crash.name = name;
++	absolutetime_to_nanoseconds(mach_absolute_time(), &nanoseconds);
++	crash.time_ms = nanoseconds / NSEC_PER_MSEC;
++	crash.thread_id = thread_tid(thread);
++	crash.pc = (uint64_t)get_saved_state_pc(state);
++	crash.lr = (uint64_t)get_saved_state_lr(state);
++	crash.fp = (uint64_t)get_saved_state_fp(state);
++	crash.sp = (uint64_t)get_saved_state_sp(state);
++	crash.x0 = (uint64_t)get_saved_state_reg(state, 0);
++	crash.x1 = (uint64_t)get_saved_state_reg(state, 1);
++	crash.far = (uint64_t)get_saved_state_far(state);
++	crash.esr = get_saved_state_esr(state);
++	crash.cpsr = get_saved_state_cpsr(state);
++	crash.exception = exception;
++	crash.code = code;
++	crash.subcode = subcode;
++	crash.user_limit = (uint64_t)vm_map_max(get_task_map(task));
++	vm_shared_region_t shared_region = vm_shared_region_get(task);
++	if (shared_region != NULL) {
++		if (shared_region->sr_first_mapping != (mach_vm_offset_t)-1) {
++			crash.cache_start = shared_region->sr_base_address;
++			crash.cache_end = shared_region->sr_base_address + shared_region->sr_size;
++			crash.cache_slide = shared_region->sr_slide;
++		}
++		vm_shared_region_deallocate(shared_region);
++	}
++	crash.main_header = task->mach_header_vm_address;
++	crash.context = task;
++	crash.read = crash_trace_read;
++	crash.image = crash_trace_image;
++	boot_progress_crash(&crash);
++}
++#endif /* XNU_BOOT_PROGRESS && __arm64__ */

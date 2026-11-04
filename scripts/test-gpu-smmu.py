@@ -114,7 +114,7 @@ static void reset() {
     for(unsigned i=0;i<3;++i)expected_slots[i]=i;
 }
 static void check_rows(const char *where,const char *detail) {
-    char rows[PAGANI_GPU_ROWS][PAGANI_STATUS_BYTES];
+    char rows[PAGANI_LEGACY_GPU_ROWS][PAGANI_STATUS_BYTES];
     const auto before=regs;unsigned n=reads,w=writes;
     assert(pagani_gpu_status(rows)==1);
     assert(strstr(rows[0],where) && strstr(rows[1],"not published"));
@@ -165,7 +165,7 @@ int main() {
     check_rows("GPU SMMU GMU","c=1 s=3 p=6/8 r=2/4 mm=80");
     reset();gpu_rc=-70;startup_result=prepare_smmu();assert(startup_result==-70 && gmu_calls==1 && gpu_calls==1);
     check_rows("GPU SMMU GPU","c=2 s=3 p=6/8 r=2/4 mm=80");
-    reset();assert(!prepare_smmu());char rows[PAGANI_GPU_ROWS][PAGANI_STATUS_BYTES];
+    reset();assert(!prepare_smmu());char rows[PAGANI_LEGACY_GPU_ROWS][PAGANI_STATUS_BYTES];
     assert(pagani_gpu_status(rows)==1 && strstr(rows[2],"P step=") && strstr(rows[3],"GMU p="));
     assert(!activity_reads);
     startup_result=0;g.gmu.gpu_oob_held=1;g.requested_hz=222000000;

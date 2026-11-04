@@ -1,0 +1,1111 @@
+--- a/bsd/kern/kdebug.c
++++ b/bsd/kern/kdebug.c
+@@ -78,6 +78,11 @@
+ #include <pexpert/pexpert.h>
+ #include "pagani_kbtrace.h"
+ extern void boot_progress_trace(const char *text) __attribute__((weak_import));
++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS && defined(__arm64__)
++/* The stall probe's watch on open pairs (osfmk/kern/bsd_kern.c, phone-stall-probe.patch). */
++extern uint32_t pagani_stall_on;
++extern void boot_progress_stall_kbt(int32_t pid, unsigned group, int end);
++#endif
+ static bool pagani_kbtrace_on;
+ static bool pagani_kbtrace_signposts;   /* pagani-kbtrace=3: also UIKit's signpost subclass 0x2b87 (every frame of every UIKit app) */
+ static struct pagani_kbt pagani_kbt;
+@@ -2799,12 +2804,24 @@
+ 	}
+ }
+ 
+-/* Summaries (and lat lines) of the processes whose counts (timed pairs) changed since their last ones; runs
+- * PAGANI_KBT_FLUSH_MS after the first unreported event. Lines are built under the lock and logged after it. */
++/* Summaries (and lat lines) of the processes whose counts (timed pairs) changed since their last ones, the slot taken over last and the long
++ * pairs; runs PAGANI_KBT_FLUSH_MS after the first unreported event. Lines are built under the lock and logged after it. */
+ static void
+ pagani_kbtrace_flush(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
+ {
+ 	os_atomic_store(&pagani_kbt_pending, 0, relaxed);
++	for (;;) {
++		char line[PAGANI_KBT_LINE];
++		lck_spin_lock_grp(&pagani_kbt_lock, &kdebug_lck_grp);
++		int have = pagani_kbt_take_final(&pagani_kbt, line, sizeof(line)) || pagani_kbt_take_long(&pagani_kbt, line, sizeof(line));
++		lck_spin_unlock(&pagani_kbt_lock);
++		if (!have) {
++			break;
++		}
++		if (boot_progress_trace) {
++			boot_progress_trace(line);
++		}
++	}
+ 	for (unsigned i = 0; i < PAGANI_KBT_SLOTS; i++) {
+ 		char line[PAGANI_KBT_LINE];
+ 		lck_spin_lock_grp(&pagani_kbt_lock, &kdebug_lck_grp);
+@@ -2835,10 +2852,22 @@
+ 	lck_spin_lock_grp(&pagani_kbt_lock, &kdebug_lck_grp);
+ 	int announce = pagani_kbt_count(&pagani_kbt, proc_pid(p), proc_best_name(p), kind, arg2, ns / NSEC_PER_USEC, line,
+ 	    sizeof(line));
++	const int follow = pagani_kbt.follow;
+ 	lck_spin_unlock(&pagani_kbt_lock);
+ 	if (announce && boot_progress_trace) {
+ 		boot_progress_trace(line);
++	}
++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS && defined(__arm64__)
++	if (__improbable(pagani_stall_on) && follow) {
++		int end = 0;
++		const int group = pagani_kbt_stall_group(kind, &end);
++		if (group >= 0) {
++			boot_progress_stall_kbt(proc_pid(p), (unsigned)group, end);
++		}
+ 	}
++#else
++	(void)follow;
++#endif
+ 	if (os_atomic_load(&pagani_kbt_call_state, acquire) != 2) {
+ 		if (!os_atomic_cmpxchg(&pagani_kbt_call_state, 0, 1, acquire)) {
+ 			return;         /* another thread is setting the call up and schedules the summary */
+--- a/bsd/kern/pagani_kbtrace.h
++++ b/bsd/kern/pagani_kbtrace.h
+@@ -1,6 +1,6 @@
+ /* SPDX-License-Identifier: BSD-2-Clause-Patent */
+ /*
+- * Keyboard trace for the iPhone identity (boot-arg pagani-kbtrace=1, phone-keyboard-trace.patch), version 2.
++ * Keyboard trace for the iPhone identity (boot-arg pagani-kbtrace=1, phone-keyboard-trace.patch), version 3 (phone-stall-probe.patch).
+  *
+  * 21H461 UIKit and kbd mark every stage of a key press with a kdebug point. They are syscalls only while the commpage says
+  * tracing is on and the shared typefilter allows their class/subclass; the patch allows the keyboard subclass 0x2bae (and
+@@ -23,6 +23,12 @@
+  * oldest queued begin of its group, and the pair's duration goes into count / sum / max / >=100 ms / >=400 ms. The "lat"
+  * line prints them, so a log tells where a slow key spends its time (UIKit task queue, kbd input, kbd autocorrection,
+  * inline completions, language model) without any trace session.
++ * Version 3: a queue that overflowed no longer pairs an end with the wrong begin (ends are numbered like begins: the end of a begin that was
++ * pushed out pairs with nothing and counts in lost); -[UIKeyboardLayout touchUp:] runs again for every touch not yet committed each time a new
++ * touch comes, so a touchUp: with the arg2 of one already seen (the touch's timestamp, a double's bits) is a repeat: counted in dup. A repeat
++ * has its task too (20 dn, 301 up, 301 up-done on the phone), in the same queue, so it keeps its number and its up-done pairs with nothing;
++ * every pair of at least PAGANI_KBT_LONG_MS logs its begin and end ("kbt Notes[412] long in b=829669 e=832806 d=3137", ms); the
++ * summary comes after one second instead of four; a slot taken over by another process logs its last counts first ("final", "final-lat").
+  * Pure C without kernel dependencies so the host test compiles the same code (sysfix/keyboard/test-phone-keyboard-trace.py).
+  */
+ #ifndef PAGANI_KBTRACE_H
+@@ -35,9 +41,12 @@
+ #define PAGANI_KBT_CSC_EVENTS   0x2b87u /* UIKit signpost subclass 0x87: sendEvent, also update cycle, animation, scrolling */
+ #define PAGANI_KBT_SLOTS        8
+ #define PAGANI_KBT_LINE         400     /* longest summary 273, lat lines 298 (UIKit) and 349 (kbd) at their display maxima */
+-#define PAGANI_KBT_FLUSH_MS     4000    /* a changed process is summarized this long after its first unreported event */
++#define PAGANI_KBT_FLUSH_MS     1000    /* a changed process is summarized this long after its first unreported event */
+ #define PAGANI_KBT_RING         8       /* queued begins per process and latency group (older ones are dropped, counted lost) */
+ #define PAGANI_KBT_SHOW_MAX     99999u  /* displayed numbers saturate here */
++#define PAGANI_KBT_LONG_MS      1000u   /* a pair at least this long logs its begin and end */
++#define PAGANI_KBT_LONGS        16      /* such pairs waiting for the next summary (more are counted) */
++#define PAGANI_KBT_UP_SEEN      64      /* touch timestamps per process that tell a repeated touchUp: */
+ 
+ enum {
+ 	PAGANI_KBT_EV, PAGANI_KBT_SET, PAGANI_KBT_DN, PAGANI_KBT_DN_DONE, PAGANI_KBT_DR, PAGANI_KBT_UP, PAGANI_KBT_UP_DONE,
+@@ -63,11 +72,13 @@
+ 
+ struct pagani_kbt_lat {
+ 	uint64_t begin_us[PAGANI_KBT_RING];   /* queued begins, oldest at head */
++	uint32_t number[PAGANI_KBT_RING];     /* their numbers: began when they came */
+ 	uint64_t sum_us;                      /* of the completed pairs */
+ 	uint64_t max_us;
+ 	uint32_t n;                           /* completed pairs */
+ 	uint32_t n100, n400;                  /* of them, at least 100 ms / 400 ms */
+ 	uint32_t lost;                        /* begins pushed out of a full queue, ends without a begin */
++	uint32_t began, ended;                /* every begin, repeats too, and every end that had one: the end numbered k belongs to the begin numbered k */
+ 	uint8_t  head, queued;
+ };
+ 
+@@ -80,11 +91,27 @@
+ 	uint32_t seen;                      /* kinds already announced (bit per kind) */
+ 	uint32_t n[PAGANI_KBT_KINDS];
+ 	struct pagani_kbt_lat lat[PAGANI_KBT_LATS];
++	uint32_t up_dups;                   /* repeated touchUp: */
++	uint32_t up_next;
++	uint64_t up_seen[PAGANI_KBT_UP_SEEN];
+ };
+ 
++/* A pair of at least PAGANI_KBT_LONG_MS. */
++struct pagani_kbt_long {
++	uint64_t begin_us, end_us;
++	int32_t  pid;
++	uint8_t  group;
++	char     name[17];
++};
++
+ struct pagani_kbt {
+ 	struct pagani_kbt_slot slot[PAGANI_KBT_SLOTS];
+ 	uint32_t recycled;                  /* slots taken over from another process */
++	uint32_t long_head, long_count, long_lost;
++	struct pagani_kbt_long longs[PAGANI_KBT_LONGS];
++	uint8_t final_lines;                /* final[] holds the last counts of a slot taken over: 0, 1 or 2 lines */
++	uint8_t follow;                     /* the stall probe's table of open pairs takes the last counted event (pagani_kbt_lat_note) */
++	char final[2][PAGANI_KBT_LINE];
+ };
+ 
+ /* The counted kind of a kdebug point, or -1. The function qualifier bits (DBG_FUNC_START/END) are ignored. */
+@@ -160,13 +187,26 @@
+ 	}
+ }
+ 
+-/* A begin (queued; a full queue drops its oldest begin) or an end (pairs with the oldest queued begin). Returns 1 when the
+- * group changed. Durations from clocks of two CPUs never go negative. */
++/*
++ * A begin (queued; a full queue drops its oldest begin), a repeat (a begin that only takes a number) or an end, numbered like the begins: it
++ * pairs with its own begin, or with nothing when that was a repeat or was pushed out. Returns 1 when the group changed, with *paired_us the
++ * duration of a completed pair and *begin_us its begin (otherwise *paired_us stays). Durations from clocks of two CPUs never go negative.
++ * *follow: what the stall probe's table takes. Its open pairs are this queue: a begin that pushed another out is not told and neither is an end
++ * that paired with nothing, so they stay equal whatever overflows. An end without any begin is told: a slot taken over forgot its begins, the
++ * table did not.
++ */
+ static inline int
+-pagani_kbt_lat_note(struct pagani_kbt_lat *l, int end, uint64_t now_us)
++pagani_kbt_lat_note(struct pagani_kbt_lat *l, int end, int repeat, uint64_t now_us, uint64_t *paired_us, uint64_t *begin_us, uint8_t *follow)
+ {
++	*follow = 0;
+ 	if (!end) {
++		uint32_t began = l->began++;
++		if (repeat) {
++			return 0;
++		}
++		*follow = 1;
+ 		if (l->queued == PAGANI_KBT_RING) {
++			*follow = 0;
+ 			l->head = (uint8_t)((l->head + 1) % PAGANI_KBT_RING);
+ 			l->queued--;
+ 			if (l->lost != UINT32_MAX) {
+@@ -174,15 +214,22 @@
+ 			}
+ 		}
+ 		l->begin_us[(l->head + l->queued) % PAGANI_KBT_RING] = now_us;
++		l->number[(l->head + l->queued) % PAGANI_KBT_RING] = began;
+ 		l->queued++;
+ 		return 1;
+ 	}
+-	if (!l->queued) {
++	if (l->ended == l->began) {
+ 		if (l->lost != UINT32_MAX) {
+ 			l->lost++;
+ 		}
++		*follow = 1;
+ 		return 1;
+ 	}
++	uint32_t number = l->ended++;
++	if (!l->queued || l->number[l->head] != number) {
++		return 0;                       /* a repeat's, or its begin was pushed out and counted as lost then */
++	}
++	*follow = 1;
+ 	uint64_t begin = l->begin_us[l->head];
+ 	l->head = (uint8_t)((l->head + 1) % PAGANI_KBT_RING);
+ 	l->queued--;
+@@ -200,6 +247,8 @@
+ 	if (d > l->max_us) {
+ 		l->max_us = d;
+ 	}
++	*paired_us = d;
++	*begin_us = begin;
+ 	return 1;
+ }
+ 
+@@ -254,9 +303,9 @@
+ }
+ 
+ /* Cumulative counts of one process:
+- * "kbt Notes[412] sum ev 12 set 1 dn 3/2 dr 0 up 3/2 task 9/9 in 2/2 cand 0/0 hw 0 ac 2/2 kop 0/0" (version 1 ended at hw). */
++ * "kbt Notes[412] sum ev 12 set 1 dn 3/2 dr 0 up 3/2 task 9/9 in 2/2 cand 0/0 hw 0 ac 2/2 kop 0/0 dup 0" (version 1 ended at hw, 2 at kop). */
+ static inline size_t
+-pagani_kbt_summary(const struct pagani_kbt_slot *s, char *line, size_t size)
++pagani_kbt_summary_as(const struct pagani_kbt_slot *s, const char *what, char *line, size_t size)
+ {
+ 	static const struct { const char *label; int a, b; } fields[] = {
+ 		{" ev ", PAGANI_KBT_EV, -1}, {" set ", PAGANI_KBT_SET, -1}, {" dn ", PAGANI_KBT_DN, PAGANI_KBT_DN_DONE},
+@@ -265,7 +314,7 @@
+ 		{" cand ", PAGANI_KBT_CAND, PAGANI_KBT_CAND_DONE}, {" hw ", PAGANI_KBT_HWKEY, -1},
+ 		{" ac ", PAGANI_KBT_AC, PAGANI_KBT_AC_DONE}, {" kop ", PAGANI_KBT_KOP, PAGANI_KBT_KOP_DONE},
+ 	};
+-	size_t at = pagani_kbt_head(line, size, s, "sum");
++	size_t at = pagani_kbt_head(line, size, s, what);
+ 	for (unsigned i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
+ 		at = pagani_kbt_put(line, size, at, fields[i].label);
+ 		at = pagani_kbt_put_u(line, size, at, s->n[fields[i].a]);
+@@ -274,9 +323,16 @@
+ 			at = pagani_kbt_put_u(line, size, at, s->n[fields[i].b]);
+ 		}
+ 	}
+-	return at;
++	at = pagani_kbt_put(line, size, at, " dup ");
++	return pagani_kbt_put_u(line, size, at, s->up_dups);
+ }
+ 
++static inline size_t
++pagani_kbt_summary(const struct pagani_kbt_slot *s, char *line, size_t size)
++{
++	return pagani_kbt_summary_as(s, "sum", line, size);
++}
++
+ /*
+  * The timed pairs of one process, groups with any data only:
+  * "kbt Spotlight[347] lat up 15/120/572/3/1 in 12/4/30/0/0 q1" = group, completed pairs / average ms / largest ms /
+@@ -284,7 +340,7 @@
+  * at 99999. Returns 0 (nothing written) when no group has data.
+  */
+ static inline size_t
+-pagani_kbt_latency(const struct pagani_kbt_slot *s, char *line, size_t size)
++pagani_kbt_latency_as(const struct pagani_kbt_slot *s, const char *what, char *line, size_t size)
+ {
+ 	size_t at = 0;
+ 	for (unsigned g = 0; g < PAGANI_KBT_LATS; g++) {
+@@ -293,7 +349,7 @@
+ 			continue;
+ 		}
+ 		if (!at) {
+-			at = pagani_kbt_head(line, size, s, "lat");
++			at = pagani_kbt_head(line, size, s, what);
+ 		}
+ 		at = pagani_kbt_put(line, size, at, " ");
+ 		at = pagani_kbt_put(line, size, at, pagani_kbt_lat_names[g]);
+@@ -320,6 +376,31 @@
+ 		line[0] = '\0';
+ 	}
+ 	return at;
++}
++
++static inline size_t
++pagani_kbt_latency(const struct pagani_kbt_slot *s, char *line, size_t size)
++{
++	return pagani_kbt_latency_as(s, "lat", line, size);
++}
++
++/* A completed pair of at least PAGANI_KBT_LONG_MS goes to the summary's queue; when that is full it is only counted. */
++static inline void
++pagani_kbt_long_note(struct pagani_kbt *t, const struct pagani_kbt_slot *s, int group, uint64_t begin_us, uint64_t end_us)
++{
++	if (t->long_count == PAGANI_KBT_LONGS) {
++		t->long_lost++;
++		return;
++	}
++	struct pagani_kbt_long *l = &t->longs[(t->long_head + t->long_count) % PAGANI_KBT_LONGS];
++	t->long_count++;
++	l->begin_us = begin_us;
++	l->end_us = end_us;
++	l->pid = s->pid;
++	l->group = (uint8_t)group;
++	for (unsigned i = 0; i < sizeof(l->name); i++) {
++		l->name[i] = s->name[i];
++	}
+ }
+ 
+ /*
+@@ -328,7 +409,8 @@
+  * The first event of each kind in a process is announced at once (returns 1 with "kbt Notes[412] first dn @523411ms" in
+  * line), so the order in which the stages are first reached survives; later events only mark the process dirty for the
+  * next summary (pagani_kbt_take_dirty). Returns 0 when nothing is to be logged now. A process that does not have a slot
+- * takes a free one, else the least recently used one (counted in recycled).
++ * takes a free one, else the least recently used one (counted in recycled; the slot's last counts wait in final[] for the next summary).
++ * A touchUp: whose arg2, the touch's timestamp, was seen before is a repeat; t->follow says what the stall probe takes.
+  */
+ static inline int
+ pagani_kbt_count(struct pagani_kbt *t, int32_t pid, const char *name, int kind, uint64_t arg2, uint64_t now_us, char *line,
+@@ -357,6 +439,11 @@
+ 		s = victim;
+ 		if (s->pid != 0) {
+ 			t->recycled++;
++			pagani_kbt_summary_as(s, "final", t->final[0], sizeof(t->final[0]));
++			t->final_lines = 1;
++			if (pagani_kbt_latency_as(s, "final-lat", t->final[1], sizeof(t->final[1]))) {
++				t->final_lines = 2;
++			}
+ 		}
+ 		*s = (struct pagani_kbt_slot){ .pid = pid };
+ 		for (unsigned i = 0; name && name[i] && i + 1 < sizeof(s->name); i++) {
+@@ -368,10 +455,29 @@
+ 		s->n[kind]++;
+ 	}
+ 	s->dirty = 1;
++	t->follow = 0;
++	int repeat = 0;
++	if (kind == PAGANI_KBT_UP && arg2 != 0) {
++		for (unsigned i = 0; i < PAGANI_KBT_UP_SEEN; i++) {
++			if (s->up_seen[i] == arg2) {
++				repeat = 1;
++				break;
++			}
++		}
++		if (!repeat) {
++			s->up_seen[s->up_next++ % PAGANI_KBT_UP_SEEN] = arg2;
++		} else if (s->up_dups != UINT32_MAX) {
++			s->up_dups++;
++		}
++	}
+ 	int end;
+ 	int g = pagani_kbt_lat_of(kind, arg2, &end);
+-	if (g >= 0 && pagani_kbt_lat_note(&s->lat[g], end, now_us)) {
++	uint64_t paired_us = 0, begin_us = 0;
++	if (g >= 0 && pagani_kbt_lat_note(&s->lat[g], end, repeat, now_us, &paired_us, &begin_us, &t->follow)) {
+ 		s->lat_dirty = 1;
++		if (paired_us >= (uint64_t)PAGANI_KBT_LONG_MS * 1000) {
++			pagani_kbt_long_note(t, s, g, begin_us, now_us);
++		}
+ 	}
+ 	if (s->seen & (1u << kind)) {
+ 		return 0;
+@@ -408,4 +514,62 @@
+ 	return pagani_kbt_latency(&t->slot[i], line, size) != 0;
+ }
+ 
++/* The next waiting long pair: "kbt Notes[412] long in b=829669 e=832806 d=3137" (mach time, ms, as the first lines), then, once, how many did not
++ * fit. Returns 0 when none is left. */
++static inline int
++pagani_kbt_take_long(struct pagani_kbt *t, char *line, size_t size)
++{
++	if (!t->long_count) {
++		if (!t->long_lost) {
++			return 0;
++		}
++		size_t at = pagani_kbt_put(line, size, 0, "kbt long lost ");
++		(void)pagani_kbt_put_u(line, size, at, t->long_lost);
++		t->long_lost = 0;
++		return 1;
++	}
++	const struct pagani_kbt_long *l = &t->longs[t->long_head];
++	t->long_head = (t->long_head + 1) % PAGANI_KBT_LONGS;
++	t->long_count--;
++	size_t at = pagani_kbt_put(line, size, 0, "kbt ");
++	at = pagani_kbt_put(line, size, at, l->name[0] ? l->name : "?");
++	at = pagani_kbt_put(line, size, at, "[");
++	at = pagani_kbt_put_u(line, size, at, (uint64_t)(l->pid > 0 ? l->pid : 0));
++	at = pagani_kbt_put(line, size, at, "] long ");
++	at = pagani_kbt_put(line, size, at, pagani_kbt_lat_names[l->group < PAGANI_KBT_LATS ? l->group : 0]);
++	at = pagani_kbt_put(line, size, at, " b=");
++	at = pagani_kbt_put_u(line, size, at, l->begin_us / 1000);
++	at = pagani_kbt_put(line, size, at, " e=");
++	at = pagani_kbt_put_u(line, size, at, l->end_us / 1000);
++	at = pagani_kbt_put(line, size, at, " d=");
++	(void)pagani_kbt_put_u(line, size, at, (l->end_us > l->begin_us ? l->end_us - l->begin_us : 0) / 1000);
++	return 1;
++}
++
++/* The next waiting line of a slot taken over; 0 when none is left. A second takeover before the summary keeps only the newer one. */
++static inline int
++pagani_kbt_take_final(struct pagani_kbt *t, char *line, size_t size)
++{
++	if (!t->final_lines) {
++		return 0;
++	}
++	const char *from = t->final[t->final_lines == 2 ? 1 : 0];
++	(void)pagani_kbt_put(line, size, 0, from);
++	t->final_lines--;
++	return 1;
++}
++
++/* The stall probe's pair of a kind (StallProbe.h: 0 dn, 1 up, 2 in), *end when it ends one; -1: none. */
++static inline int
++pagani_kbt_stall_group(int kind, int *end)
++{
++	*end = kind == PAGANI_KBT_DN_DONE || kind == PAGANI_KBT_UP_DONE || kind == PAGANI_KBT_IN_DONE;
++	switch (kind) {
++	case PAGANI_KBT_DN: case PAGANI_KBT_DN_DONE: return 0;
++	case PAGANI_KBT_UP: case PAGANI_KBT_UP_DONE: return 1;
++	case PAGANI_KBT_IN: case PAGANI_KBT_IN_DONE: return 2;
++	default: return -1;
++	}
++}
++
+ #endif /* PAGANI_KBTRACE_H */
+--- a/osfmk/arm/cpu_common.c
++++ b/osfmk/arm/cpu_common.c
+@@ -404,6 +404,13 @@
+ {
+ 	return cpu_xcall_internal(SIGPxcallImm, cpu_number, func, param);
+ }
++
++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS && defined(__arm64__)
++/* UniXNU stall probe (osfmk/kern/bsd_kern.c): every SGI that goes out and every signal handler that runs. */
++extern uint32_t pagani_stall_on;
++extern void boot_progress_stall_ipi_send(unsigned cpu);
++extern void boot_progress_stall_ipi_recv(unsigned cpu);
++#endif
+ 
+ static kern_return_t
+ cpu_signal_internal(cpu_data_t *target_proc,
+@@ -499,6 +506,11 @@
+ 	__builtin_arm_dsb(DSB_ISHST);
+ 
+ 	if (!(target_proc->cpu_signal & SIGPdisabled)) {
++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS && defined(__arm64__)
++		if (__improbable(pagani_stall_on)) {
++			boot_progress_stall_ipi_send((unsigned)target_proc->cpu_number);
++		}
++#endif
+ 		if (defer) {
+ #if defined(HAS_IPI)
+ 			if (gFastIPI) {
+@@ -581,6 +593,11 @@
+ 	cpu_data_ptr->cpu_stat.ipi_cnt++;
+ 	cpu_data_ptr->cpu_stat.ipi_cnt_wake++;
+ 	SCHED_STATS_INC(ipi_count);
++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS && defined(__arm64__)
++	if (__improbable(pagani_stall_on)) {
++		boot_progress_stall_ipi_recv((unsigned)cpu_data_ptr->cpu_number);
++	}
++#endif
+ 
+ 	/*
+ 	 * Employ an acquire barrier when loading cpu_signal to ensure that
+--- a/osfmk/arm64/cpu.c
++++ b/osfmk/arm64/cpu.c
+@@ -487,6 +487,12 @@
+  *	Routine:	cpu_idle
+  *	Function:
+  */
++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
++/* UniXNU stall probe (osfmk/kern/bsd_kern.c): idle entries per CPU. */
++extern uint32_t pagani_stall_on;
++extern void boot_progress_stall_idle(unsigned cpu);
++#endif
++
+ void __attribute__((noreturn))
+ cpu_idle(void)
+ {
+@@ -558,6 +564,12 @@
+ 	lastPop = cpu_data_ptr->rtcPop;
+ 
+ 	cpu_data_ptr->cpu_active_thread = current_thread();
++
++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
++	if (__improbable(pagani_stall_on)) {
++		boot_progress_stall_idle((unsigned)cpu_data_ptr->cpu_number);
++	}
++#endif
+ 
+ 	if (wfi && (cpu_data_ptr->cpu_idle_notify != NULL)) {
+ 		cpu_data_ptr->cpu_idle_notify(cpu_data_ptr->cpu_id, TRUE, &new_idle_timeout_ticks);
+--- a/osfmk/kern/bsd_kern.c
++++ b/osfmk/kern/bsd_kern.c
+@@ -1667,4 +1667,567 @@
+ 	crash.image = crash_trace_image;
+ 	boot_progress_crash(&crash);
+ }
++
++/*
++ * UniXNU stall probe (the OnePlus 13T device repository's patches/xnu/phone-stall-probe.patch; BootProgress StallProbe.h has the whole picture
++ * and the concurrency of every step). Off (pagani_stall_on 0, boot-arg pagani-diag absent) the hooks in thread_dispatch, cpu_signal_internal,
++ * cpu_signal_handler_internal and cpu_idle are one load. BootProgress keeps the counters and runs the sampler; this is what needs the kernel's
++ * structures: the dispatch hook and the readers of threads, tasks, CPUs and VM counters. Keep the structures identical to StallProbe.h
++ * (boot_progress_stall_abi).
++ */
++#include <arm/cpu_data_internal.h>
++#include <arm/pmap.h>
++#include <kern/counter.h>
++#include <kern/host_statistics.h>
++#include <kern/policy_internal.h>
++#include <kern/recount.h>
++#include <kern/sched_prim.h>
++#include <kern/zalloc.h>
++#include <vm/vm_object.h>
++#include <vm/vm_page.h>
++
++#define BOOT_PROGRESS_STALL_VERSION 2u
++
++struct boot_progress_stall_run {
++	uint64_t stamp, latency, tid;
++	const char *name;
++	int32_t pid, pri;
++	uint32_t cpu, user;
++};
++
++struct boot_progress_stall_regs {
++	uint64_t pc, lr, fp, sp, far;
++	uint64_t x[8];
++	uint64_t x16;
++	uint32_t esr, cpsr;
++	uint32_t valid, kernel;
++	uint64_t kpc;
++};
++
++struct boot_progress_stall_thread {
++	uint64_t tid, wait_event, last_run, made_runnable;
++	uint64_t continuation;
++	uint64_t kframe[5];
++	uint32_t kframes, state, hint, active;
++	int32_t sched_pri, base_pri, cpu, reserved;
++	struct boot_progress_stall_regs user;
++};
++
++struct boot_progress_stall_task {
++	int32_t pid;
++	char name[17];
++	uint64_t cache_start, cache_end, cache_slide;
++	uint64_t main_header, user_limit;
++};
++
++struct boot_progress_stall_cpu {
++	uint32_t kind, on_idle;
++	int32_t runq, rt;
++};
++
++struct boot_progress_stall_vm {
++	uint64_t faults, pageins, compressions, decompressions;
++	uint64_t throttled[4];
++	uint64_t page_waits;
++};
++
++struct boot_progress_stall_mem {
++	uint32_t wired, internal, external;
++	uint32_t compressor, compressed;
++	uint32_t throttled, purgeable, zone;
++};
++
++enum { STALL_CPU_OFF, STALL_CPU_IDLE, STALL_CPU_DISPATCHING, STALL_CPU_RUNNING };
++
++#define BOOT_PROGRESS_STALL_ABI ((uint32_t)(BOOT_PROGRESS_STALL_VERSION << 24 | sizeof(struct boot_progress_stall_thread) << 12 | \
++	(sizeof(struct boot_progress_stall_run) + sizeof(struct boot_progress_stall_task) + sizeof(struct boot_progress_stall_cpu) + \
++	sizeof(struct boot_progress_stall_vm) + sizeof(struct boot_progress_stall_mem))))
++
++extern char *proc_best_name(struct proc *p);
++extern int throttled_count[];
++extern uint32_t c_segment_pages_compressed;
++extern uint64_t pagani_vm_page_waits;
++
++uint32_t boot_progress_stall_abi(void);
++void pagani_stall_dispatch(thread_t self, processor_t processor, uint64_t latency);
++int boot_progress_stall_thread_read(void *handle, struct boot_progress_stall_thread *out);
++int boot_progress_stall_regs_here(void *handle, struct boot_progress_stall_regs *out);
++int boot_progress_stall_xcall(unsigned cpu, void (*function)(void *), void *parameter);
++void *boot_progress_stall_task_find(const char *name, int32_t pid, struct boot_progress_stall_task *out);
++void boot_progress_stall_task_release(void *handle);
++int32_t boot_progress_stall_foreground(const char *not_a, const char *not_b, uint32_t *count);
++void *boot_progress_stall_thread_find(void *handle, const char *name, uint64_t tid);
++void boot_progress_stall_thread_release(void *handle);
++unsigned boot_progress_stall_thread_times(void *handle, uint64_t *tids, uint64_t *times, unsigned max);
++void *boot_progress_stall_map(void *handle);
++void boot_progress_stall_map_release(void *handle);
++int boot_progress_stall_map_read(void *handle, uint64_t address, void *buffer, uint32_t bytes);
++int boot_progress_stall_image(void *handle, uint64_t address, struct boot_progress_crash_image *image);
++void boot_progress_stall_cpu_read(unsigned cpu, struct boot_progress_stall_cpu *out);
++void boot_progress_stall_vm_read(struct boot_progress_stall_vm *out);
++void boot_progress_stall_mem_read(struct boot_progress_stall_mem *out);
++void boot_progress_stall_run(const struct boot_progress_stall_run *run);
++void boot_progress_stall_idle(unsigned cpu);
++void boot_progress_stall_ipi_send(unsigned cpu);
++void boot_progress_stall_ipi_recv(unsigned cpu);
++void boot_progress_stall_kbt(int32_t pid, unsigned group, int end);
++
++/* Set by BootProgress once it has allocated everything; read by the hooks. */
++uint32_t pagani_stall_on;
++
++/* BootProgress supplies these; the defaults keep the kernel linking without it. */
++__attribute__((weak)) void
++boot_progress_stall_run(const struct boot_progress_stall_run *run)
++{
++	(void)run;
++}
++
++__attribute__((weak)) void
++boot_progress_stall_idle(unsigned cpu)
++{
++	(void)cpu;
++}
++
++__attribute__((weak)) void
++boot_progress_stall_ipi_send(unsigned cpu)
++{
++	(void)cpu;
++}
++
++__attribute__((weak)) void
++boot_progress_stall_ipi_recv(unsigned cpu)
++{
++	(void)cpu;
++}
++
++__attribute__((weak)) void
++boot_progress_stall_kbt(int32_t pid, unsigned group, int end)
++{
++	(void)pid;
++	(void)group;
++	(void)end;
++}
++
++uint32_t
++boot_progress_stall_abi(void)
++{
++	return BOOT_PROGRESS_STALL_ABI;
++}
++
++/* thread_dispatch, at splsched with self locked: nothing here takes a lock or follows more than the task and proc pointers of the running thread. */
++void
++pagani_stall_dispatch(thread_t self, processor_t processor, uint64_t latency)
++{
++	struct boot_progress_stall_run run;
++
++	run.stamp = processor->last_dispatch;
++	run.latency = latency;
++	run.tid = self->thread_id;
++	run.name = NULL;
++	run.pid = 0;
++	run.pri = self->sched_pri;
++	run.cpu = (uint32_t)processor->cpu_id;
++	run.user = 0;
++	if (self->state & TH_IDLE) {
++		run.pid = -1;
++	} else {
++		task_t task = get_threadtask(self);
++		if (task != kernel_task) {
++			struct proc *p = get_bsdtask_info(task);
++			run.pid = task_pid(task);
++			run.user = 1;
++			if (p != NULL) {
++				run.name = proc_best_name(p);
++			}
++		}
++	}
++	boot_progress_stall_run(&run);
++}
++
++static void
++stall_regs_copy(struct boot_progress_stall_regs *out, struct arm_saved_state *state)
++{
++	out->valid = 0;
++	out->kernel = 0;
++	out->kpc = 0;
++	if (state == NULL || !is_saved_state64(state)) {
++		return;
++	}
++	out->pc = (uint64_t)get_saved_state_pc(state);
++	out->lr = (uint64_t)get_saved_state_lr(state);
++	out->fp = (uint64_t)get_saved_state_fp(state);
++	out->sp = (uint64_t)get_saved_state_sp(state);
++	out->far = (uint64_t)get_saved_state_far(state);
++	out->esr = get_saved_state_esr(state);
++	out->cpsr = get_saved_state_cpsr(state);
++	for (int i = 0; i < 8; i++) {
++		out->x[i] = (uint64_t)get_saved_state_reg(state, i);
++	}
++	out->x16 = (uint64_t)get_saved_state_reg(state, 16);
++	out->valid = 1;
++}
++
++/*
++ * The return addresses of a thread off core, past thread_invoke and the block routine above it, inside its kernel stack. Under the thread lock:
++ * it cannot be dispatched meanwhile, so the stack stays. Its registers may be a moment old while it is still switching away; then the walk reads
++ * stale words of the stack, and it never leaves the stack.
++ */
++static void
++stall_kernel_frames(thread_t thread, struct boot_progress_stall_thread *out)
++{
++	const uintptr_t low = thread->kernel_stack, high = low + kernel_stack_size;
++	uint64_t fp, lr;
++	unsigned skip = 2;
++
++	if (thread->machine.kpcb != NULL) {
++		fp = thread->machine.kpcb->ss_64.fp;
++		lr = thread->machine.kpcb->ss_64.lr;
++		skip = 0;                       /* preempted: its own frames start right there */
++	} else {
++		arm_kernel_saved_state_t *kstate = &thread_get_kernel_state(thread)->machine.ss;
++		fp = kstate->fp;
++		lr = kstate->lr;
++	}
++	while (out->kframes < 5) {
++		if (skip) {
++			skip--;
++		} else {
++			out->kframe[out->kframes++] = VM_KERNEL_UNSLIDE(lr);
++		}
++		if ((fp & 7) || fp < low || fp + 16 > high) {
++			break;
++		}
++		const uint64_t next = ((const uint64_t *)fp)[0];
++		lr = ((const uint64_t *)fp)[1];
++		if (next <= fp) {
++			break;
++		}
++		fp = next;
++	}
++}
++
++/* Thread context, no lock held, with a reference on the thread. 1, and *out; 0 without a thread. */
++int
++boot_progress_stall_thread_read(void *handle, struct boot_progress_stall_thread *out)
++{
++	thread_t thread = handle;
++
++	if (thread == THREAD_NULL) {
++		return 0;
++	}
++	spl_t s = splsched();
++	thread_lock(thread);
++	const processor_t last = thread->last_processor;
++	const bool on_core = (thread->state & TH_RUN) && thread_get_runq(thread) == PROCESSOR_NULL && last != PROCESSOR_NULL &&
++	    last->active_thread == thread;
++	out->tid = thread->thread_id;
++	out->wait_event = (uint64_t)VM_KERNEL_UNSLIDE_OR_PERM(thread->wait_event);
++	out->last_run = thread->last_run_time;
++	out->made_runnable = thread->last_made_runnable_time;
++	out->continuation = (uint64_t)VM_KERNEL_UNSLIDE(thread->continuation);
++	out->kframes = 0;
++	out->state = (uint32_t)thread->state;
++	out->hint = (uint32_t)thread->block_hint;
++	out->active = thread->active;
++	out->sched_pri = thread->sched_pri;
++	out->base_pri = thread->base_pri;
++	out->cpu = on_core ? last->cpu_id : -1;
++	out->reserved = 0;
++	if (!on_core && thread->continuation == NULL && thread->kernel_stack != 0) {
++		stall_kernel_frames(thread, out);
++	}
++	thread_unlock(thread);
++	splx(s);
++	/* The PCB: stable while the thread is in the kernel, and a stale but harmless read while it runs in user space (the caller asks its CPU then). */
++	stall_regs_copy(&out->user, get_user_regs(thread));
++	return 1;
++}
++
++/* A cross-call's handler, on a CPU in its IPI handler: 1 when `handle` is the thread it interrupted, with that thread's user state. */
++int
++boot_progress_stall_regs_here(void *handle, struct boot_progress_stall_regs *out)
++{
++	thread_t thread = handle;
++	struct arm_saved_state *state = getCpuDatap()->cpu_int_state;
++
++	if (current_thread() != thread || state == NULL) {
++		return 0;
++	}
++	if (PSR64_IS_USER(get_saved_state_cpsr(state))) {
++		stall_regs_copy(out, state);
++	} else {
++		stall_regs_copy(out, get_user_regs(thread));
++		out->kernel = 1;
++		out->kpc = (uint64_t)VM_KERNEL_UNSLIDE(get_saved_state_pc(state));
++	}
++	return 1;
++}
++
++/* SIGPxcallImm: fails at once when one is pending or the CPU is off, never waits. 0 when it went out. */
++int
++boot_progress_stall_xcall(unsigned cpu, void (*function)(void *), void *parameter)
++{
++	if (cpu >= MAX_CPUS || cpu_datap((int)cpu) == NULL) {
++		return -1;
++	}
++	return cpu_immediate_xcall((int)cpu, function, parameter) == KERN_SUCCESS ? 0 : -1;
++}
++
++/*
++ * A task by process name, or by pid when name is NULL, with a reference, and what naming its addresses takes. Thread context; a try-lock: a list
++ * in use costs one sample (out->pid -1), a sampler never queues behind a burst of forks.
++ */
++void *
++boot_progress_stall_task_find(const char *name, int32_t pid, struct boot_progress_stall_task *out)
++{
++	task_t task, found = TASK_NULL;
++
++	/* Past the lock a process that finishes exiting has no proc any more: what comes from it is copied under the lock. */
++	out->pid = -1;
++	if (!lck_mtx_try_lock(&tasks_threads_lock)) {
++		return NULL;
++	}
++	out->pid = 0;
++	queue_iterate(&tasks, task, task_t, tasks) {
++		struct proc *p = get_bsdtask_info(task);
++		if (p == NULL || !task->active) {
++			continue;
++		}
++		if (name != NULL ? strcmp(proc_best_name(p), name) == 0 : task_pid(task) == pid) {
++			task_reference(task);
++			found = task;
++			out->pid = task_pid(task);
++			strlcpy(out->name, proc_best_name(p), sizeof(out->name));
++			break;
++		}
++	}
++	lck_mtx_unlock(&tasks_threads_lock);
++	if (found == TASK_NULL) {
++		return NULL;
++	}
++	out->cache_start = out->cache_end = out->cache_slide = 0;
++	out->main_header = found->mach_header_vm_address;
++	out->user_limit = 0;
++	vm_map_t map = get_task_map_reference(found);
++	if (map != VM_MAP_NULL) {
++		out->user_limit = (uint64_t)vm_map_max(map);
++		vm_map_deallocate(map);
++	}
++	vm_shared_region_t shared_region = vm_shared_region_get(found);
++	if (shared_region != NULL) {
++		if (shared_region->sr_first_mapping != (mach_vm_offset_t)-1) {
++			out->cache_start = shared_region->sr_base_address;
++			out->cache_end = shared_region->sr_base_address + shared_region->sr_size;
++			out->cache_slide = shared_region->sr_slide;
++		}
++		vm_shared_region_deallocate(shared_region);
++	}
++	return found;
++}
++
++void
++boot_progress_stall_task_release(void *handle)
++{
++	task_deallocate((task_t)handle);
++}
++
++/*
++ * The App on screen: the newest task in the focal role but the two named, and in *count how many there are. RunningBoard gives that role to what it
++ * calls UI focal (setpriority(PRIO_DARWIN_ROLE, PRIO_DARWIN_ROLE_UI_FOCAL), proc_darwin_role_to_task_role), a word of the task read without a lock.
++ * The pid and no reference: only a new App costs the lookup above. 0 nobody, -1 the list was in use. The same try-lock, once for each gap sample.
++ */
++int32_t
++boot_progress_stall_foreground(const char *not_a, const char *not_b, uint32_t *count)
++{
++	task_t task;
++	int32_t pid = 0;
++
++	*count = 0;
++	if (!lck_mtx_try_lock(&tasks_threads_lock)) {
++		return -1;
++	}
++	queue_iterate(&tasks, task, task_t, tasks) {
++		struct proc *p = get_bsdtask_info(task);
++		if (p == NULL || !task->active || proc_get_effective_task_policy(task, TASK_POLICY_ROLE) != TASK_FOREGROUND_APPLICATION) {
++			continue;
++		}
++		const char *name = proc_best_name(p);
++		if (strcmp(name, not_a) == 0 || strcmp(name, not_b) == 0) {
++			continue;
++		}
++		pid = task_pid(task);
++		(*count)++;
++	}
++	lck_mtx_unlock(&tasks_threads_lock);
++	return pid;
++}
++
++/* A live thread of the task with a reference: by id, by a piece of its pthread name, or the first one, the main thread. NULL also when the task is locked. */
++void *
++boot_progress_stall_thread_find(void *handle, const char *name, uint64_t tid)
++{
++	task_t task = handle;
++	thread_t thread, found = THREAD_NULL;
++
++	if (!task_lock_try(task)) {
++		return NULL;
++	}
++	queue_iterate(&task->threads, thread, thread_t, task_threads) {
++		if (!thread->active) {
++			continue;
++		}
++		if (tid != 0) {
++			if (thread->thread_id != tid) {
++				continue;
++			}
++		} else if (name != NULL) {
++			char text[MAXTHREADNAMESIZE];
++			text[0] = '\0';
++			bsd_getthreadname(get_bsdthread_info(thread), text);
++			text[MAXTHREADNAMESIZE - 1] = '\0';
++			if (strnstr(text, name, sizeof(text)) == NULL) {
++				continue;
++			}
++		}
++		thread_reference(thread);
++		found = thread;
++		break;
++	}
++	task_unlock(task);
++	return found;
++}
++
++void
++boot_progress_stall_thread_release(void *handle)
++{
++	thread_deallocate((thread_t)handle);
++}
++
++/* The task's live threads and their CPU time. max + 1 when the task is locked: 0 is a task without threads, and the caller lets that one go. */
++unsigned
++boot_progress_stall_thread_times(void *handle, uint64_t *tids, uint64_t *times, unsigned max)
++{
++	task_t task = handle;
++	thread_t thread;
++	unsigned n = 0;
++
++	if (!task_lock_try(task)) {
++		return max + 1;
++	}
++	queue_iterate(&task->threads, thread, thread_t, task_threads) {
++		if (n == max) {
++			break;
++		}
++		if (thread->active) {
++			tids[n] = thread->thread_id;
++			times[n] = recount_thread_time_mach(thread);
++			n++;
++		}
++	}
++	task_unlock(task);
++	return n;
++}
++
++/* The task's map with a reference: holds the pmap the reads below use, also across an exec. */
++void *
++boot_progress_stall_map(void *handle)
++{
++	return get_task_map_reference((task_t)handle);
++}
++
++void
++boot_progress_stall_map_release(void *handle)
++{
++	vm_map_deallocate((vm_map_t)handle);
++}
++
++/*
++ * Aligned 64-bit words of user memory that is resident and managed, through the pmap's short lock and ml_phys_read: no fault, no sleep, no
++ * vm_map lock, so a stalled thread's own fault or map lock cannot hold the sampler. 0 when all of it was read. A page freed right after the lookup
++ * gives wrong words, never a fault; the walk's checks stop at them.
++ */
++int
++boot_progress_stall_map_read(void *handle, uint64_t address, void *buffer, uint32_t bytes)
++{
++	const pmap_t pmap = vm_map_pmap((vm_map_t)handle);
++	uint64_t *to = buffer;
++
++	if ((address & 7) || (bytes & 7)) {
++		return -1;
++	}
++	for (; bytes; bytes -= 8, address += 8) {
++		const ppnum_t ppn = pmap_find_phys(pmap, address);
++		const pmap_paddr_t pa = ptoa(ppn);
++		if (ppn == 0 || !pmap_valid_address(pa)) {
++			return -1;
++		}
++		*to++ = ml_phys_read_double_64(pa | (address & PAGE_MASK));
++	}
++	return 0;
++}
++
++/* May block on the map and vnode locks: the low-priority thread call only. 1 when a file mapping holds the address. */
++int
++boot_progress_stall_image(void *handle, uint64_t address, struct boot_progress_crash_image *image)
++{
++	return crash_trace_image(handle, address, image);
++}
++
++/* No lock: racy words, the sampler judges two ticks in a row. A runq count is two loads through the scheduler's table. */
++void
++boot_progress_stall_cpu_read(unsigned cpu, struct boot_progress_stall_cpu *out)
++{
++	processor_t processor = cpu < MAX_SCHED_CPUS ? processor_array[cpu] : PROCESSOR_NULL;
++
++	out->kind = STALL_CPU_OFF;
++	out->on_idle = 0;
++	out->runq = 0;
++	out->rt = 0;
++	if (processor == PROCESSOR_NULL) {
++		return;
++	}
++	switch (processor->state) {
++	case PROCESSOR_IDLE:
++		out->kind = STALL_CPU_IDLE;
++		break;
++	case PROCESSOR_DISPATCHING:
++		out->kind = STALL_CPU_DISPATCHING;
++		break;
++	case PROCESSOR_RUNNING:
++		out->kind = STALL_CPU_RUNNING;
++		break;
++	default:
++		return;
++	}
++	out->on_idle = processor->active_thread == processor->idle_thread;
++	out->runq = SCHED(processor_runq_count)(processor);
++	out->rt = rt_runq_count(processor->processor_set);
++}
++
++void
++boot_progress_stall_vm_read(struct boot_progress_stall_vm *out)
++{
++	out->faults = counter_load(&vm_statistics_faults);
++	out->pageins = counter_load(&vm_statistics_pageins);
++	out->compressions = counter_load(&vm_statistics_compressions);
++	out->decompressions = counter_load(&vm_statistics_decompressions);
++	for (int tier = 0; tier < 4; tier++) {
++		out->throttled[tier] = (uint32_t)throttled_count[tier];
++	}
++	out->page_waits = pagani_vm_page_waits;
++}
++
++/* The memory account: plain loads of words that change all the time, a picture of the moment (M mem, every few seconds). */
++void
++boot_progress_stall_mem_read(struct boot_progress_stall_mem *out)
++{
++	out->wired = vm_page_wire_count;
++	out->internal = vm_page_pageable_internal_count;
++	out->external = vm_page_pageable_external_count;
++	out->compressor = VM_PAGE_COMPRESSOR_COUNT;
++	out->compressed = c_segment_pages_compressed;
++	out->throttled = vm_page_throttled_count;
++	out->purgeable = vm_page_purgeable_count;
++	out->zone = (uint32_t)zone_pages_wired;
++}
+ #endif /* XNU_BOOT_PROGRESS && __arm64__ */
+--- a/osfmk/kern/sched_prim.c
++++ b/osfmk/kern/sched_prim.c
+@@ -124,6 +124,11 @@
+ #include <kern/host.h>
+ #include <stdatomic.h>
+ #include <os/atomic_private.h>
++
++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS && defined(__arm64__)
++extern uint32_t pagani_stall_on;
++extern void pagani_stall_dispatch(thread_t self, processor_t processor, uint64_t latency);
++#endif
+ 
+ #ifdef KDBG_MACOS_RELEASE
+ #define KTRC KDBG_MACOS_RELEASE
+@@ -3781,6 +3786,13 @@
+ 		latency = processor->last_dispatch - self->last_made_runnable_time;
+ 		assert(latency >= self->same_pri_latency);
+ 
++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS && defined(__arm64__)
++		/* UniXNU stall probe (osfmk/kern/bsd_kern.c): how long this thread was runnable before it got here. */
++		if (__improbable(pagani_stall_on)) {
++			pagani_stall_dispatch(self, processor, latency);
++		}
++#endif
++
+ 		urgency = thread_get_urgency(self, &arg1, &arg2);
+ 
+ 		thread_tell_urgency(urgency, arg1, arg2, latency, self);
+@@ -3823,6 +3835,11 @@
+ 		running_timers_deactivate(processor);
+ 		processor->first_timeslice = FALSE;
+ 		thread_tell_urgency(THREAD_URGENCY_NONE, 0, 0, 0, self);
++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS && defined(__arm64__)
++		if (__improbable(pagani_stall_on)) {
++			pagani_stall_dispatch(self, processor, 0);
++		}
++#endif
+ 	}
+ 
+ 	assert(self->block_hint == kThreadWaitNone);
+--- a/osfmk/vm/vm_resident.c
++++ b/osfmk/vm/vm_resident.c
+@@ -491,6 +491,11 @@
+ #endif /* CONFIG_SECLUDED_MEMORY */
+ unsigned int    vm_page_anonymous_min = 0;
+ unsigned int    vm_page_free_reserved = 0;
++/*
++ * UniXNU stall probe (osfmk/kern/bsd_kern.c): vm_page_wait calls that go to sleep, under the free page lock. Not under XNU_BOOT_PROGRESS: the second
++ * pass of the kernel build only rebuilds the objects it lists, this one keeps the pass with it off, and a count before a sleep costs nothing here.
++ */
++uint64_t        pagani_vm_page_waits = 0;
+ 
+ 
+ /*
+@@ -3985,6 +3990,7 @@
+ 		return TRUE;
+ 	}
+ 
++	pagani_vm_page_waits++;
+ 	if (is_privileged) {
+ 		if (vm_page_free_wanted_privileged++ == 0) {
+ 			need_wakeup = 1;

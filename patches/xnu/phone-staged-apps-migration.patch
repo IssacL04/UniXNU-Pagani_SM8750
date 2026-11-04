@@ -1,0 +1,81 @@
+--- a/bsd/kern/kern_sysctl.c
++++ b/bsd/kern/kern_sysctl.c
+@@ -2081,6 +2081,39 @@
+     sysctl_iossupportversion, "A", "The iOSSupportVersion from SystemVersion.plist");
+ 
+ static uint64_t osvariant_status = 0;
++
++/* UniXNU staged system apps (boot-arg sheng-staged-apps=1: the kernel copies the deletable system apps into Data before launchd and
++ * the Data seed carries the DataMigrator sentinel). A board whose Data is a volatile RAM disk sets /chosen ephemeral-storage = 1, and
++ * com.apple.datamigrator skips every data migration on ephemeral storage: -[DMMigrator migrateCheckingNecessity:lastRelevantPlugin:
++ * testMigrationInfrastructureOnly:connection:migrationResultHandler:] and -[DMMigrator isMigrationNeeded:] log "Ephemeral environment.
++ * Skipping migration." when -[DMEnvironment isDeviceUsingEphemeralStorage], os_variant_uses_ephemeral_storage("com.apple.migration"),
++ * is true. SystemAppMigrator therefore never ran and installd took the system app migration as complete. libsystem_darwin takes that
++ * answer from bits 14-15 of kern.osvariant_status (2 no, 3 yes; launchd caches the status once) or, before launchd cached it, from
++ * hw.ephemeral_storage (kern_mib.c). Only datamigrator is told "not ephemeral"; keybagd, usermanagerd, installd's persona check and
++ * LaunchServices keep the real answer. */
++#define NATIVE_OSVARIANT_EPHEMERAL_SHIFT 14
++extern void boot_progress_trace(const char *text) __attribute__((weak_import));
++bool native_staged_apps_migrator(proc_t p);
++bool
++native_staged_apps_migrator(proc_t p)
++{
++	static int enabled = -1;
++	static int traced = 0;
++	if (enabled < 0) {
++		uint32_t value = 0;
++		enabled = PE_parse_boot_argn("sheng-staged-apps", &value, sizeof(value)) && value == 1;
++	}
++	if (!enabled || p == PROC_NULL || strcmp(proc_best_name(p), "com.apple.datamigrator")) {
++		return false;
++	}
++	if (!traced && boot_progress_trace) {
++		traced = 1;
++		char line[80];
++		snprintf(line, sizeof(line), "staged apps: datamigrator pid %d told storage is not ephemeral", proc_getpid(p));
++		boot_progress_trace(line);
++	}
++	return true;
++}
+ 
+ STATIC int
+ sysctl_osvariant_status(__unused struct sysctl_oid *oidp, void *arg1, int arg2, struct sysctl_req *req)
+@@ -2097,7 +2130,16 @@
+ 		}
+ 	}
+ 
+-	int err = sysctl_handle_quad(oidp, arg1, arg2, req);
++	int err;
++	if (req->newptr == 0 &&
++	    ((osvariant_status >> NATIVE_OSVARIANT_EPHEMERAL_SHIFT) & OS_VARIANT_STATUS_MASK) == OS_VARIANT_S_YES &&
++	    native_staged_apps_migrator(req->p)) {
++		uint64_t status = (osvariant_status & ~((uint64_t)OS_VARIANT_STATUS_MASK << NATIVE_OSVARIANT_EPHEMERAL_SHIFT)) |
++		    ((uint64_t)OS_VARIANT_S_NO << NATIVE_OSVARIANT_EPHEMERAL_SHIFT);
++		err = SYSCTL_OUT(req, &status, sizeof(status));
++	} else {
++		err = sysctl_handle_quad(oidp, arg1, arg2, req);
++	}
+ 
+ 	reset_debug_syscall_rejection_mode();
+ 
+--- a/bsd/kern/kern_mib.c
++++ b/bsd/kern/kern_mib.c
+@@ -750,13 +750,17 @@
+ 		return EINVAL;
+ 	}
+ }
++
++/* The staged system apps' data migration: datamigrator alone sees non-ephemeral storage (kern_sysctl.c, kern.osvariant_status). */
++extern bool native_staged_apps_migrator(proc_t p);
+ 
+ static int
+ sysctl_ephemeral_storage
+ (__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+ {
+ 	if (property_existence.ephemeral_storage) {
+-		return SYSCTL_OUT(req, &ephemeral_storage, sizeof(ephemeral_storage));
++		uint32_t value = ephemeral_storage && native_staged_apps_migrator(req->p) ? 0 : ephemeral_storage;
++		return SYSCTL_OUT(req, &value, sizeof(value));
+ 	} else {
+ 		return EINVAL;
+ 	}

@@ -1,0 +1,310 @@
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -8133,24 +8133,226 @@
+ 	}
+ 	return error == ENOENT ? 0 : -error;
+ }
+-/* After launchd: how far the data migration that installs the staged apps got, checked every 10 s for 10 minutes and logged when
+- * something changed (and every minute). sentinel: /private/var/datamigrator/migrate, removed by datamigrator when the migration ends.
+- * staged: entries left in /private/var/staged_system_apps (SystemAppMigrator hands every app to installcoordinationd and removes what
+- * it did not install). bundles: entries in /private/var/containers/Bundle/Application, one per installed app. ixwork: the pending
+- * work file of installcoordinationd. free: Data's free MiB. Negative values are -errno (-2: does not exist). */
++/* Where the app bundles go while the watch runs: a file-operation listener (kauth fileop scope) sees every rename and deletion with
++ * its paths and keeps those of an app bundle (a path ending in ".app") as counts by operation, place and process: R renamed, D deleted;
++ * places S /private/var/staged_system_apps, B a bundle container (/containers/Bundle/Application/), I installd's directories, C
++ * installcoordinationd's, T a temporary or cache directory, O anything else. The first moves are logged as they happen, the counts with
++ * every watch line, so the log tells whether SystemAppMigrator's installs moved the staged apps into bundle containers or the apps were
++ * removed (it removes what it did not install) and by whom. Only between the copy and the end of the watch: with a listener the kernel
++ * builds a path for every open and close. */
++enum { NATIVE_STAGED_APPS_MOVES = 12, NATIVE_STAGED_APPS_MOVES_LOGGED = 12 };
++struct native_staged_apps_move {
++	char op, from, to;
++	char process[17];
++	uint32_t count;
++};
++static struct native_staged_apps_move native_staged_apps_moves[NATIVE_STAGED_APPS_MOVES];
++static uint32_t native_staged_apps_moves_lost, native_staged_apps_moves_logged;
++static LCK_GRP_DECLARE(native_staged_apps_lck_grp, "native-staged-apps");
++static LCK_MTX_DECLARE(native_staged_apps_lock, &native_staged_apps_lck_grp);
++static kauth_listener_t native_staged_apps_listener;
++static char
++native_staged_apps_place(const char *path)
++{
++	if (!path) {
++		return '-';
++	}
++	if (!strncmp(path, "/private/var/staged_system_apps/", 32)) {
++		return 'S';
++	}
++	if (strnstr(path, "/containers/Bundle/Application/", MAXPATHLEN)) {
++		return 'B';
++	}
++	if (strnstr(path, "installcoordinationd", MAXPATHLEN)) {
++		return 'C';
++	}
++	if (strnstr(path, "/installd/", MAXPATHLEN)) {
++		return 'I';
++	}
++	if (strnstr(path, "/tmp/", MAXPATHLEN) || strnstr(path, "/Caches/", MAXPATHLEN)) {
++		return 'T';
++	}
++	return 'O';
++}
++static bool
++native_staged_apps_bundle(const char *path)
++{
++	size_t length = path ? strlen(path) : 0;
++	return length > 4 && !strcmp(path + length - 4, ".app");
++}
++/* The tail of PATH that fits in SIZE - 1 characters. */
++static const char *
++native_staged_apps_tail(const char *path, size_t size)
++{
++	size_t length = path ? strlen(path) : 0;
++	return !path ? "-" : length > size - 1 ? path + length - (size - 1) : path;
++}
++static int
++native_staged_apps_fileop(__unused kauth_cred_t credential, __unused void *idata, kauth_action_t action, uintptr_t arg0, uintptr_t arg1,
++    __unused uintptr_t arg2, __unused uintptr_t arg3)
++{
++	const char *from = NULL, *to = NULL;
++	if (action == KAUTH_FILEOP_RENAME) {
++		from = (const char *)arg0;
++		to = (const char *)arg1;
++	} else if (action == KAUTH_FILEOP_DELETE) {
++		from = (const char *)arg1;
++	} else {
++		return KAUTH_RESULT_DEFER;
++	}
++	if (!native_staged_apps_bundle(from) && !native_staged_apps_bundle(to)) {
++		return KAUTH_RESULT_DEFER;
++	}
++	const char op = action == KAUTH_FILEOP_RENAME ? 'R' : 'D';
++	const char from_place = native_staged_apps_place(from), to_place = op == 'R' ? native_staged_apps_place(to) : '-';
++	const char *process = proc_best_name(current_proc());
++	bool trace = false;
++	lck_mtx_lock(&native_staged_apps_lock);
++	struct native_staged_apps_move *slot = NULL;
++	for (unsigned i = 0; i < NATIVE_STAGED_APPS_MOVES && !slot; i++) {
++		struct native_staged_apps_move *move = &native_staged_apps_moves[i];
++		if (!move->count) {
++			move->op = op;
++			move->from = from_place;
++			move->to = to_place;
++			strlcpy(move->process, process, sizeof(move->process));
++			slot = move;
++		} else if (move->op == op && move->from == from_place && move->to == to_place &&
++		    !strncmp(move->process, process, sizeof(move->process) - 1)) {
++			slot = move;
++		}
++	}
++	if (slot) {
++		slot->count++;
++	} else {
++		native_staged_apps_moves_lost++;
++	}
++	if (native_staged_apps_moves_logged < NATIVE_STAGED_APPS_MOVES_LOGGED) {
++		native_staged_apps_moves_logged++;
++		trace = true;
++	}
++	lck_mtx_unlock(&native_staged_apps_lock);
++	if (trace && boot_progress_trace) {
++		char line[200];
++		snprintf(line, sizeof(line), "app move %c %c>%c %s: %s -> %s", op, from_place, to_place, process,
++		    native_staged_apps_tail(from, 72), native_staged_apps_tail(to, 72));
++		boot_progress_trace(line);
++	}
++	return KAUTH_RESULT_DEFER;
++}
++/* The counts above as one line ("app moves: R S>C installcoordinati 29, ..., lost 0"). */
++static void __attribute__((noinline))
++native_staged_apps_moves_line(void)
++{
++	char line[400];
++	size_t used = strlcpy(line, "app moves:", sizeof(line));
++	lck_mtx_lock(&native_staged_apps_lock);
++	for (unsigned i = 0; i < NATIVE_STAGED_APPS_MOVES && native_staged_apps_moves[i].count && used < sizeof(line); i++) {
++		const struct native_staged_apps_move *move = &native_staged_apps_moves[i];
++		used += snprintf(line + used, sizeof(line) - used, " %c %c>%c %s %u,", move->op, move->from, move->to, move->process, move->count);
++	}
++	if (used < sizeof(line)) {
++		snprintf(line + used, sizeof(line) - used, " lost %u", native_staged_apps_moves_lost);
++	}
++	lck_mtx_unlock(&native_staged_apps_lock);
++	boot_progress_trace(line);
++}
++/* The boot's one-time facts again with every watch line: the copy's result (native_staged_apps_report) and the owner overlays. The
++ * events ring keeps about the last 80-280 s, so the lines written once at the start were gone by the timed reset (2026-10-30 21:33 and
++ * 22:04 runs); repeated, the last copies survive. Not inlined, like the report. */
++static uint64_t native_staged_apps_ms;
++extern volatile int native_staged_apps_migrator_pid, native_staged_apps_migrator_hits;
++extern boolean_t PEGetProductName(char *name, int maxLength);   /* IOKit/IOPlatformExpert.h, as kern_mib.c's hw.product */
++static void __attribute__((noinline))
++native_staged_apps_facts(void)
++{
++	char line[200];
++	snprintf(line, sizeof(line), "staged apps copy: stage %d dirs %d files %d bytes %llu failed %d error %d ms %llu last %s",
++	    native_staged_apps_stage, native_staged_apps_dirs, native_staged_apps_files, (unsigned long long)native_staged_apps_bytes,
++	    native_staged_apps_failed, native_staged_apps_error, (unsigned long long)native_staged_apps_ms, native_staged_apps_path);
++	boot_progress_trace(line);
++	snprintf(line, sizeof(line), "overlays: wallpaper stage %d status %d, keyboard stage %d status %d, audio stage %d status %d",
++	    native_gpu_addon4_stage, native_gpu_addon4_status, native_gpu_addon5_stage, native_gpu_addon5_status, native_audio_addon_stage,
++	    native_audio_addon_status);
++	boot_progress_trace(line);
++	/* What SystemAppMigrator's passes ask MobileGestalt about: SupportedDeviceFamilies follows DeviceClassNumber, the prefix of
++	 * hw.product (PEGetProductName: the root model); "arm64" (UIRequiredDeviceCapabilities) is the host's preferred user arch,
++	 * the master CPU's cpu_type/cpu_subtype (host_info HOST_PREFERRED_USER_ARCH; every CPU has the same). */
++	char product[65] = "?";
++	if (!PEGetProductName(product, sizeof(product) - 1)) {
++		strlcpy(product, "?", sizeof(product));
++	}
++	snprintf(line, sizeof(line), "identity: hw.product %s cpu type 0x%x subtype 0x%x", product, (unsigned)cpu_type(),
++	    (unsigned)cpu_subtype());
++	boot_progress_trace(line);
++}
++/* installd's per-app system app states (SystemAppMigrator's desired states: 1 install, 2 uninstalled, 3/4 demoted, 6 not allowed), as
++ * hex once the migration is over: MIGlobalConfiguration's backedUpStateDirectory is <installd>/Library/MobileInstallation/BackedUpState. */
++static const char native_staged_apps_state_path[] = "/private/var/installd/Library/MobileInstallation/BackedUpState/SystemAppInstallState.plist";
++static void __attribute__((noinline))
++native_staged_apps_state_dump(vfs_context_t ctx)
++{
++	enum { STATE_MAX = 3072, HEX_PER_LINE = 160 };
++	vnode_t vp = NULLVP;
++	int error = vnode_lookup(native_staged_apps_state_path, 0, &vp, ctx);
++	char line[200];
++	if (error) {
++		snprintf(line, sizeof(line), "app state: %s error %d", native_staged_apps_state_path, error);
++		boot_progress_trace(line);
++		return;
++	}
++	uint8_t *bytes = kalloc_data(STATE_MAX, Z_WAITOK);
++	int resid = 0;
++	/* Opened like the staged files of the copy (a compressed file is read through its decmpfs open). */
++	error = !bytes ? ENOMEM : VNOP_OPEN(vp, FREAD, ctx);
++	if (!error) {
++		error = vn_rdwr(UIO_READ, vp, (caddr_t)bytes, STATE_MAX, 0, UIO_SYSSPACE, IO_NOAUTH, vfs_context_ucred(ctx), &resid,
++		    vfs_context_proc(ctx));
++		VNOP_CLOSE(vp, FREAD, ctx);
++	}
++	vnode_put(vp);
++	int length = error ? 0 : STATE_MAX - resid;
++	snprintf(line, sizeof(line), "app state: %d bytes%s error %d", length, resid == 0 && !error ? " (or more)" : "", error);
++	boot_progress_trace(line);
++	static const char digits[] = "0123456789abcdef";
++	for (int at = 0, part = 0; at < length; part++) {
++		int used = snprintf(line, sizeof(line), "app state %d: ", part);
++		for (int i = 0; i < HEX_PER_LINE / 2 && at < length; i++, at++) {
++			line[used++] = digits[bytes[at] >> 4];
++			line[used++] = digits[bytes[at] & 15];
++		}
++		line[used] = 0;
++		boot_progress_trace(line);
++	}
++	if (bytes) {
++		kfree_data(bytes, STATE_MAX);
++	}
++}
++/* After launchd: how far the data migration that installs the staged apps got, checked every 10 s for 15 minutes and logged with the
++ * facts above when something changed and every 30 s, also after the migration ended (the watch no longer stops then: a reset at
++ * 420 s found nothing of a watch that had stopped at 10 s). sentinel: /private/var/datamigrator/migrate, removed by datamigrator when
++ * the migration ends. staged: entries left in /private/var/staged_system_apps (SystemAppMigrator hands every app to
++ * installcoordinationd and removes what it did not install). bundles: entries in /private/var/containers/Bundle/Application, one per
++ * installed app. ixwork: the pending work file of installcoordinationd. marker: /private/var/db/.sheng-staged-apps (a complete copy).
++ * sais: installd's BackedUpState/SystemAppInstallState.plist (the per-app system app states the migration sets). migrator: the last datamigrator told
++ * "not ephemeral" (phone-staged-apps-migration.patch) and its answers so far. free: Data's free MiB. Negative values are -errno (-2:
++ * does not exist). */
+ static void
+ native_staged_apps_watch(__unused void *parameter, __unused wait_result_t result)
+ {
+ 	vfs_context_t ctx = vfs_context_kernel();
+-	int last[4] = {INT32_MIN, INT32_MIN, INT32_MIN, INT32_MIN};
+-	for (int seconds = 10; seconds <= 600; seconds += 10) {
++	int last[6] = {INT32_MIN, INT32_MIN, INT32_MIN, INT32_MIN, INT32_MIN, INT32_MIN};
++	int done_at = 0;
++	for (int seconds = 10; seconds <= 900; seconds += 10) {
+ 		delay_for_interval(10 * 1000, 1000 * 1000);
+-		int now[4] = {
++		int now[6] = {
+ 			native_staged_apps_exists("/private/var/datamigrator/migrate", ctx),
+ 			native_staged_apps_entries("/private/var/staged_system_apps", ctx),
+ 			native_staged_apps_entries("/private/var/containers/Bundle/Application", ctx),
+ 			native_staged_apps_exists("/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.installcoordinationd/"
+ 		    "Library/InstallCoordination/PendingWork.plist", ctx),
++			native_staged_apps_exists(native_staged_apps_marker, ctx),
++			native_staged_apps_exists(native_staged_apps_state_path, ctx),
+ 		};
+ 		long long free_mib = -1;
+ 		vnode_t var = NULLVP;
+@@ -8163,17 +8365,30 @@
+ 			vnode_put(var);
+ 		}
+ 		bool done = now[0] == 0 && now[1] <= 0;
+-		if (memcmp(now, last, sizeof(now)) || !(seconds % 60) || done) {
+-			char line[160];
+-			snprintf(line, sizeof(line), "staged apps watch %ds: sentinel %d staged %d bundles %d ixwork %d free %lldM%s", seconds, now[0],
+-			    now[1], now[2], now[3], free_mib, done ? " (migration over)" : "");
++		if (memcmp(now, last, sizeof(now)) || !(seconds % 30)) {
++			char line[200];
++			snprintf(line, sizeof(line), "staged apps watch %ds: sentinel %d staged %d bundles %d ixwork %d marker %d sais %d migrator %d/%d "
++			    "free %lldM%s", seconds, now[0], now[1], now[2], now[3], now[4], now[5], native_staged_apps_migrator_pid,
++			    native_staged_apps_migrator_hits, free_mib, done ? " (migration over)" : "");
+ 			boot_progress_trace(line);
++			native_staged_apps_facts();
++			native_staged_apps_moves_line();
+ 			memcpy(last, now, sizeof(now));
+ 		}
+-		if (done) {
+-			break;
++		/* The states 30 s after the migration ended (installs settle) and every 240 s after that, or at 300 s and every 240 s if it
++		 * had not ended: a copy is recent at the timed reset without filling the events ring. */
++		if (done && !done_at) {
++			done_at = seconds;
+ 		}
++		int since = done_at ? seconds - done_at - 30 : seconds - 300;
++		if (since >= 0 && !(since % 240)) {
++			native_staged_apps_state_dump(ctx);
++		}
+ 	}
++	if (native_staged_apps_listener) {
++		kauth_unlisten_scope(native_staged_apps_listener);
++		native_staged_apps_listener = NULL;
++	}
+ }
+ /* The copy's result in the boot log, then the watch on the data migration. Not inlined: its line buffer stays off the stack of the
+  * copy below, which is still in the frame of the caller while the walk runs. */
+@@ -8182,11 +8397,9 @@
+ {
+ 	uint64_t elapsed = 0;
+ 	absolutetime_to_nanoseconds(mach_absolute_time() - start, &elapsed);
+-	char line[200];
+-	snprintf(line, sizeof(line), "staged apps copy: stage %d dirs %d files %d bytes %llu failed %d error %d ms %llu last %s",
+-	    native_staged_apps_stage, native_staged_apps_dirs, native_staged_apps_files, (unsigned long long)native_staged_apps_bytes,
+-	    native_staged_apps_failed, native_staged_apps_error, (unsigned long long)(elapsed / 1000000), native_staged_apps_path);
+-	boot_progress_trace(line);
++	native_staged_apps_ms = elapsed / 1000000;
++	native_staged_apps_facts();
++	native_staged_apps_listener = kauth_listen_scope(KAUTH_SCOPE_FILEOP, native_staged_apps_fileop, NULL);
+ 	thread_t thread = THREAD_NULL;
+ 	if (kernel_thread_start(native_staged_apps_watch, NULL, &thread) == KERN_SUCCESS) {
+ 		thread_deallocate(thread);
+--- a/bsd/kern/kern_sysctl.c
++++ b/bsd/kern/kern_sysctl.c
+@@ -2094,6 +2094,9 @@
+ #define NATIVE_OSVARIANT_EPHEMERAL_SHIFT 14
+ extern void boot_progress_trace(const char *text) __attribute__((weak_import));
+ bool native_staged_apps_migrator(proc_t p);
++/* The last datamigrator told "not ephemeral" and how many answers it got, for the staged apps watch in kern_exec.c. */
++volatile int native_staged_apps_migrator_pid = 0;
++volatile int native_staged_apps_migrator_hits = 0;
+ bool
+ native_staged_apps_migrator(proc_t p)
+ {
+@@ -2106,6 +2109,8 @@
+ 	if (!enabled || p == PROC_NULL || strcmp(proc_best_name(p), "com.apple.datamigrator")) {
+ 		return false;
+ 	}
++	native_staged_apps_migrator_pid = proc_getpid(p);
++	native_staged_apps_migrator_hits++;
+ 	if (!traced && boot_progress_trace) {
+ 		traced = 1;
+ 		char line[80];

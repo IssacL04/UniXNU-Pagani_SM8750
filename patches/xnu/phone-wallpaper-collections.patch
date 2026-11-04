@@ -1,0 +1,29 @@
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -7231,6 +7231,8 @@
+ volatile int native_gpu_addon2_status = -1;
+ volatile int native_gpu_addon3_stage = 0;
+ volatile int native_gpu_addon3_status = -1;
++volatile int native_gpu_addon4_stage = 0;
++volatile int native_gpu_addon4_status = -1;
+ static void
+ native_gpu_addon_mount(proc_t p, user_addr_t scratch, user_addr_t offset, const char *source, size_t source_size,
+     const char *point, size_t point_size, const char *visible, const char *own, volatile int *stage, volatile int *status)
+@@ -7686,6 +7688,17 @@
+ 	    "7570.iPadOS_17_Flat_Background-1024w-1366h@2x~ipad.ca/assets/J120.HEIC",
+ 	    "/Library/Wallpaper/Collections/iPadOS_17~ipad.wallpaperCollection/Wallpapers/7570.iPadOS_17_Flat-1024w-1366h@2x~ipad.wallpaper/"
+ 	    "7570.iPadOS_17_Flat_Background-1024w-1366h@2x~ipad.ca/J120.png", &native_gpu_addon3_stage, &native_gpu_addon3_status);
++	/* WallpaperKit lists the system wallpaper collections from Collections/Collections~<GSDeviceName>.plist and keeps only the wallpaper
++	 * bundles whose logical screen class ("%.0fw-%.0fh@%@x~%@") matches the screen. The iPad root has no ~iphone list (WallpaperKit
++	 * raises on its missing "order") and no bundle for a 3x screen, so the iPhone identity and display-scale 3 get a black poster.
++	 * The owner overlay (make-phone-wallpaper-overlay.py of the 13T tools) adds Collections~iphone.plist, an extended Collections~ipad.plist and a
++	 * collection whose bundles say logicalScreenClass "Any" (WallpaperKit's static defaults 7565 and 7570), drawing the sealed
++	 * iPadOS 17 images through a symlink. Without /private/var/ngpu/wallpaper-collections nothing is mounted. */
++	static const char collections_source[] = "/private/var/ngpu/wallpaper-collections",
++	    collections_point[] = "/Library/Wallpaper/Collections";
++	native_gpu_addon_mount(p, scratch, 0xd00, collections_source, sizeof(collections_source), collections_point,
++	    sizeof(collections_point), "/Library/Wallpaper/Collections/Bokeh.wallpaperCollection/WallpaperCollection.plist",
++	    "/Library/Wallpaper/Collections/Collections~iphone.plist", &native_gpu_addon4_stage, &native_gpu_addon4_status);
+ 	native_cryptex_os_view(p, scratch);
+ 	native_gestalt_cache_drop(p, scratch);
+ 	native_ls_store_drop(p, scratch);

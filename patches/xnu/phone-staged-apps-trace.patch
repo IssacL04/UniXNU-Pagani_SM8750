@@ -1,0 +1,197 @@
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -7736,6 +7736,9 @@
+  * Counters for the boot log: stage (1 copying, 2 copied, 3 copied before, -1 no
+  * source, -2 out of memory), directories, files, MiB, failures and the last error. */
+ #include <sys/dirent.h>
++#include <kern/clock.h>
++/* BootProgress's ramoops trace (U lines), on boards that link it. */
++extern void boot_progress_trace(const char *text) __attribute__((weak_import));
+ volatile int native_staged_apps_stage = 0;
+ volatile int native_staged_apps_dirs = 0;
+ volatile int native_staged_apps_files = 0;
+@@ -7752,6 +7755,18 @@
+ 	native_staged_apps_failed++;
+ 	native_staged_apps_error = error;
+ }
++/* A boot log line every 512 files, so a copy that stalls shows how far it got. Not inlined: the line buffer stays off the stack of the
++ * walk, whose APFS calls need most of the kernel stack. */
++static void __attribute__((noinline))
++native_staged_apps_progress(void)
++{
++	if (boot_progress_trace) {
++		char line[200];
++		snprintf(line, sizeof(line), "staged apps copying: dirs %d files %d MiB %d failed %d last %s", native_staged_apps_dirs,
++		    native_staged_apps_files, native_staged_apps_mib, native_staged_apps_failed, native_staged_apps_path);
++		boot_progress_trace(line);
++	}
++}
+ static int
+ native_staged_apps_mkdir(proc_t p, user_addr_t scratch, const char *path)
+ {
+@@ -7907,6 +7922,9 @@
+ 					if (!child_error) {
+ 						native_staged_apps_files++;
+ 						native_staged_apps_mib = (int)(native_staged_apps_bytes >> 20);
++						if (!(native_staged_apps_files % 512)) {
++							native_staged_apps_progress();
++						}
+ 					}
+ 				} else {
+ 					child_error = ENOTSUP;
+@@ -7970,7 +7988,7 @@
+ 	}
+ }
+ static void
+-native_staged_apps_prepare(proc_t p, user_addr_t scratch, mount_t data_mount)
++native_staged_apps_copy(proc_t p, user_addr_t scratch, mount_t data_mount)
+ {
+ 	uint32_t enabled = 0;
+ 	if (!PE_parse_boot_argn("sheng-staged-apps", &enabled, sizeof(enabled)) || enabled != 1) {
+@@ -8031,7 +8049,146 @@
+ 		kfree_data(path, MAXPATHLEN);
+ 	}
+ 	vnode_put(vp);
++}
++/* Entries of the directory PATH without . and .., or -errno (-2: no such directory). */
++static int
++native_staged_apps_entries(const char *path, vfs_context_t ctx)
++{
++	const uint32_t entries_size = 4096;
++	vnode_t dir = NULLVP;
++	int error = vnode_lookup(path, 0, &dir, ctx);
++	if (error) {
++		return -error;
++	}
++	uint8_t *entries = kalloc_data(entries_size, Z_WAITOK);
++	int count = 0;
++	error = !entries ? ENOMEM : vnode_vtype(dir) != VDIR ? ENOTDIR : VNOP_OPEN(dir, FREAD, ctx);
++	if (!error) {
++		off_t offset = 0;
++		for (int eof = 0; !error && !eof;) {
++			uio_t uio = uio_create(1, offset, UIO_SYSSPACE, UIO_READ);
++			if (!uio) {
++				error = ENOMEM;
++				break;
++			}
++			uio_addiov(uio, CAST_USER_ADDR_T(entries), entries_size);
++			int unused = 0;
++			error = vnode_readdir64(dir, uio, VNODE_READDIR_EXTENDED, &eof, &unused, ctx);
++			uint32_t filled = entries_size - (uint32_t)uio_resid(uio);
++			offset = uio_offset(uio);
++			uio_free(uio);
++			if (error || !filled) {
++				break;
++			}
++			for (uint32_t at = 0; at + offsetof(struct direntry, d_name) < filled;) {
++				struct direntry *entry = (struct direntry *)(entries + at);
++				if (!entry->d_reclen || at + entry->d_reclen > filled) {
++					error = EINVAL;
++					break;
++				}
++				at += entry->d_reclen;
++				if (entry->d_ino && strcmp(entry->d_name, ".") && strcmp(entry->d_name, "..")) {
++					count++;
++				}
++			}
++		}
++		VNOP_CLOSE(dir, FREAD, ctx);
++	}
++	if (entries) {
++		kfree_data(entries, entries_size);
++	}
++	vnode_put(dir);
++	return error ? -error : count;
+ }
++/* 1 if PATH exists, 0 if not, or -errno. */
++static int
++native_staged_apps_exists(const char *path, vfs_context_t ctx)
++{
++	vnode_t vp = NULLVP;
++	int error = vnode_lookup(path, 0, &vp, ctx);
++	if (!error) {
++		vnode_put(vp);
++		return 1;
++	}
++	return error == ENOENT ? 0 : -error;
++}
++/* After launchd: how far the data migration that installs the staged apps got, checked every 10 s for 10 minutes and logged when
++ * something changed (and every minute). sentinel: /private/var/datamigrator/migrate, removed by datamigrator when the migration ends.
++ * staged: entries left in /private/var/staged_system_apps (SystemAppMigrator hands every app to installcoordinationd and removes what
++ * it did not install). bundles: entries in /private/var/containers/Bundle/Application, one per installed app. ixwork: the pending
++ * work file of installcoordinationd. free: Data's free MiB. Negative values are -errno (-2: does not exist). */
++static void
++native_staged_apps_watch(__unused void *parameter, __unused wait_result_t result)
++{
++	vfs_context_t ctx = vfs_context_kernel();
++	int last[4] = {INT32_MIN, INT32_MIN, INT32_MIN, INT32_MIN};
++	for (int seconds = 10; seconds <= 600; seconds += 10) {
++		delay_for_interval(10 * 1000, 1000 * 1000);
++		int now[4] = {
++			native_staged_apps_exists("/private/var/datamigrator/migrate", ctx),
++			native_staged_apps_entries("/private/var/staged_system_apps", ctx),
++			native_staged_apps_entries("/private/var/containers/Bundle/Application", ctx),
++			native_staged_apps_exists("/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.installcoordinationd/"
++		    "Library/InstallCoordination/PendingWork.plist", ctx),
++		};
++		long long free_mib = -1;
++		vnode_t var = NULLVP;
++		if (!vnode_lookup("/private/var", 0, &var, ctx)) {
++			mount_t mp = vnode_mount(var);
++			if (mp && !vfs_update_vfsstat(mp, ctx, VFS_KERNEL_EVENT)) {
++				struct vfsstatfs *sp = vfs_statfs(mp);
++				free_mib = (long long)((sp->f_bavail * (uint64_t)sp->f_bsize) >> 20);
++			}
++			vnode_put(var);
++		}
++		bool done = now[0] == 0 && now[1] <= 0;
++		if (memcmp(now, last, sizeof(now)) || !(seconds % 60) || done) {
++			char line[160];
++			snprintf(line, sizeof(line), "staged apps watch %ds: sentinel %d staged %d bundles %d ixwork %d free %lldM%s", seconds, now[0],
++			    now[1], now[2], now[3], free_mib, done ? " (migration over)" : "");
++			boot_progress_trace(line);
++			memcpy(last, now, sizeof(now));
++		}
++		if (done) {
++			break;
++		}
++	}
++}
++/* The copy's result in the boot log, then the watch on the data migration. Not inlined: its line buffer stays off the stack of the
++ * copy below, which is still in the frame of the caller while the walk runs. */
++static void __attribute__((noinline))
++native_staged_apps_report(uint64_t start)
++{
++	uint64_t elapsed = 0;
++	absolutetime_to_nanoseconds(mach_absolute_time() - start, &elapsed);
++	char line[200];
++	snprintf(line, sizeof(line), "staged apps copy: stage %d dirs %d files %d bytes %llu failed %d error %d ms %llu last %s",
++	    native_staged_apps_stage, native_staged_apps_dirs, native_staged_apps_files, (unsigned long long)native_staged_apps_bytes,
++	    native_staged_apps_failed, native_staged_apps_error, (unsigned long long)(elapsed / 1000000), native_staged_apps_path);
++	boot_progress_trace(line);
++	thread_t thread = THREAD_NULL;
++	if (kernel_thread_start(native_staged_apps_watch, NULL, &thread) == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	}
++}
++/* The copy above with its result in the boot log (BootProgress U lines on boards that link it): stage, directories, files, bytes,
++ * failures, last error and time, then the watch on the data migration. */
++static void
++native_staged_apps_prepare(proc_t p, user_addr_t scratch, mount_t data_mount)
++{
++	uint32_t enabled = 0;
++	if (!PE_parse_boot_argn("sheng-staged-apps", &enabled, sizeof(enabled)) || enabled != 1) {
++		return;
++	}
++	uint64_t start = mach_absolute_time();
++	if (boot_progress_trace) {
++		boot_progress_trace("staged apps copy: /private/var/staged_system_apps of the OS volume into Data");
++	}
++	native_staged_apps_copy(p, scratch, data_mount);
++	if (boot_progress_trace) {
++		native_staged_apps_report(start);
++	}
++}
+ 
+ static int
+ native_owner_data_prepare(proc_t p, user_addr_t scratch)

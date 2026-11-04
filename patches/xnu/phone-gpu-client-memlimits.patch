@@ -1,0 +1,214 @@
+--- a/bsd/kern/kern_memorystatus.c
++++ b/bsd/kern/kern_memorystatus.c
+@@ -530,6 +530,157 @@ SYSCTL_INT(_kern, OID_AUTO, max_task_pmem, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG
+ static int memorystatus_highwater_enabled = 1;  /* Update the cached memlimit data. */
+ static boolean_t proc_jetsam_state_is_active_locked(proc_t);
+ 
++/*
++ * UniXNU OnePlus 13T (phone-gpu-client-memlimits.patch): the memory limits of the processes that use the GPU.
++ *
++ * The per-process limits come from the board's jetsam properties (/System/Library/LaunchDaemons/com.apple.jetsamproperties.<hw.targettype>
++ * .plist, J120 here): launchd applies them at spawn (posix_spawnattr_setjetsam_ext, memorystatus_update below) and RunningBoard applies
++ * them again on each state change of an app, angel or extension (MEMORYSTATUS_CMD_SET_MEMLIMIT_PROPERTIES). They are sized for Apple's
++ * GPU stack. A Metal client here also carries the Metal-to-Vulkan translation and Turnip in its own heap (shader translation and
++ * compilation, pipeline caches), and small limits kill it: iconservicesagent (J120: active 20 MB soft, inactive 6 MB hard from the
++ * Daemon/Override/Global entry) was killed for its per-process limit once it went idle (exit reason JETSAM 7); the poster providers
++ * (com.apple.posterkit.provider: inactive 15 MB hard) and widget extensions (30 MB hard) are next. The GPU buffers are not the cause:
++ * their CPU views are physical-memory descriptors mapped through a device pager, an external object, which counts neither in
++ * iokit_mapped nor in phys_footprint.
++ *
++ * A process that has opened a user client of a Metal accelerator (IOUserClient.cpp, is_io_service_open_extended: a service publishing
++ * MetalPluginName, the A830's) is marked a GPU client; from then on each of its positive limits, active and inactive, is at least the
++ * floor, whoever sets it, and stays fatal or not as set. -1 (the system-wide limit; none on this board) and 0 stay. A floor and not
++ * an increase: RunningBoard reads the current limits back and may set them again (preventBaseMemoryLimitReduction), and a floor
++ * applied twice is the same floor. Boot-arg pagani-jetsam: 0 off (the jetsam properties' limits), 1 (the default) 512 MB, otherwise
++ * the floor in MB, kept within 64..4096. U lines: "jetsam: gpu client ..." when a process is marked (first 48), "jetsam: floor ..."
++ * when a later setting was raised (first 32), "jetsam: ... over ... limit" when any process first crosses one of its limits (first 64).
++ */
++#define P_MEMSTAT_NATIVE_GPU_CLIENT     0x00400000      /* UniXNU: opened a user client of a Metal accelerator (a bit XNU leaves unused) */
++#define NATIVE_GPU_MEMLIMIT_DEFAULT_MB  512
++extern void boot_progress_trace(const char *text) __attribute__((weak_import));
++static uint32_t native_gpu_memlimit_client_lines, native_gpu_memlimit_floor_lines, native_gpu_memlimit_over_lines;
++
++/* The floor in MB, 0 when off. The boot-arg is read once; a racing first reader computes the same value. */
++static int32_t
++native_gpu_memlimit_floor_mb(void)
++{
++	static int32_t floor_mb = -1;
++
++	if (floor_mb < 0) {
++		uint32_t arg = 1;
++
++		(void)PE_parse_boot_argn("pagani-jetsam", &arg, sizeof(arg));
++		floor_mb = arg == 0 ? 0 : arg == 1 ? NATIVE_GPU_MEMLIMIT_DEFAULT_MB : (int32_t)MIN(MAX(arg, 64u), 4096u);
++	}
++	return floor_mb;
++}
++
++/* A limit in MB raised to the floor; -1 and 0 stay. */
++static int32_t
++native_gpu_memlimit_floored(int32_t limit_mb, int32_t floor_mb)
++{
++	return (limit_mb > 0 && limit_mb < floor_mb) ? floor_mb : limit_mb;
++}
++
++/* proc_list_lock held: the limits about to be stored for p, raised to the floor when p is a GPU client. */
++static void
++native_gpu_memlimit_floor_locked(proc_t p, int32_t *active, int32_t *inactive)
++{
++	if (!(p->p_memstat_state & P_MEMSTAT_NATIVE_GPU_CLIENT)) {
++		return;
++	}
++	const int32_t floor_mb = native_gpu_memlimit_floor_mb();
++	if (floor_mb == 0) {
++		return;
++	}
++	const int32_t raised_active = native_gpu_memlimit_floored(*active, floor_mb);
++	const int32_t raised_inactive = native_gpu_memlimit_floored(*inactive, floor_mb);
++	if (raised_active == *active && raised_inactive == *inactive) {
++		return;
++	}
++	if (boot_progress_trace && os_atomic_inc_orig(&native_gpu_memlimit_floor_lines, relaxed) < 32) {
++		char line[128];
++
++		snprintf(line, sizeof(line), "jetsam: floor %s pid %d active %d->%d inactive %d->%d MB",
++		    *p->p_name ? p->p_name : p->p_comm, proc_getpid(p), *active, raised_active, *inactive, raised_inactive);
++		boot_progress_trace(line);
++	}
++	*active = raised_active;
++	*inactive = raised_inactive;
++}
++
++/*
++ * IOKit calls this in the process that has just opened a user client of a Metal accelerator: the process is marked a GPU client and the
++ * limits it already has are raised to the floor at once, the ledger included.
++ */
++void native_memorystatus_gpu_client(void);
++void
++native_memorystatus_gpu_client(void)
++{
++	proc_t p = current_proc();
++	const int32_t floor_mb = native_gpu_memlimit_floor_mb();
++	int32_t old_active, old_inactive, active, inactive;
++	boolean_t active_fatal, inactive_fatal;
++	kern_return_t kr = KERN_SUCCESS;
++	char name[2 * MAXCOMLEN + 1];
++
++	if (p == PROC_NULL || floor_mb == 0) {
++		return;
++	}
++	proc_list_lock();
++	if ((p->p_memstat_state & (P_MEMSTAT_NATIVE_GPU_CLIENT | P_MEMSTAT_INTERNAL | P_MEMSTAT_TERMINATED)) || proc_list_exited(p)) {
++		proc_list_unlock();
++		return;
++	}
++	p->p_memstat_state |= P_MEMSTAT_NATIVE_GPU_CLIENT;
++	old_active = p->p_memstat_memlimit_active;
++	old_inactive = p->p_memstat_memlimit_inactive;
++	active = native_gpu_memlimit_floored(old_active, floor_mb);
++	inactive = native_gpu_memlimit_floored(old_inactive, floor_mb);
++	active_fatal = (p->p_memstat_state & P_MEMSTAT_MEMLIMIT_ACTIVE_FATAL) ? TRUE : FALSE;
++	inactive_fatal = (p->p_memstat_state & P_MEMSTAT_MEMLIMIT_INACTIVE_FATAL) ? TRUE : FALSE;
++	if (active != old_active || inactive != old_inactive) {
++		SET_ACTIVE_LIMITS_LOCKED(p, active, active_fatal);
++		SET_INACTIVE_LIMITS_LOCKED(p, inactive, inactive_fatal);
++		if (memorystatus_highwater_enabled) {
++			boolean_t is_fatal, use_active;
++
++			if (proc_jetsam_state_is_active_locked(p) == TRUE) {
++				CACHE_ACTIVE_LIMITS_LOCKED(p, is_fatal);
++				use_active = TRUE;
++			} else {
++				CACHE_INACTIVE_LIMITS_LOCKED(p, is_fatal);
++				use_active = FALSE;
++			}
++			kr = task_set_phys_footprint_limit_internal(proc_task(p), (p->p_memstat_memlimit > 0) ? p->p_memstat_memlimit : -1,
++			    NULL, use_active, is_fatal);
++		}
++	}
++	strlcpy(name, *p->p_name ? p->p_name : p->p_comm, sizeof(name));
++	proc_list_unlock();
++
++	if (boot_progress_trace && (kr != KERN_SUCCESS || os_atomic_inc_orig(&native_gpu_memlimit_client_lines, relaxed) < 48)) {
++		char line[160];
++
++		snprintf(line, sizeof(line), "jetsam: gpu client %s pid %d active %d->%d %s inactive %d->%d %s%s%d", name, proc_getpid(p),
++		    old_active, active, active_fatal ? "hard" : "soft", old_inactive, inactive, inactive_fatal ? "hard" : "soft",
++		    kr != KERN_SUCCESS ? " ledger error " : " floor ", kr != KERN_SUCCESS ? kr : floor_mb);
++		boot_progress_trace(line);
++	}
++}
++
++/* Once per process and limit (memorystatus_log_exception): who crossed which limit with what footprint. */
++static void
++native_gpu_memlimit_trace_over(proc_t p, int limit_mb, boolean_t memlimit_is_active, boolean_t memlimit_is_fatal)
++{
++	if (!boot_progress_trace || p == PROC_NULL || os_atomic_inc_orig(&native_gpu_memlimit_over_lines, relaxed) >= 64) {
++		return;
++	}
++	char line[160];
++
++	snprintf(line, sizeof(line), "jetsam: %s pid %d over %s %s limit %d MB, footprint %llu MB%s", *p->p_name ? p->p_name : p->p_comm,
++	    proc_getpid(p), memlimit_is_active ? "active" : "inactive", memlimit_is_fatal ? "hard" : "soft", limit_mb,
++	    (unsigned long long)(get_task_phys_footprint(proc_task(p)) >> 20),
++	    (p->p_memstat_state & P_MEMSTAT_NATIVE_GPU_CLIENT) ? ", gpu client" : "");
++	boot_progress_trace(line);
++}
++
+ #if __arm64__
+ int legacy_footprint_bonus_mb = 50; /* This value was chosen after looking at the top 30 apps
+                                      * that needed the additional room in their footprint when
+@@ -2633,6 +2784,9 @@ memorystatus_update(proc_t p, int priority, uint64_t user_data, boolean_t is_ass
+ 			memlimit_inactive_is_fatal = TRUE;
+ 		}
+ 
++		/* UniXNU: a GPU client's limits are at least the floor (phone-gpu-client-memlimits.patch). */
++		native_gpu_memlimit_floor_locked(p, &memlimit_active, &memlimit_inactive);
++
+ 		/*
+ 		 * Initialize the active limit variants for this process.
+ 		 */
+@@ -4361,6 +4515,7 @@ memorystatus_log_exception(const int max_footprint_mb, boolean_t memlimit_is_act
+ 	    ((p && *p->p_name) ? p->p_name : "unknown"), (p ? proc_getpid(p) : -1), (memlimit_is_active ? "Active" : "Inactive"),
+ 	    (memlimit_is_fatal  ? "Hard" : "Soft"), max_footprint_mb,
+ 	    (memlimit_is_fatal  ? "fatal" : "non-fatal"));
++	native_gpu_memlimit_trace_over(p, max_footprint_mb, memlimit_is_active, memlimit_is_fatal);
+ }
+ 
+ inline void
+@@ -7828,6 +7983,9 @@ memorystatus_set_memlimit_properties_internal(proc_t p, memorystatus_memlimit_pr
+ 
+ 	LCK_MTX_ASSERT(&proc_list_mlock, LCK_MTX_ASSERT_OWNED);
+ 
++	/* UniXNU: a GPU client's limits are at least the floor (phone-gpu-client-memlimits.patch). */
++	native_gpu_memlimit_floor_locked(p, &p_entry->memlimit_active, &p_entry->memlimit_inactive);
++
+ 	/*
+ 	 * Store the active limit variants in the proc.
+ 	 */
+--- a/iokit/Kernel/IOUserClient.cpp
++++ b/iokit/Kernel/IOUserClient.cpp
+@@ -4370,6 +4370,13 @@ native_sandbox_grant_open(IOService * service)
+ 	return native_sandbox_grant(service) || service->getProperty("NativeSandboxGrantAll") == kOSBooleanTrue;
+ }
+ 
++/*
++ * The process that opens a user client of a Metal accelerator (a service publishing MetalPluginName: the A830's) is a GPU client:
++ * kern_memorystatus.c (phone-gpu-client-memlimits.patch) keeps its memory limits at least the pagani-jetsam floor. Only an open that
++ * succeeded counts; the plugin's progress markers are refused opens.
++ */
++extern "C" void native_memorystatus_gpu_client(void) __attribute__((weak_import));
++
+ kern_return_t
+ is_io_service_open_extended(
+ 	io_object_t _service,
+@@ -4599,6 +4606,9 @@ is_io_service_open_extended(
+ 				break;
+ 			}
+ 			client->setTerminateDefer(service, false);
++			if (native_memorystatus_gpu_client && service->getProperty("MetalPluginName")) {
++				native_memorystatus_gpu_client();
++			}
+ 		}
+ 	}while (false);
+ 

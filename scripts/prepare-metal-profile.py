@@ -45,21 +45,27 @@ def prepare(output, soc):
         raise ValueError('Require the sibling Stage7Probe checkout with the staged GPU entry')
     board = tomllib.loads((ROOT / 'board.toml').read_text())
     board['board']['description'] = 'OnePlus 13T A830/Metal candidate; hardware qualification pending'
-    board['components']['include'] += ['Adreno740', 'AdrenoMetal']
+    extras = ['Adreno830', 'AdrenoMetal', 'PaganiAdsp', 'PaganiAudio', 'PaganiBattery', 'PaganiHaptics',
+              'PaganiSensors', 'PaganiSpeaker', 'PaganiWifi', 'PaganiBt', 'PaganiCamera', 'PaganiTorch']
+    board['components']['include'] += extras
     board['kernel']['defconfig'] = 'oneplus13t_metal_defconfig'
-    board['kernel']['archives'] += ['component:Adreno740']
+    board['kernel']['archives'] += ['component:Adreno830', 'build-pagani-gpu.py',
+                                    *('component:' + name for name in extras[2:])]
     board['kernel']['prelink']['roots'].append('com.apple.iokit.IOGPUFamily')
     board['payload']['title'] = 'OnePlus 13T A830 Metal candidate'
-    # shortcut: 120 Hz is software pacing; panel timing and TE synchronization still need device qualification.
+    # Panel TE and page flips stay opt-in until this build has device measurements.
     board['payload']['kernel_args'] = ['sheng-vsync=120' if arg == 'sheng-vsync=60' else arg
                                        for arg in board['payload']['kernel_args']]
     # shortcut: SYSMEM fixes observed A830 color corruption; restore GMEM after its load/store paths pass device checks.
-    board['payload']['kernel_args'] += ['pagani-gpu=1', 'sheng-gpu-addon=1', 'sheng-gpu-metal-opens=0', 'sheng-fb-gpu=1', 'sheng-tu-debug=sysmem,nocb', 'sheng-gpu-sample=0']
+    board['payload']['kernel_args'] += ['pagani-gpu=1', 'sheng-gpu-addon=1', 'sheng-gpu-metal-opens=0', 'sheng-fb-gpu=1', 'sheng-tu-debug=sysmem,nocb', 'sheng-gpu-sample=0',
+                                      'pagani-vsync=120', 'pagani-battery=1', 'pagani-cpufreq=2']
     config = (ROOT / 'configs/oneplus13t_defconfig').read_text()
     marker = '# CONFIG_XNU_NATIVE_ADRENO is not set'
     if config.count(marker) != 1:
         raise ValueError('CPU baseline no longer has the expected Adreno selection')
     config = config.replace(marker, 'CONFIG_XNU_NATIVE_ADRENO=y')
+    config += '\nCONFIG_XNU_NATIVE_ADRENO_ARCHIVE="{tree}/build/adreno830/libAdreno830.a"\n'
+    config += 'CONFIG_XNU_EXTRA_LD_ARCHIVES="{tree}/build/pagani-audio/libPaganiAudio.a"\n'
     output.mkdir(parents=True, exist_ok=True)
     for name in ('drivers', 'kits', 'modules', 'package', 'dts', 'scripts', 'sysinfo', 'feeds.toml', 'patches', 'porting.toml'):
         target, source = output / name, ROOT / name
@@ -75,11 +81,9 @@ def prepare(output, soc):
     firmware = output / '.cache/firmware'
     if not firmware.exists():
         firmware.symlink_to(ROOT / '.cache/firmware', target_is_directory=True)
-    sources = [{'name': 'Stage7Probe', 'kind': 'driver', 'local': str(probe.resolve())}]
-    sources.append({'name': 'PaganiInput', 'kind': 'driver', 'local': str(probe.parent / 'PaganiInput')})
-    sources.append({'name': 'NativeMobileDisplay', 'kind': 'driver', 'local': str(probe.parent / 'NativeMobileDisplay')})
-    sources.append({'name': 'PaganiPanel', 'kind': 'driver', 'local': str(probe.parent / 'PaganiPanel')})
-    sources.append({'name': 'BootProgress', 'kind': 'driver', 'local': str(probe.parent / 'BootProgress')})
+    drivers = probe.parent
+    sources = [{'name': name, 'kind': 'driver', 'local': str((drivers / name).resolve())}
+               for name in board['components']['include'] if (drivers / name).is_dir()]
     if soc:
         if not (soc / 'soc.toml').is_file():
             raise ValueError('SoC checkout has no soc.toml: ' + str(soc))

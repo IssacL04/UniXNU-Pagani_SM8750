@@ -1,0 +1,79 @@
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -7913,6 +7913,11 @@
+ /* BootProgress's ramoops trace (U lines), on boards that link it. */
+ extern void boot_progress_trace(const char *text) __attribute__((weak_import));
+ volatile int native_staged_apps_stage = 0;
++/* The copied apps shown in /Applications (pagani-system-apps, native_system_apps_show below): stage and status as for the addon views,
++ * and the removal of the migration sentinel (0, or errno: ENOENT when the seed had none). */
++volatile int native_system_apps_stage = 0;
++volatile int native_system_apps_status = -1;
++volatile int native_system_apps_sentinel = -1;
+ volatile int native_staged_apps_dirs = 0;
+ volatile int native_staged_apps_files = 0;
+ volatile int native_staged_apps_mib = 0;
+@@ -8424,8 +8429,9 @@
+ 	    native_staged_apps_failed, native_staged_apps_error, (unsigned long long)native_staged_apps_ms, native_staged_apps_path);
+ 	boot_progress_trace(line);
+ 	snprintf(line, sizeof(line), "overlays: wallpaper stage %d status %d, keyboard stage %d status %d, audio stage %d status %d, "
+-	    "controlcenter stage %d status %d", native_gpu_addon4_stage, native_gpu_addon4_status, native_gpu_addon5_stage,
+-	    native_gpu_addon5_status, native_audio_addon_stage, native_audio_addon_status, native_cc_addon_stage, native_cc_addon_status);
++	    "controlcenter stage %d status %d, system apps stage %d status %d", native_gpu_addon4_stage, native_gpu_addon4_status,
++	    native_gpu_addon5_stage, native_gpu_addon5_status, native_audio_addon_stage, native_audio_addon_status, native_cc_addon_stage,
++	    native_cc_addon_status, native_system_apps_stage, native_system_apps_status);
+ 	boot_progress_trace(line);
+ 	/* What SystemAppMigrator's passes ask MobileGestalt about: SupportedDeviceFamilies follows DeviceClassNumber, the prefix of
+ 	 * hw.product (PEGetProductName: the root model); "arm64" (UIRequiredDeviceCapabilities) is the host's preferred user arch,
+@@ -8557,6 +8563,44 @@
+ 		thread_deallocate(thread);
+ 	}
+ }
++/* pagani-system-apps=1 (with sheng-staged-apps=1): the copied deletable system apps are shown in /Applications as built-in apps instead
++ * of being installed by the data migration. Here the migration's installs never complete (installcoordinationd moves nothing and
++ * /private/var/containers/Bundle/Application is never created, 2026-10-30/31 runs), so SystemAppMigrator demotes every app to an App
++ * Store placeholder. Their executables are in the Apple static trust cache the image carries (checked for Calendar, Mail, Notes,
++ * Reminders, Tips and Weather), so they run from any path, and lsd registers what /Applications holds when it builds its database;
++ * no copied name or bundle identifier collides with one of /Applications. The migration is switched off first: its sentinel
++ * /private/var/datamigrator/migrate (make-phone-seed.py --migrate) is removed, else SystemAppMigrator removes the copy the view shows.
++ * The view's mount arguments reuse scratch 0x800..0x91f (the addon views are done by then; launchd's environment is at 0x400..0x6ff),
++ * the unlink 0xc00 like the copy's. Stage 5 status 0: mounted with Settings and Calendar both visible in /Applications. */
++static void
++native_system_apps_show(proc_t p, user_addr_t scratch)
++{
++	uint32_t enabled = 0;
++	if (!PE_parse_boot_argn("pagani-system-apps", &enabled, sizeof(enabled)) || enabled != 1) {
++		return;
++	}
++	if (native_staged_apps_stage != 2 && native_staged_apps_stage != 3) {
++		native_system_apps_status = ENOENT;
++		return;
++	}
++	static const char sentinel[] = "/private/var/datamigrator/migrate";
++	struct unlink_args request = {.path = scratch + 0xc00};
++	int32_t result = 0;
++	int error = copyout(sentinel, request.path, sizeof(sentinel));
++	if (!error) {
++		error = unlink(p, &request, &result);
++	}
++	native_system_apps_sentinel = error;
++	static const char source[] = "/private/var/staged_system_apps", point[] = "/Applications";
++	native_gpu_addon_mount(p, scratch, 0x800, source, sizeof(source), point, sizeof(point), "/Applications/Preferences.app",
++	    "/Applications/MobileCal.app", &native_system_apps_stage, &native_system_apps_status);
++	if (boot_progress_trace) {
++		char line[96];
++		snprintf(line, sizeof(line), "system apps view stage %d status %d, migration sentinel %d", native_system_apps_stage,
++		    native_system_apps_status, native_system_apps_sentinel);
++		boot_progress_trace(line);
++	}
++}
+ /* The copy above with its result in the boot log (BootProgress U lines on boards that link it): stage, directories, files, bytes,
+  * failures, last error and time, then the watch on the data migration. */
+ static void
+@@ -8571,6 +8615,7 @@
+ 		boot_progress_trace("staged apps copy: /private/var/staged_system_apps of the OS volume into Data");
+ 	}
+ 	native_staged_apps_copy(p, scratch, data_mount);
++	native_system_apps_show(p, scratch);
+ 	if (boot_progress_trace) {
+ 		native_staged_apps_report(start);
+ 	}

@@ -1,0 +1,50 @@
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -7238,6 +7238,9 @@
+ /* The OnePlus 13T audio overlay (pagani-audio-addon-mount.patch): stage and status, as for the addons above. */
+ volatile int native_audio_addon_stage = 0;
+ volatile int native_audio_addon_status = -1;
++/* The Control Center overlay (phone-controlcenter-settings.patch): stage and status, as for the addons above. */
++volatile int native_cc_addon_stage = 0;
++volatile int native_cc_addon_status = -1;
+ /* BootProgress's ramoops trace (U lines), on boards that link it. */
+ extern void boot_progress_trace(const char *text) __attribute__((weak_import));
+ static void
+@@ -7742,6 +7745,24 @@
+ 			boot_progress_trace(line);
+ 		}
+ 	}
++	/* ControlCenterUI sizes its modules from DefaultModuleSettings.plist in its bundle (-[CCUIModuleSettingsManager _loadSettings],
++	 * -[NSBundle URLForResource:withExtension:]), which takes the ~iphone or ~ipad variant by the device class. The iPad root has
++	 * only ~ipad, so under the iPhone identity the settings are empty and every module falls back to 1x1: connectivity, now playing,
++	 * the sliders and Focus drawn as small squares. The owner overlay /private/var/ngpu/controlcenterui
++	 * (工具/make-phone-controlcenter-overlay.py) holds DefaultModuleSettings~iphone.plist and is shown over the bundle like the
++	 * keyboard layouts. Its mount arguments reuse scratch 0x800..0x921 of the wallpaper mount above, done by then and clear of
++	 * launchd's environment (0x400..0x6ff). Stage 1: no source directory, nothing mounted. */
++	static const char cc_source[] = "/private/var/ngpu/controlcenterui",
++	    cc_point[] = "/System/Library/PrivateFrameworks/ControlCenterUI.framework";
++	native_gpu_addon_mount(p, scratch, 0x800, cc_source, sizeof(cc_source), cc_point, sizeof(cc_point),
++	    "/System/Library/PrivateFrameworks/ControlCenterUI.framework/DefaultModuleSettings~ipad.plist",
++	    "/System/Library/PrivateFrameworks/ControlCenterUI.framework/DefaultModuleSettings~iphone.plist", &native_cc_addon_stage,
++	    &native_cc_addon_status);
++	if (boot_progress_trace) {
++		char line[64];
++		snprintf(line, sizeof(line), "overlay controlcenter stage %d status %d", native_cc_addon_stage, native_cc_addon_status);
++		boot_progress_trace(line);
++	}
+ 	native_cryptex_os_view(p, scratch);
+ 	native_gestalt_cache_drop(p, scratch);
+ 	native_ls_store_drop(p, scratch);
+@@ -8271,9 +8292,9 @@
+ 	    native_staged_apps_stage, native_staged_apps_dirs, native_staged_apps_files, (unsigned long long)native_staged_apps_bytes,
+ 	    native_staged_apps_failed, native_staged_apps_error, (unsigned long long)native_staged_apps_ms, native_staged_apps_path);
+ 	boot_progress_trace(line);
+-	snprintf(line, sizeof(line), "overlays: wallpaper stage %d status %d, keyboard stage %d status %d, audio stage %d status %d",
+-	    native_gpu_addon4_stage, native_gpu_addon4_status, native_gpu_addon5_stage, native_gpu_addon5_status, native_audio_addon_stage,
+-	    native_audio_addon_status);
++	snprintf(line, sizeof(line), "overlays: wallpaper stage %d status %d, keyboard stage %d status %d, audio stage %d status %d, "
++	    "controlcenter stage %d status %d", native_gpu_addon4_stage, native_gpu_addon4_status, native_gpu_addon5_stage,
++	    native_gpu_addon5_status, native_audio_addon_stage, native_audio_addon_status, native_cc_addon_stage, native_cc_addon_status);
+ 	boot_progress_trace(line);
+ 	/* What SystemAppMigrator's passes ask MobileGestalt about: SupportedDeviceFamilies follows DeviceClassNumber, the prefix of
+ 	 * hw.product (PEGetProductName: the root model); "arm64" (UIRequiredDeviceCapabilities) is the host's preferred user arch,

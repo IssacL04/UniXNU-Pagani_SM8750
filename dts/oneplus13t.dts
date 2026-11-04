@@ -8,6 +8,27 @@
         device_type = "memory";
         reg = <9 0x80000000 1 0x80000000>;
     };
+    // Firmware-owned regions the A830 driver reads or hands to TZ (runtime DT reserved-memory). Board inputs only:
+    // nothing here carries unixnu,adt-name, so the ADT and arm-io are unchanged.
+    reserved-memory {
+        #address-cells = <2>;
+        #size-cells = <2>;
+        ranges;
+        aop_cmd_db_mem: cmd-db@81c60000 {
+            compatible = "qcom,cmd-db";
+            reg = <0 0x81c60000 0 0x20000>;
+            no-map;
+        };
+        smem_mem: smem@81d00000 {
+            compatible = "qcom,smem";
+            reg = <0 0x81d00000 0 0x200000>;
+            no-map;
+        };
+        gpu_microcode_mem: gpu-microcode@9b09a000 {
+            reg = <0 0x9b09a000 0 0x2000>;
+            no-map;
+        };
+    };
 };
 &cpu0 { status = "okay"; };
 &cpu1 { status = "okay"; };
@@ -17,7 +38,18 @@
 &cpu5 { status = "okay"; };
 &cpu6 { status = "okay"; };
 &cpu7 { status = "okay"; };
+// The A830 resources, enabled as inputs of scripts/prepare-pagani-gpu-inputs.py (package/PaganiGpuInputs.h): windows,
+// interrupts, stream IDs (iommus), the SMMU interrupts, the speed-bin fuse cell and the LLCC windows come from here and
+// soc:dts; the power-level bins, bus and GMU tables (runtime-DT-only policy, ARCHITECTURE 3.2 B) from the pinned runtime
+// DTB, which must agree with every value both carry.
 &gpu {
     qcom,chipid = <0x44050001>;
     qcom,gpu-model = "Adreno830v2";
+    memory-region = <&gpu_microcode_mem>;
+    status = "okay";
 };
+&gmu { status = "okay"; };
+&gpucc { status = "okay"; };
+&gpu_smmu { status = "okay"; };
+&qfprom { status = "okay"; };
+&llcc { status = "okay"; };

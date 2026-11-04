@@ -1,0 +1,62 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -7656,6 +7656,17 @@ native_owner_cache_prepare(proc_t p, user_addr_t scratch, user_addr_t *envp)
+ 	boot_progress_root("SystemOS mount syscall returned", NULL, (unsigned)error);
+ 	native_owner_cache_mount_status = error;
+ 	if (error) goto done;
++	/* phone-checkdirs-kernproc.patch. Before launchd runs (its directory descriptors move these counts). Every APFS root starts at 5:
++	 * the volume's own reference and the v_parent references of private-dir, .snaps and the two xattr vnodes (every vnode holds one on
++	 * its parent). The covered root adds the covering mount's and its children looked up so far, /dev and /private (the swap file's
++	 * path): 8. The new root adds rootvnode's, which kernproc's current directory shares, and pid 1's current directory: 7. A checkdirs
++	 * that took kernproc's reference it never had gives 7 and 8. The addresses compare with a vnode panic's. */
++	{
++		char roots[96];
++		snprintf(roots, sizeof(roots), "old %llx use %d, root %llx use %d", (unsigned long long)(uintptr_t)original_os_root,
++		    original_os_root->v_usecount, (unsigned long long)(uintptr_t)rootvnode, rootvnode->v_usecount);
++		boot_progress_root("SystemOS root refs", roots, 0);
++	}
+ 	native_owner_cache_stage = 4;
+ 	boot_progress_root("SystemOS vnode lookup enter", mountpoint, 0);
+ 	error = vnode_lookup(mountpoint, 0, &mounted_root, vfs_context_current());
+@@ -7681,6 +7692,12 @@ native_owner_cache_prepare(proc_t p, user_addr_t scratch, user_addr_t *envp)
+ #endif
+ 	boot_progress_root("SystemOS mounted auth returned", NULL, cache_authorized);
+ 	if (!cache_authorized) { error = EAUTH; goto done; }
++#if defined(XNU_OWNER_UNION_SYSTEMOS) && XNU_OWNER_UNION_SYSTEMOS
++	/* phone-checkdirs-kernproc.patch. This volume carries the shared cache launchd runs from. The first vfs_unmountall of a shutdown
++	 * force-unmounts all but the root and the system volumes while launchd still runs: a thread of it faulting on a cache page then
++	 * gets a memory error and panics the kernel ("initproc exited"). A system volume waits for the second, launchd suspended. */
++	vfs_setmntsystem(cache_mount);
++#endif
+ 	native_owner_cache_stage = 5;
+ #if !defined(XNU_OWNER_UNION_SYSTEMOS) || !XNU_OWNER_UNION_SYSTEMOS
+ 	if ((error = copyout(environment, environment_vector[0], strlen(environment) + 1)) != 0 ||
+diff --git a/bsd/vfs/vfs_syscalls.c b/bsd/vfs/vfs_syscalls.c
+--- a/bsd/vfs/vfs_syscalls.c
++++ b/bsd/vfs/vfs_syscalls.c
+@@ -2518,6 +2518,24 @@ checkdirs_callback(proc_t p, void * arg)
+ 	}
+ 	proc_fdunlock(p);
+ 
++	/*
++	 * phone-checkdirs-kernproc.patch. kernproc's current directory holds no usecount of its own: set_rootvnode() only assigns it, it
++	 * shares the one reference of rootvnode, and checkdirs() moves that reference to newdp below. Follow the pointer and leave the
++	 * counts alone: the release below would take a reference another holder of the covered root still has to drop. The last of them,
++	 * private-dir's v_parent reference, then goes when apfs_vfsop_unmount's last vflush reclaims it and finds the reclaimed root at 0:
++	 * the panic in _vnode_rele_internal at usecount -1, once SystemOS is mounted over "/".
++	 */
++	if (p == kernproc && olddp == rootvnode) {
++		proc_dirs_lock_exclusive(p);
++		proc_fdlock(p);
++		if (fdp->fd_cdir == olddp) {
++			fdp->fd_cdir = newdp;
++		}
++		proc_fdunlock(p);
++		proc_dirs_unlock_exclusive(p);
++		return PROC_RETURNED;
++	}
++
+ 	/*
+ 	 * Ok, we will have to do some work.  Always take two refs
+ 	 * because we might need that many.  We'll dispose of whatever

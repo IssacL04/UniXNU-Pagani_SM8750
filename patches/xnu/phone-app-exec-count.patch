@@ -1,0 +1,30 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -346,6 +346,12 @@
+ extern vm_map_t bsd_pageable_map;
+ extern const struct fileops vnops;
+ extern int nextpidversion;
++/*
++ * phone-app-exec-count.patch. One more at every exec of an app or extension bundle, what the CPU governor's launch boost starts on
++ * (PaganiArmCpu CpuFreqGovernor.h). launchd spawns apps and extensions itself and daemons through xpcproxy, and both come here, so the
++ * path is what tells them apart.
++ */
++int pagani_app_execs = 0;
+ 
+ 
+ #define USER_ADDR_ALIGN(addr, val) \
+@@ -2892,6 +2898,13 @@
+ 	if (error == -1) {
+ 		error = ENOEXEC;
+ 	} else if (error == 0) {
++		/*
++		 * phone-app-exec-count.patch. Here and no later: the end of this function frees the strings excpath points into, with
++		 * imgp->ip_strings set to NULL. No ".app" alone: it is in every com.apple.x daemon's name.
++		 */
++		if (strnstr(excpath, ".app/", MAXPATHLEN) != NULL || strnstr(excpath, ".appex/", MAXPATHLEN) != NULL) {
++			OSIncrementAtomic(&pagani_app_execs);
++		}
+ 		if (imgp->ip_flags & IMGPF_INTERPRET && ndp->ni_vp) {
+ 			AUDIT_ARG(vnpath, ndp->ni_vp, ARG_VNODE2);
+ 		}

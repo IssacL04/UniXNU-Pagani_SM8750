@@ -16,9 +16,13 @@ class TraceTests(unittest.TestCase):
         if not (root / 'drivers/Adreno740').is_dir():
             root = root.parent / 'UniXNU'
         driver = root / 'drivers/Adreno740'
-        for other in (root / 'drivers/AdrenoMetal', root.parent / 'UniXNU-Pagani-Drivers/drivers/NativeMobileDisplay'):
+        for other in (root / 'drivers/AdrenoMetal', root.parent / 'UniXNU-Pagani-Drivers/drivers/NativeMobileDisplay',
+                      root.parent / 'UniXNU-Pagani-Drivers/drivers/Adreno830'):
             self.assertEqual((driver / 'NativeGpuTrace.h').read_bytes(),
                              (other / 'NativeGpuTrace.h').read_bytes())
+        a830 = root.parent / 'UniXNU-Pagani-Drivers/drivers/Adreno830'
+        for name in ('NativeGpuTrace.inc', 'NativeGpuTraceStore.h', 'NativeAdrenoABI.h'):
+            self.assertEqual((driver / name).read_bytes(), (a830 / name).read_bytes())
         with tempfile.TemporaryDirectory() as directory:
             exe = str(Path(directory) / 'store')
             subprocess.run([os.environ.get('CXX','c++'),'-std=c++17','-O1','-g','-fsanitize=address,undefined',

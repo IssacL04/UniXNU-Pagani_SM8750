@@ -1,0 +1,82 @@
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -7372,8 +7372,15 @@
+ /* The Control Center overlay (phone-controlcenter-settings.patch): stage and status, as for the addons above. */
+ volatile int native_cc_addon_stage = 0;
+ volatile int native_cc_addon_status = -1;
++/* The haptics overlays (phone-haptics-overlays.patch): the J120 tunings and MediaExperience's J120 tables, stage and status as above. */
++volatile int native_haptics_tunings_stage = 0;
++volatile int native_haptics_tunings_status = -1;
++volatile int native_haptics_mx_stage = 0;
++volatile int native_haptics_mx_status = -1;
+ /* BootProgress's ramoops trace (U lines), on boards that link it. */
+ extern void boot_progress_trace(const char *text) __attribute__((weak_import));
++/* PaganiHaptics (HapticsIos.h), on boards that link it: makes the /product/haptics it planned, or not, from what the overlays show. */
++extern void pagani_haptics_ios_commit(int audio_visible, int tunings_visible) __attribute__((weak_import));
+ static void
+ native_gpu_addon_mount(proc_t p, user_addr_t scratch, user_addr_t offset, const char *source, size_t source_size,
+     const char *point, size_t point_size, const char *visible, const char *own, volatile int *stage, volatile int *status)
+@@ -7894,6 +7901,49 @@
+ 		snprintf(line, sizeof(line), "overlay controlcenter stage %d status %d", native_cc_addon_stage, native_cc_addon_status);
+ 		boot_progress_trace(line);
+ 	}
++	/* iOS haptics (boot-arg pagani-haptics-ios=1 or 2 with pagani-haptics=1: UniXNU-Pagani-Drivers drivers/PaganiHaptics HapticsIos.h). The
++	 * haptic server loads its synth preset from /Library/Audio/Tunings/<product>/Haptics/hapticengineconfig.plist once
++	 * DeviceSupportsClosedLoopHaptics is on (-[AVHapticServer loadSynthPreset]; without the file -43, and every haptic fails), the legacy
++	 * vibe engine reads VibeEngine/vibeengineconfig.plist there, and MediaExperience takes the system sounds' vibrations from
++	 * MediaExperience.framework/<product>/SystemSound{VibrationPatterns,RingerSettings}.plist, which J120 has empty. The owner overlays
++	 * /private/var/ngpu/tunings-j120 and /private/var/ngpu/mediaexperience-j120 (工具/make-phone-haptics-overlay.py: a generated J120 preset
++	 * and the iPhone 15 Pro's tables of the same root) are shown over the two J120 directories like the overlays above; the root's own
++	 * entries stay visible below (stage 4), the sentinel file of each overlay proves it on top (stage 5). Their mount arguments take scratch
++	 * 0x000..0x11f and 0x200..0x327, which only the root and Data mounts used before (done by now) and only launchd's arguments use after:
++	 * clear of launchd's environment (0x400..0x6ff) and of every other use of the page. Then PaganiHaptics makes /product/haptics, now that
++	 * it can be told what is there: no node without the audio plug-in on the root (iOS would wait for an "Actuator" device that never
++	 * comes), no closed-loop without the preset (every haptic would fail). This is the last stop before launchd, so MobileGestalt finds the
++	 * node from its first question, and native_gestalt_cache_drop below removes what an earlier boot cached. Without the boot arguments
++	 * nothing is mounted or made. */
++	uint32_t haptics_ios = 0, haptics_mode = 0;
++	if (PE_parse_boot_argn("pagani-haptics-ios", &haptics_ios, sizeof(haptics_ios)) && (haptics_ios == 1 || haptics_ios == 2) &&
++	    PE_parse_boot_argn("pagani-haptics", &haptics_mode, sizeof(haptics_mode)) && haptics_mode == 1) {
++		static const char tunings_source[] = "/private/var/ngpu/tunings-j120", tunings_point[] = "/Library/Audio/Tunings/J120";
++		static const char hmx_source[] = "/private/var/ngpu/mediaexperience-j120",
++		    hmx_point[] = "/System/Library/PrivateFrameworks/MediaExperience.framework/J120";
++		native_gpu_addon_mount(p, scratch, 0x000, tunings_source, sizeof(tunings_source), tunings_point, sizeof(tunings_point),
++		    "/Library/Audio/Tunings/J120/VAD", "/Library/Audio/Tunings/J120/UniXNU-haptics-overlay.txt", &native_haptics_tunings_stage,
++		    &native_haptics_tunings_status);
++		native_gpu_addon_mount(p, scratch, 0x200, hmx_source, sizeof(hmx_source), hmx_point, sizeof(hmx_point),
++		    "/System/Library/PrivateFrameworks/MediaExperience.framework/J120/CMSessionPresets.plist",
++		    "/System/Library/PrivateFrameworks/MediaExperience.framework/J120/UniXNU-haptics-overlay.txt", &native_haptics_mx_stage,
++		    &native_haptics_mx_status);
++		if (boot_progress_trace) {
++			char line[96];
++			snprintf(line, sizeof(line), "overlay haptics tunings stage %d status %d, vibrations stage %d status %d",
++			    native_haptics_tunings_stage, native_haptics_tunings_status, native_haptics_mx_stage, native_haptics_mx_status);
++			boot_progress_trace(line);
++		}
++		if (pagani_haptics_ios_commit) {
++			vnode_t preset = NULLVP;
++			int preset_visible = native_haptics_tunings_stage == 5 && !vnode_lookup("/Library/Audio/Tunings/J120/Haptics/hapticengineconfig.plist",
++			    0, &preset, vfs_context_current());
++			if (preset_visible) {
++				vnode_put(preset);
++			}
++			pagani_haptics_ios_commit(native_audio_addon_stage == 5, preset_visible);
++		}
++	}
+ 	native_cryptex_os_view(p, scratch);
+ 	native_gestalt_cache_drop(p, scratch);
+ 	native_ls_store_drop(p, scratch);
+@@ -8429,9 +8479,10 @@
+ 	    native_staged_apps_failed, native_staged_apps_error, (unsigned long long)native_staged_apps_ms, native_staged_apps_path);
+ 	boot_progress_trace(line);
+ 	snprintf(line, sizeof(line), "overlays: wallpaper stage %d status %d, keyboard stage %d status %d, audio stage %d status %d, "
+-	    "controlcenter stage %d status %d, system apps stage %d status %d", native_gpu_addon4_stage, native_gpu_addon4_status,
+-	    native_gpu_addon5_stage, native_gpu_addon5_status, native_audio_addon_stage, native_audio_addon_status, native_cc_addon_stage,
+-	    native_cc_addon_status, native_system_apps_stage, native_system_apps_status);
++	    "controlcenter stage %d status %d, system apps stage %d status %d, haptics stage %d/%d status %d/%d", native_gpu_addon4_stage,
++	    native_gpu_addon4_status, native_gpu_addon5_stage, native_gpu_addon5_status, native_audio_addon_stage, native_audio_addon_status,
++	    native_cc_addon_stage, native_cc_addon_status, native_system_apps_stage, native_system_apps_status, native_haptics_tunings_stage,
++	    native_haptics_mx_stage, native_haptics_tunings_status, native_haptics_mx_status);
+ 	boot_progress_trace(line);
+ 	/* What SystemAppMigrator's passes ask MobileGestalt about: SupportedDeviceFamilies follows DeviceClassNumber, the prefix of
+ 	 * hw.product (PEGetProductName: the root model); "arm64" (UIRequiredDeviceCapabilities) is the host's preferred user arch,

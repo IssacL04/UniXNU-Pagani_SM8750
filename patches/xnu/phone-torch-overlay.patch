@@ -1,0 +1,49 @@
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -7377,10 +7377,15 @@
+ volatile int native_haptics_tunings_status = -1;
+ volatile int native_haptics_mx_stage = 0;
+ volatile int native_haptics_mx_status = -1;
++/* The flashlight plug-in's overlay (phone-torch-overlay.patch): stage and status, as for the addons above. */
++volatile int native_torch_stage = 0;
++volatile int native_torch_status = -1;
+ /* BootProgress's ramoops trace (U lines), on boards that link it. */
+ extern void boot_progress_trace(const char *text) __attribute__((weak_import));
+ /* PaganiHaptics (HapticsIos.h), on boards that link it: makes the /product/haptics it planned, or not, from what the overlays show. */
+ extern void pagani_haptics_ios_commit(int audio_visible, int tunings_visible) __attribute__((weak_import));
++/* PaganiTorch (TorchIos.h), on boards that link it: publishes the capture service and /product/camera flash, or not, from what the overlay shows. */
++extern void pagani_torch_ios_commit(int plugin_visible) __attribute__((weak_import));
+ static void
+ native_gpu_addon_mount(proc_t p, user_addr_t scratch, user_addr_t offset, const char *source, size_t source_size,
+     const char *point, size_t point_size, const char *visible, const char *own, volatile int *stage, volatile int *status)
+@@ -7944,6 +7949,30 @@
+ 			pagani_haptics_ios_commit(native_audio_addon_stage == 5, preset_visible);
+ 		}
+ 	}
++	/* The iOS flashlight (boot-arg pagani-torch-ios=1 with pagani-torch=1: UniXNU-Pagani-Drivers drivers/PaganiTorch TorchIos.h). CMCapture opens
++	 * /System/Library/MediaCapture/H6ISP.mediacapture in mediaserverd once a service of class AppleH6CamIn exists; that directory is empty
++	 * on the root and the file is not in the shared cache, so the owner overlay /private/var/ngpu/mediacapture
++	 * (drivers/PaganiTorch/scripts/add-pagani-torch-data.py) can hold the plug-in. The root has no entry there to prove the lower layer with,
++	 * so the directory itself stands for it; the plug-in proves the overlay on top (stage 5). The mount arguments reuse scratch 0x800..0x921
++	 * of the wallpaper mount above, done by then and clear of launchd's environment (0x400..0x6ff). Then PaganiTorch publishes the service
++	 * and the property behind MobileGestalt's camera-flash, only with the plug-in visible: no button that does nothing. This is the last stop
++	 * before launchd, and native_gestalt_cache_drop below removes what an earlier boot cached. Without the boot arguments nothing is mounted
++	 * or made. */
++	uint32_t torch_ios = 0, torch_mode = 0;
++	if (PE_parse_boot_argn("pagani-torch-ios", &torch_ios, sizeof(torch_ios)) && torch_ios == 1 &&
++	    PE_parse_boot_argn("pagani-torch", &torch_mode, sizeof(torch_mode)) && torch_mode == 1) {
++		static const char torch_source[] = "/private/var/ngpu/mediacapture", torch_point[] = "/System/Library/MediaCapture";
++		native_gpu_addon_mount(p, scratch, 0x800, torch_source, sizeof(torch_source), torch_point, sizeof(torch_point),
++		    "/System/Library/MediaCapture", "/System/Library/MediaCapture/H6ISP.mediacapture", &native_torch_stage, &native_torch_status);
++		if (boot_progress_trace) {
++			char line[64];
++			snprintf(line, sizeof(line), "overlay torch stage %d status %d", native_torch_stage, native_torch_status);
++			boot_progress_trace(line);
++		}
++		if (pagani_torch_ios_commit) {
++			pagani_torch_ios_commit(native_torch_stage == 5);
++		}
++	}
+ 	native_cryptex_os_view(p, scratch);
+ 	native_gestalt_cache_drop(p, scratch);
+ 	native_ls_store_drop(p, scratch);
