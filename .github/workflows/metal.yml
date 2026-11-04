@@ -2,6 +2,15 @@ name: Pagani A830 Metal candidate
 on:
   workflow_dispatch:
     inputs:
+      runner:
+        description: macOS build host (ARM64 runtime checks require an ARM64 runner)
+        required: true
+        default: macos-15
+        type: choice
+        options:
+          - macos-15
+          - macos-26
+          - macos-26-intel
       bundle_url:
         description: HTTPS URL of the source-only bundle
         required: true
@@ -23,11 +32,11 @@ permissions:
   contents: read
   actions: read
 concurrency:
-  group: oneplus13t-metal-${{ github.ref }}
+  group: oneplus13t-metal-${{ github.ref }}-${{ inputs.runner }}
   cancel-in-progress: false
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 360
     defaults:
       run:
@@ -166,7 +175,7 @@ jobs:
         run: |
           ./unixnu kernel -j 3 2>&1 | tee "$UNIXNU_OUTDIR/logs/kernel.log"
       - name: Check the integrated A830 driver against host peers and XNU records
-        if: ${{ inputs.reuse_run_id == '' }}
+        if: ${{ inputs.reuse_run_id == '' && runner.arch == 'ARM64' }}
         working-directory: source/UniXNU
         env:
           ASAN_OPTIONS: detect_leaks=0
@@ -239,6 +248,7 @@ jobs:
           PY
           rustup toolchain install 1.98.0 --profile minimal
       - name: Verify Metal interfaces, compiler, heap reuse and scanout on the build host
+        if: ${{ runner.arch == 'ARM64' }}
         working-directory: source/UniXNU
         run: |
           cd "$UNIXNU_TREE"
