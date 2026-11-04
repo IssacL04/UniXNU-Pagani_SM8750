@@ -1,3 +1,6 @@
 [submodule "modules/Pagani"]
 	path = modules/Pagani
 	url = https://github.com/IssacL04/UniXNU-Pagani-Drivers.git
+[submodule "modules/ArmSmmu4K"]
+	path = modules/ArmSmmu4K
+	url = https://github.com/UniXNU/ArmSmmu4K.git

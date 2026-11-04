@@ -172,7 +172,7 @@ jobs:
           ASAN_OPTIONS: detect_leaks=0
         run: |
           python3 "$UNIXNU_TREE/drivers/Adreno830/tests/run-host-tests.py" \
-            --unixnu "$PWD" --tree "$UNIXNU_TREE" --out "$UNIXNU_TREE/build/a830-host-tests" \
+            --unixnu "$UNIXNU_TREE" --tree "$UNIXNU_TREE" --out "$UNIXNU_TREE/build/a830-host-tests" \
             --firmware ../UniXNU-Pagani_SM8750/.cache/firmware/pkx110-gpu \
             --pins ../UniXNU-Pagani_SM8750/scripts/data/sm8750-gpu-inputs.json
       - name: Check imported XNU fixes with the built source and compile records

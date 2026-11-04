@@ -84,6 +84,8 @@ def prepare(output, soc):
     drivers = probe.parent
     sources = [{'name': name, 'kind': 'driver', 'local': str((drivers / name).resolve())}
                for name in board['components']['include'] if (drivers / name).is_dir()]
+    # The imported A830 driver uses the fixed-pool SMMU API preceding on-demand tables.
+    sources.append({'name': 'ArmSmmu4K', 'kind': 'kit', 'local': str(ROOT / 'modules/ArmSmmu4K')})
     if soc:
         if not (soc / 'soc.toml').is_file():
             raise ValueError('SoC checkout has no soc.toml: ' + str(soc))
