@@ -125,6 +125,12 @@ int main(){
 '''
 with tempfile.TemporaryDirectory(prefix='stage7-check-') as temporary:
     folder = Path(temporary)
+    for language, compiler, standard in [('c', 'cc', 'c11'), ('c++', 'c++', 'c++17')]:
+        binary = folder / ('request-state-' + language)
+        subprocess.run([compiler, '-x', language, '-std=' + standard, '-Wall', '-Wextra', '-Werror',
+                        '-fsanitize=address,undefined', str(tree / 'drivers/NativeMobileDisplay/Test/request-state.c'),
+                        '-o', str(binary)], check=True)
+        subprocess.run([str(binary)], check=True)
     console = tree / 'drivers/BootProgress'
     source = folder / 'console-runtime.c'
     source.write_text((console / 'Test/console.c').read_text().split('static void panic_for_test', 1)[0])
@@ -146,4 +152,4 @@ with tempfile.TemporaryDirectory(prefix='stage7-check-') as temporary:
             rules = runpy.run_path(str(Path(__file__).with_name('prepare-ram-data.py')))['COMPAT_FIXUPS']
             expected = [f'{Path(path).name} {offset:x} {original}' for _, path, offset, original in rules]
             assert result.splitlines() == expected, 'Build-time byte checks must match all kernel rules'
-print('PASS: console runtime-helper boundary, C language selection, logical timing state, display timer lifetime and fixed refresh cadence')
+print('PASS: pixel copy/fill and preserved bands, console runtime-helper boundary, C language selection, logical timing state, display timer lifetime and fixed refresh cadence')
