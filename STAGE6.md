@@ -1537,3 +1537,16 @@ Run 5 产物已下载到 `out/oneplus13t/actions/metal-main-5/`。新内核为 1
 保留本机固件摘要、256 GB 分区 LBA 44928768..61705983、4 GiB 内存窗和现有内嵌 payload。没有采用作者的 512 GB 分区布局。公开快照没有 Metal 组件源码及手机 Data seed，本次不能复现作者的整套用户态。
 
 93 个 XNU 补丁在原始源码上依序应用成功。实际 presenter 的归属、完成、映射失败回退、关闭释放、状态栏与旧 Metal 协议测试通过；实际显示 timer 生命周期、C 编译选项和控制台无运行库调用检查通过。macOS 完整编译和新镜像实机结果待补。本次没有启动或刷写新镜像。
+
+
+## Main Metal run 36 打包与临时启动（2026-11-05）
+
+Run 36 的完整 XNU 编译、最终链接和预链接、49 项 A830 专项检查、XNU 补丁检查、Metal/Turnip 生产构建及主机回归均已通过。使用这一轮的内核、Metal Data 和 owner trust 生成 ADT 与 176 MiB FAT 载荷，保留 Run 36 的启动参数，并复用 main-8 实机验证过且哈希一致的 UEFI 和 stock DTB。
+
+镜像为 `out/oneplus13t/boot/metal-main-36/boot.img`，101068800 字节，SHA-256 `2e63a59c40ab15a8362dbdebcb953e738811f9319dad855e75b90bee453ca2fc`。配对 Data UUID 为 `206A0FD5-5786-4BFD-8E77-9DE49EFFC6C2`。内核哈希、完整 Data 校验、信任包结构、FAT 内核/Data/trust 与启动参数回读，以及最终 Android v4 gzip/UEFI/DTB/内嵌载荷逐字节回读全部通过；Android ramdisk 为零。
+
+用户明确授权打包后测试，设备确认为 `3B15BB01BAT00000`、`product=sun`、`is-userspace=no`。19:22:38（Asia/Shanghai）执行临时启动，Sending 2.312 秒、Booting 0.336 秒均返回 `OKAY`，总耗时 3.145 秒，未刷写任何分区。日志为 `out/oneplus13t/boot/metal-main-36/fastboot-boot-20261105-192238.log`。当前确认 bootloader 接受临时启动；桌面、颜色、触摸及 GPU 运行情况等待手机画面反馈。
+
+用户随后确认：“已进入桌面”，并反馈应用内滑动主观上接近 120 帧、流畅度明显改善，应用冷启动和桌面滑动仍会掉帧。用户目前对 GPU 状态满意。这些反馈确认桌面启动与交互体验；“接近 120 帧”是主观感受，尚无逐帧统计、长期稳定性和热功耗测量。
+
+以本次 Run 36 为 `archive` 留档基线。设备源码、既有组件引用、源码补丁包 `.ci-inputs/oneplus13t-integrated-sources-20261105-v19.tar.gz` 及构建/实机记录保留在该分支；内核、Data、trust 和 boot.img 保留在上述本地产物目录，云端产物见 Run 36。分支留档不延长 GitHub Actions 产物的保留期限。
