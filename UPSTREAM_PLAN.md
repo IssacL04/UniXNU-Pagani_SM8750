@@ -1,6 +1,6 @@
 # OnePlus 13T 上游适配计划
 
-本轮在 main 上适配 Metal、SMMU、Turnip、诊断、Wi-Fi、图标服务和触控优化，保持 SM8750 / Adreno830 / iPadOS 17.7.11（21H461）目标。2026-11-07 已迁入本轮源码，并完成本地 ARM64 内核编译、最终链接和预链接。Metal/Turnip 用户态、新 Data/trust 的 macOS 构建和本轮实机验收仍待完成。
+本轮在 main 上适配 Metal、SMMU、Turnip、诊断、Wi-Fi、图标服务和触控优化，保持 SM8750 / Adreno830 / iPadOS 17.7.11（21H461）目标。2026-11-07 已迁入本轮源码，完成本地及 Actions ARM64 内核构建、macOS Metal/Turnip 与 Wi-Fi 服务构建、签名 Data/trust 打包和主机回归，并生成新的测试 `boot.img`。本轮实机验收留待用户手动进行。
 
 ## 基线
 
@@ -30,10 +30,10 @@
 | 批次 | 已完成 | 验证边界 |
 | --- | --- | --- |
 | 0 | 复用已成功构建的 Run 36 本地基线；迁入线程、编码、完成、资源释放和图标诊断，栈采样限于持锁的稳定等待线程 | 诊断 ABI 和线程状态回归通过；未测量手机长帧 |
-| 1 | 迁入运行时补丁 0027～0030、CoreAnimation 编码线程策略继承和队列优先级回收 | 队列回收主机测试通过；内存复用和延迟释放仍需 macOS 运行时回归 |
+| 1 | 迁入运行时补丁 0027～0030、CoreAnimation 编码线程策略继承和队列优先级回收 | 队列优先级回收、macOS 堆别名与复用、重复释放及完成回调 QoS 回归通过；长期内存压力和手机帧时间仍待测量 |
 | 2 | ArmSmmu4K 更新到 `83969cd`；A830/GMU 改为按需分配页表，补齐分配失败回滚、调用方和夹具 | 映射、跨 4 GiB 地址、TLB、客户端与生命周期相关回归通过，完整内核通过 |
 | 3 | 接入临时附件、GMEM 内存侧颜色交换、逐线程模式和颜色自检；适配本地诊断补丁上下文 | 默认继续使用 `sysmem,nocb`；颜色、透明度及帧时间等待实机比较 |
-| 4 | 接入锁定的 mac80211/cfg80211、原版 wpa_supplicant、控制通道、21H461 Apple80211 事件、launchd 缓存合并及签名/trust/Data 接线；保留 Peach 固件与校准路径 | 115 项系统接口检查、主栈完整退出、WPA2/开放网络、重密钥、错误密码与重放拒绝通过；WCN7850 及 Peach 的 6 种校准场景通过 ASan/UBSan。新签名包和实机连接尚未验证 |
+| 4 | 接入锁定的 mac80211/cfg80211、原版 wpa_supplicant、控制通道、21H461 Apple80211 事件、launchd 缓存合并及签名/trust/Data 接线；保留 Peach 固件与校准路径 | 115 项系统接口检查、主栈完整退出、WPA2/开放网络、重密钥、错误密码与重放拒绝通过；WCN7850 及 Peach 的 6 种校准场景通过 ASan/UBSan。Run 40 已生成并验证新签名包，包含本机两个 ODM 固件文件；硬件开关仍默认关闭，实机连接尚未验证 |
 | 5 | 接入图标服务诊断、Data 启用项及按服务设置 launchd 环境的能力，默认保留原系统环境 | launchd 合并与原条目保留测试通过；图标完整性、缓存及渲染选择待实机比较 |
 | 6 | S3910 保留控制器触点 ID，首次按下投递失败时保留起点，抬手重试，连续三次读错才释放触点 | S3910/SPI、面板和显示时序综合回归通过；未进行手机触控测试 |
 
@@ -52,6 +52,16 @@ Peach 全栈检查还复现并修复了 MHI 上下文指针丢失 4 字节对齐
 相关回归入口为设备仓的 `scripts/test-stall-stack-patch.py`、`scripts/check-gpu-trace.py`、`scripts/test-wifi-packaging.py --tree <tree>`、`scripts/test-peripherals.py --tree <tree>`，以及组件仓的 `drivers/Adreno830/tests/run-host-tests.py` 和 `drivers/PaganiWifi/Ath12kWifi/tools/test-*.py`、`tools/peach-sim.sh`。测试使用 Clang 和 ASan/UBSan；现有内核模型关闭 LeakSanitizer，主栈退出测试另以分配/释放计数检查生命周期。
 
 构建卷和 VHDX 文件均未达到 80 GB。构建入口监控卷内占用并在超限时终止构建、清理缓存；本轮还单独检查了 `D:\WSL\UniXNU-Build\unixnu-build.vhdx` 的文件大小。本地验证阶段未操作手机。2026-11-07 起继续使用 GitHub Actions 在 macOS 完成 Metal/Turnip、认证服务、签名和 Data/trust 配对构建，再按表中的实机条件验收。
+
+## 2026-11-07 Actions 与测试镜像
+
+[Run 39](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/42276555172) 完成新内核的编译、链接、预链接、A830 集成回归和 XNU 补丁检查，随后在 Metal 前端发现诊断安装函数缺少生产调用。修复后，[Run 40](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/42281947375) 使用新 runner，复用同源的 Run 39 内核及基础 Data，完成 Metal/Turnip、Wi-Fi 认证服务、签名 Data/trust 和 Metal 主机回归。源码为设备提交 `34c5b41` 与 v23 源码包；固件通过已授权的 Actions Secret 恢复，原文件未进入源码包。
+
+测试镜像位于 `out/oneplus13t/boot/metal-main-40/boot.img`，102,129,664 字节，SHA-256 为 `8260ed42c46af4f909693361f012fbbfc008a072f502e5d7de0a7e1480d6485f`。它使用 Run 40 的配套产物与 Run 36 已测 UEFI/stock DTB；内核/Data UUID、Data 哈希、owner 与原始 Apple trust 模块、FAT 文件和 Android v4 封装回读均通过。详情见 [STAGE6.md](STAGE6.md)。
+
+默认继续使用 `sysmem,nocb` 和 4 GiB 内存窗，图标服务启用，诊断追踪默认关闭。Wi-Fi 新栈、认证服务和 Peach 板级固件已集成，`pagani-wifi` 仍沿用阶段式启用方式，缺省为关闭；先完成基本启动验收，再按驱动文档逐阶段测试 Wi-Fi。主机接口回归沿用 `MVK_CONFIG_USE_MTLHEAP=0`，未验证 MoltenVK 原生 placement-heap 的共享纹理写入路径。本轮未启动或刷写手机，GPU 帧时间、Wi-Fi 连接和 S3910 触控行为仍待实机确认。
+
+最终下载后 D 盘构建卷约使用 22 GiB，VHDX 文件为 31,209,816,064 字节，低于 80 GB 清理阈值。
 
 ## 推送前的本地编译检查
 

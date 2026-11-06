@@ -1550,3 +1550,27 @@ Run 36 的完整 XNU 编译、最终链接和预链接、49 项 A830 专项检�
 用户随后确认：“已进入桌面”，并反馈应用内滑动主观上接近 120 帧、流畅度明显改善，应用冷启动和桌面滑动仍会掉帧。用户目前对 GPU 状态满意。这些反馈确认桌面启动与交互体验；“接近 120 帧”是主观感受，尚无逐帧统计、长期稳定性和热功耗测量。
 
 以本次 Run 36 为 `archive` 留档基线。设备源码、既有组件引用、源码补丁包 `.ci-inputs/oneplus13t-integrated-sources-20261105-v19.tar.gz` 及构建/实机记录保留在该分支；内核、Data、trust 和 boot.img 保留在上述本地产物目录，云端产物见 Run 36。分支留档不延长 GitHub Actions 产物的保留期限。
+
+
+## Main Metal run 40 测试镜像（2026-11-07）
+
+用户要求继续排错直到生成新测试 boot，并保留手动实机测试。[Run 39](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/42276555172) 完成新内核的编译、最终链接、预链接、A830 集成回归和导入 XNU 补丁检查。Metal 前端随后因共享诊断安装函数缺少生产调用而触发严格警告失败；修复将调用接入既有诊断开关和单次初始化保护，并加入钩子链/ABI 兼容性回归。
+
+[Run 40](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/42281947375) 成功完成基线测试、Metal/Turnip 与 Wi-Fi 认证服务构建、4 KiB 签名、Data/trust 打包和 Metal 主机回归。它使用新 runner，复用未改动的 Run 39 内核和基础 Data。队列优先级回收、完成回调 QoS、诊断启用、堆别名与保留引用复用、重复释放、scanout 格式转换、两项编译器回归及两种接口模式均通过；接口测试沿用 `MVK_CONFIG_USE_MTLHEAP=0`，不证明 MoltenVK 原生 placement-heap 的共享纹理写入行为，也不证明手机 GPU 性能。
+
+构建来源为设备 `34c5b41388474c1dc3ed95e09b44258fa71f9e48`，源码包为 `.ci-inputs/oneplus13t-integrated-sources-20261107-v23.tar.gz`，SHA-256 `6e7e2951e48ce5e02a80524a3c9b553a5679f212cb8cdf2ac72b4d67217b1469`。七个源码仓库的适配保存在该源码包中。用户提供的 Peach `bdwlan.elf` 和 `regdb.bin` 通过明确授权的 `PAGANI_WIFI_FIRMWARE_B64` Actions Secret 恢复，并按 `scripts/data/pkx110-wifi-firmware.json` 的大小和哈希校验；原文件未提交源码仓库。
+
+产物为 `oneplus13t-metal-40`，下载至 `/mnt/wsl/unixnu-build/artifacts/actions-run40/`，设备工作区入口为 `out/oneplus13t/actions/metal-main-40/`。配对 Data UUID 为 `2304AA7E-6191-4545-AB56-9019C278750F`。
+
+| 产物 | 字节数 | SHA-256 |
+| --- | ---: | --- |
+| `kernel/kernel.macho` | 129572864 | `a133bbbfbb95c186da781f098dd837b314281326f45e88f566de611693d521d9` |
+| `metal/data.dbrdisk` | 38823328 | `9ddf21f31cb9d4f17b8405ac92839d5f0f1cd5a8b93f2909cf9564271663d928` |
+| `metal/owner-trust.bundle` | 61504 | `8526cf998811e19b107e41f2b061bf0b539e41df3f9c1aa6043c8a0e24b92f11` |
+| `out/oneplus13t/boot/metal-main-40/boot.img` | 102129664 | `8260ed42c46af4f909693361f012fbbfc008a072f502e5d7de0a7e1480d6485f` |
+
+Data 解包后的逻辑大小为 1 GiB，SHA-256 `fd4b9bf3f3c7e3e281f1ef70a75de9c8c1d1df1516d236b6ee68d8fd8008dc08`。本地检查确认逻辑与编码哈希、内核/config/seed UUID、三个 Metal 与两个 Wi-Fi CDHash、排序后的 owner trust 均一致，两个原始 Apple trust 模块重组后的哈希保持 `7416ca4f8377146626bb284e2133c76bee6cb4e3ee0af5d648b186235a7323a7`。Data 记录包含两个 Peach 固件文件；launchd 缓存保留原有 561 项并加入认证服务，图标服务启用。
+
+封装复用 Run 36 已测 UEFI（`ec397f5f4646a43fa2e9a6bf6372efd3010facf181e311f3a13df600a9cfac07`）和 stock DTB（`c63c09d164e7ed488157e76abea05a0b8a479887e981c78e6b0666502b48c1ff`），生成 176 MiB FAT 载荷。实际命令为 `PATH=/mnt/wsl/unixnu-build/workspace/rootfs/usr/bin:$PATH python3 out/oneplus13t/ci/package-integrated.py 40`（设备仓目录），打包日志为 `out/oneplus13t/boot/metal-main-40/packaging.log`。FAT 中的内核、Data、trust 与输入逐字节一致，启动参数回读通过；Android v4 的 gzip、BootShim、UEFI、DTB 和整个内嵌载荷回读通过，Android ramdisk 为零。
+
+镜像保持 A830/iPadOS 17.7.11、`sysmem,nocb`、4 GiB 内存窗、CPU governor 2 和原有外设开关。`pagani-wifi` 缺省为关闭，新栈和固件的实机验证仍需按驱动阶段启用。未临时启动或刷写手机；基本启动、触控、图标、GPU 帧时间及 Wi-Fi 连接结果留待用户手动验证。下载后构建卷约使用 22 GiB，D 盘 VHDX 为 31,209,816,064 字节，未达到 80 GB 清理阈值。
