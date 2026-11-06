@@ -59,7 +59,7 @@ Peach 全栈检查还复现并修复了 MHI 上下文指针丢失 4 字节对齐
 
 测试镜像位于 `out/oneplus13t/boot/metal-main-40/boot.img`，102,129,664 字节，SHA-256 为 `8260ed42c46af4f909693361f012fbbfc008a072f502e5d7de0a7e1480d6485f`。它使用 Run 40 的配套产物与 Run 36 已测 UEFI/stock DTB；内核/Data UUID、Data 哈希、owner 与原始 Apple trust 模块、FAT 文件和 Android v4 封装回读均通过。详情见 [STAGE6.md](STAGE6.md)。
 
-默认继续使用 `sysmem,nocb` 和 4 GiB 内存窗，图标服务启用，诊断追踪默认关闭。Wi-Fi 新栈、认证服务和 Peach 板级固件已集成，`pagani-wifi` 仍沿用阶段式启用方式，缺省为关闭；先完成基本启动验收，再按驱动文档逐阶段测试 Wi-Fi。主机接口回归沿用 `MVK_CONFIG_USE_MTLHEAP=0`，未验证 MoltenVK 原生 placement-heap 的共享纹理写入路径。本轮未启动或刷写手机，GPU 帧时间、Wi-Fi 连接和 S3910 触控行为仍待实机确认。
+默认继续使用 `sysmem,nocb` 和 4 GiB 内存窗，图标服务启用，诊断追踪默认关闭。Wi-Fi 新栈、认证服务和 Peach 板级固件已集成，`pagani-wifi` 仍沿用阶段式启用方式，缺省为关闭；先完成基本启动验收，再按驱动文档逐阶段测试 Wi-Fi。主机接口回归沿用 `MVK_CONFIG_USE_MTLHEAP=0`，未验证 MoltenVK 原生 placement-heap 的共享纹理写入路径。2026-11-07 经用户授权执行临时启动，fastboot 的 Sending/Booting 均返回 OKAY，未刷写分区。系统启动、GPU 帧时间、Wi-Fi 连接和 S3910 触控行为仍待实机确认。
 
 最终下载后 D 盘构建卷约使用 22 GiB，VHDX 文件为 31,545,360,384 字节，低于 80 GB 清理阈值。
 
