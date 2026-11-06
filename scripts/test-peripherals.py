@@ -2,6 +2,8 @@
 """Run the portable peripheral tests against the selected component sources."""
 import argparse
 import ast
+import os
+import shlex
 from pathlib import Path
 import plistlib
 import re
@@ -33,16 +35,18 @@ with tempfile.TemporaryDirectory(prefix='pagani-peripherals-') as folder:
     (Path(folder)/'PaganiTouchPower.inc').write_text(power)
     keys=adapter[adapter.index('    void setupPlusKey('):adapter.index('    int setupTouchPower(')]
     (Path(folder)/'PaganiButtons.inc').write_text(keys)
+    delivery=adapter[adapter.index('    bool flushTouch()'):adapter.index('    void releaseContacts()')]
+    (Path(folder)/'PaganiTouchDelivery.inc').write_text(delivery)
     objects=[]
     for path in (source/'S3910.c',spi/'GeniSpi.c'):
         obj=Path(folder)/(path.stem+'.o');objects.append(str(obj))
-        subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
+        subprocess.run([*shlex.split(os.environ.get('CC','cc')),'-std=c11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
             '-c',str(path),'-o',str(obj)],check=True)
-    subprocess.run(['c++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
+    subprocess.run([*shlex.split(os.environ.get('CXX','c++')),'-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
         '-I',folder,'-I',str(source),'-I',str(spi),'-I',str(tree/'kits/Sm8750Platform'),'-I',str(tree/'kits/oneplus13t'),
         str(source/'Test/peripherals.cpp'),*objects,'-o',str(binary)],check=True)
     subprocess.run([str(binary)],check=True)
-    subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
+    subprocess.run([*shlex.split(os.environ.get('CC','cc')),'-std=c11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
         '-I',str(spi),str(spi/'GeniSpi.c'),str(spi/'Test/geni-spi.c'),'-o',str(binary)],check=True)
     subprocess.run([str(binary)],check=True)
     # PaganiPanel: its host tests, and what they cannot reach in the IOService lifecycle: the order of publication in start. The parameters
@@ -80,13 +84,13 @@ with tempfile.TemporaryDirectory(prefix='pagani-peripherals-') as folder:
     probe=re.sub(r'//.*','',(panel/'PanelProbe.h').read_text())
     assert probe.count('peripheral_write(')==1 and 'IODelay' not in probe and not re.search(r'#include <(IOKit|kern|mach|libkern|pexpert)',probe)
     for name in ('panel-brightness','panel-power','panel-probe'):
-        subprocess.run(['c++','-std=c++17','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-sanitize-recover=all',
+        subprocess.run([*shlex.split(os.environ.get('CXX','c++')),'-std=c++17','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-sanitize-recover=all',
             '-I',str(tree/'kits/Sm8750Platform'),'-I',str(tree/'kits/oneplus13t'),str(panel/'Test'/(name+'.cpp')),'-o',str(binary)],check=True)
         subprocess.run([str(binary)],check=True)
     # The whole of PaganiPanel.cpp against stubs of the kernel: what start does around the headers, bit 8 above all.
     subprocess.run([sys.executable,str(panel/'Test/panel-start.py'),str(panel),str(tree/'kits/Sm8750Platform'),str(tree/'kits/oneplus13t')],check=True)
     # The display's refresh tick: the cadence's arithmetic, and sheng-vsync at the four places that read it, cut out of the driver as they are.
     display=tree/'drivers/NativeMobileDisplay'
-    subprocess.run(['c++','-std=c++17','-O2','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',str(display/'Test/display-timing.cpp'),'-o',str(binary)],check=True)
+    subprocess.run([*shlex.split(os.environ.get('CXX','c++')),'-std=c++17','-O2','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',str(display/'Test/display-timing.cpp'),'-o',str(binary)],check=True)
     subprocess.run([str(binary)],check=True)
     subprocess.run([sys.executable,str(display/'Test/vsync-boot-arg.py'),str(display)],check=True)

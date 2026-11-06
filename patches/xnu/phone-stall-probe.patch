@@ -685,8 +685,8 @@
 +
 +/*
 + * The return addresses of a thread off core, past thread_invoke and the block routine above it, inside its kernel stack. Under the thread lock:
-+ * it cannot be dispatched meanwhile, so the stack stays. Its registers may be a moment old while it is still switching away; then the walk reads
-+ * stale words of the stack, and it never leaves the stack.
++ * only a waiting thread with TH_RUN cleared has finished switching away. The scheduler clears TH_RUN under this same lock; until then
++ * its saved registers and stack may still change, so the caller skips them. The walk stays inside the retained stack.
 + */
 +static void
 +stall_kernel_frames(thread_t thread, struct boot_progress_stall_thread *out)
@@ -749,7 +749,7 @@
 +	out->base_pri = thread->base_pri;
 +	out->cpu = on_core ? last->cpu_id : -1;
 +	out->reserved = 0;
-+	if (!on_core && thread->continuation == NULL && thread->kernel_stack != 0) {
++	if ((thread->state & (TH_WAIT | TH_RUN | TH_TERMINATE | TH_TERMINATE2)) == TH_WAIT && thread->continuation == NULL && thread->kernel_stack != 0) {
 +		stall_kernel_frames(thread, out);
 +	}
 +	thread_unlock(thread);

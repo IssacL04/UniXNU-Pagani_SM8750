@@ -29,7 +29,7 @@ def checkout(path, url, revision, directories=()):
         raise ValueError('Source pin differs: ' + str(path))
 
 
-def build(tree, data, trust, output):
+def build(tree, data, trust, output, os_image, wifi_firmware=None):
     if sys.platform != 'darwin':
         raise ValueError('The iOS SDK, codesign and hdiutil require a macOS build host')
     if output.exists():
@@ -67,11 +67,16 @@ def build(tree, data, trust, output):
     if original.exists() and original.read_bytes() != trust.read_bytes():
         raise ValueError('Existing original trust input differs')
     original.write_bytes(trust.read_bytes())
-    run(sys.executable, scripts / 'make-owner-trust-bundle.py')
+    wifi = tree / 'build/wifi-userspace'
+    run(sys.executable, Path(__file__).with_name('build-wifi-userspace.py'), '--tree', tree,
+        '--os-image', os_image, '--output', wifi,
+        *(['--firmware', wifi_firmware] if wifi_firmware else []))
+    run(sys.executable, scripts / 'make-owner-trust-bundle.py', '--wifi', wifi / 'report.json')
     output.mkdir(parents=True)
     env = dict(os.environ, PYTHONPATH=os.pathsep.join(
         [str(tree / 'drivers/PaganiDarwinBoot/Test'), os.environ.get('PYTHONPATH', '')]))
     run(sys.executable, scripts / 'add-gpu-plugin-data.py', '--publish',
+        '--enable-jobs', 'com.apple.iconservices.iconservicesagent', '--clients', 'iconservicesagent', '--wifi', wifi / 'report.json',
         data, output / 'data.dbrdisk', env=env)
     shutil.copyfile(tree / 'build/adreno-metal-plugin/owner-trust.bundle', output / 'owner-trust.bundle')
     print('PASS: A830 plugin built and staged; rendering and presentation require device verification')
@@ -83,8 +88,10 @@ if __name__ == '__main__':
     parser.add_argument('--data', type=Path, required=True)
     parser.add_argument('--original-trust', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--os-image', type=Path, required=True)
+    parser.add_argument('--wifi-firmware', type=Path)
     args = parser.parse_args()
     try:
-        build(args.tree.resolve(), args.data.resolve(), args.original_trust.resolve(), args.output.resolve())
+        build(args.tree.resolve(), args.data.resolve(), args.original_trust.resolve(), args.output.resolve(), args.os_image.resolve(), args.wifi_firmware)
     except (OSError, ValueError) as error:
         parser.exit(1, str(error) + '\n')

@@ -1,6 +1,6 @@
 # OnePlus 13T 上游适配计划
 
-本轮在 main 上适配 Metal、SMMU、Turnip、诊断、Wi-Fi、图标服务和触控优化，保持 SM8750 / Adreno830 / iPadOS 17.7.11（21H461）目标。当前只完成留档与计划，以下实现和验证均待执行。
+本轮在 main 上适配 Metal、SMMU、Turnip、诊断、Wi-Fi、图标服务和触控优化，保持 SM8750 / Adreno830 / iPadOS 17.7.11（21H461）目标。2026-11-07 已迁入本轮源码，并完成本地 ARM64 内核编译、最终链接和预链接。Metal/Turnip 用户态、新 Data/trust 的 macOS 构建和本轮实机验收仍待完成。
 
 ## 基线
 
@@ -25,11 +25,39 @@
 
 上游来源固定为本次已抓取快照：UniXNU `13e5973`、AdrenoMetal `e82788d`、ArmSmmu4K `83969cd`、Ath12kWifi `28de7b9`、UniXNU-sheng `4601795`、ShengNovatekTouch `69fdd62`。实现时在提交记录中注明具体移植提交和本地适配。
 
+## 2026-11-07 本地进度
+
+| 批次 | 已完成 | 验证边界 |
+| --- | --- | --- |
+| 0 | 复用已成功构建的 Run 36 本地基线；迁入线程、编码、完成、资源释放和图标诊断，栈采样限于持锁的稳定等待线程 | 诊断 ABI 和线程状态回归通过；未测量手机长帧 |
+| 1 | 迁入运行时补丁 0027～0030、CoreAnimation 编码线程策略继承和队列优先级回收 | 队列回收主机测试通过；内存复用和延迟释放仍需 macOS 运行时回归 |
+| 2 | ArmSmmu4K 更新到 `83969cd`；A830/GMU 改为按需分配页表，补齐分配失败回滚、调用方和夹具 | 映射、跨 4 GiB 地址、TLB、客户端与生命周期相关回归通过，完整内核通过 |
+| 3 | 接入临时附件、GMEM 内存侧颜色交换、逐线程模式和颜色自检；适配本地诊断补丁上下文 | 默认继续使用 `sysmem,nocb`；颜色、透明度及帧时间等待实机比较 |
+| 4 | 接入锁定的 mac80211/cfg80211、原版 wpa_supplicant、控制通道、21H461 Apple80211 事件、launchd 缓存合并及签名/trust/Data 接线；保留 Peach 固件与校准路径 | 115 项系统接口检查、主栈完整退出、WPA2/开放网络、重密钥、错误密码与重放拒绝通过；WCN7850 及 Peach 的 6 种校准场景通过 ASan/UBSan。新签名包和实机连接尚未验证 |
+| 5 | 接入图标服务诊断、Data 启用项及按服务设置 launchd 环境的能力，默认保留原系统环境 | launchd 合并与原条目保留测试通过；图标完整性、缓存及渲染选择待实机比较 |
+| 6 | S3910 保留控制器触点 ID，首次按下投递失败时保留起点，抬手重试，连续三次读错才释放触点 | S3910/SPI、面板和显示时序综合回归通过；未进行手机触控测试 |
+
+已在锁定源码上验证完整补丁序列：Mesa 18 个补丁、metal2vulkan 30 个补丁均成功应用。
+
+Peach 全栈检查还复现并修复了 MHI 上下文指针丢失 4 字节对齐信息、QMI TLV 整数未对齐访问。共享读写助手新增所有字节偏移的断言。内核构建遇到的私有头文件和加密头文件顺序问题均已修复；每次失败后先清理构建、编译器和临时缓存，再恢复 ABI/签名输入并重建。
+
+本地构建入口为 `/mnt/wsl/unixnu-build/workspace/enter-build`，源码副本位于同卷的 `workspace/run36`。最终命令：
+
+```sh
+/mnt/wsl/unixnu-build/workspace/enter-build python3 /mnt/wsl/unixnu-build/workspace/build-guard.py adaptation-final-20261107.log
+```
+
+该命令内部执行 `./unixnu kernel -j 6`。完整日志位于 `/mnt/wsl/unixnu-build/artifacts/logs/adaptation-final-20261107.log`，内核位于 `workspace/run36/UniXNU/out/oneplus13t/ipados-17.7.11-21H461/oneplus13t_metal/kernel/kernel.macho`，SHA-256 为 `6a16a4b4140bdd23e067dcd58596dbe1a8326936a33570eca839e15b57c2182e`。最终内核副本及七个仓库的可恢复源码快照已保存到同卷的 `artifacts/adaptation-20261107/kernel.macho` 和 `artifacts/adaptation-20261107/sources.tar.gz`。Run 36 基线另存于同卷的 `artifacts/run36-local-baseline`。
+
+相关回归入口为设备仓的 `scripts/test-stall-stack-patch.py`、`scripts/check-gpu-trace.py`、`scripts/test-wifi-packaging.py --tree <tree>`、`scripts/test-peripherals.py --tree <tree>`，以及组件仓的 `drivers/Adreno830/tests/run-host-tests.py` 和 `drivers/PaganiWifi/Ath12kWifi/tools/test-*.py`、`tools/peach-sim.sh`。测试使用 Clang 和 ASan/UBSan；现有内核模型关闭 LeakSanitizer，主栈退出测试另以分配/释放计数检查生命周期。
+
+构建卷和 VHDX 文件均未达到 80 GB。构建入口监控卷内占用并在超限时终止构建、清理缓存；本轮还单独检查了 `D:\WSL\UniXNU-Build\unixnu-build.vhdx` 的文件大小。本地验证阶段未操作手机。2026-11-07 起继续使用 GitHub Actions 在 macOS 完成 Metal/Turnip、认证服务、签名和 Data/trust 配对构建，再按表中的实机条件验收。
+
 ## 推送前的本地编译检查
 
 仓库已有 Linux XNU 构建路径，可用于 WSL2 上的真实 ARM64 编译、归档和链接预检。现有入口是主仓的 `scripts/linux/setup-toolchain.py`、`scripts/unixnu/kernel.py` 和各组件构建脚本，无需另建一套编译系统。
 
-2026-11-05 本机检查结果：`setup-toolchain.py --check` 在 `llvm-config missing` 处退出；`/opt/unixnu-linux`、`xcrun`、`cmake` 和 `ninja` 尚未就绪。Android 工具链中的 Clang 可以运行，但不支持 XNU 所需的 `__builtin_xnu_type_summary`，不能直接替代专用工具链。本轮未安装依赖或启动内核编译。
+2026-11-05 本机检查结果：`setup-toolchain.py --check` 在 `llvm-config missing` 处退出；`/opt/unixnu-linux`、`xcrun`、`cmake` 和 `ninja` 尚未就绪。Android 工具链中的 Clang 可以运行，但不支持 XNU 所需的 `__builtin_xnu_type_summary`，不能直接替代专用工具链。该条是当日的环境记录；2026-11-07 的成功构建已替代这一阻塞。
 
 | 层次 | 本地检查内容 | 能提前发现的故障 |
 | --- | --- | --- |
@@ -50,4 +78,4 @@ python3 scripts/linux/setup-toolchain.py --check
 
 Linux 预检能覆盖大量编译和链接错误，但 Apple Clang、SDK、macOS shell 工具和 Objective-C/Metal 运行时仍有差异。正式 Metal 用户态构建、签名、Data 制作及实际 Metal 主机测试继续在 macOS 完成。若有本地或远程 Mac，可在推送前使用与 Actions 相同的 Xcode/SDK 跑这些检查，进一步缩小差异。
 
-本地预检通过后才提交同一套输入进行云端完整验证。首次需要先证明 Run 36 能在 Linux 工具链完成目标内核流程，再把它作为后续适配的提交门槛。
+本地预检通过后才提交同一套输入进行云端完整验证。Run 36 本地基线和本轮候选均已通过 Linux 目标内核流程，后续继续以该流程作为提交门槛。

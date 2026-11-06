@@ -45,7 +45,8 @@ with tempfile.TemporaryDirectory(prefix='pagani-metal-profile-') as directory:
     assert modules[('driver', 'PaganiPanel')].path == (ROOT.parent / 'UniXNU-Pagani-Drivers/drivers/PaganiPanel').resolve()
     assert modules[('kit', 'ArmSmmu4K')].path == ROOT / 'modules/ArmSmmu4K'
     smmu_header = (modules[('kit', 'ArmSmmu4K')].path / 'ArmSmmu4KLive.h').read_text()
-    assert 'size_t capacity_pages;' in smmu_header and 'volatile uint64_t *mapping;' in smmu_header
+    assert 'const ArmSmmu4KTablePages *pages;' in smmu_header
+    assert 'int (*allocate)(void *cookie,uint64_t *physical,volatile uint64_t **mapping);' in smmu_header
     firmware_kit = modules[('kit', 'AdrenoFirmware')].path
     assert (firmware_kit / 'AdrenoHfiVotes.c').is_file()
     assert (firmware_kit / 'AdrenoHfiVotes.h').is_file()

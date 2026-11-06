@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import plistlib
+import platform
 import runpy
 import subprocess
 import uuid
@@ -43,7 +44,11 @@ def prepare(tree, inputs, openssl):
             if hashlib.file_digest(stream, 'sha256').hexdigest() != source_digest:
                 raise ValueError(f'{name}: IPSW input hash mismatch')
         device = None
-        if name == 'os':
+        if name == 'os' and platform.system() == 'Linux':
+            raw = source.with_suffix('.raw')
+            if raw.stat().st_size != size:
+                raise ValueError('os: decoded raw image has the wrong size')
+        elif name == 'os':
             attached = plistlib.loads(subprocess.check_output([
                 'hdiutil', 'attach', '-nomount', '-readonly', '-noautofsck', '-plist', source]))
             device, = [e['dev-entry'] for e in attached['system-entities']

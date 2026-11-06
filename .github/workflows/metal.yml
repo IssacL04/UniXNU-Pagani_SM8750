@@ -117,6 +117,8 @@ jobs:
           python3 scripts/check-adreno-a830.py
           python3 scripts/check-metal-shared-cache.py
           python3 ../UniXNU-Pagani_SM8750/scripts/check-gpu-trace.py
+          python3 ../UniXNU-Pagani_SM8750/scripts/test-wifi-packaging.py --tree "$UNIXNU_TREE"
+          python3 ../UniXNU-Pagani_SM8750/scripts/test-stall-stack-patch.py
           python3 ../UniXNU-Pagani_SM8750/scripts/test-gpu-trace-export.py
           python3 ../UniXNU-Pagani_SM8750/scripts/test-gpu-presenter.py
           python3 scripts/check-turnip-submit-backpressure.py --output "$UNIXNU_OUTDIR/logs/submit-pressure"
@@ -216,7 +218,7 @@ jobs:
               assert not (root / 'metal').exists(), 'Reuse a kernel-only artifact'
           (root / '.config').write_bytes((root / 'candidate.config').read_bytes())
           PY
-          ./unixnu ipsw fetch StaticTrustCache Cryptex1,SystemTrustCache
+          ./unixnu ipsw fetch OS StaticTrustCache Cryptex1,SystemTrustCache
           python3 ../UniXNU-Pagani_SM8750/scripts/prepare-original-trust.py --tree "$UNIXNU_TREE" \
             --inputs out/ipsw/21H461 --output "$UNIXNU_OUTDIR/original-static-system.bundle"
       - name: Build and stage A830 Metal
@@ -224,6 +226,7 @@ jobs:
         working-directory: source/UniXNU
         run: |
           python3 ../UniXNU-Pagani_SM8750/scripts/build-metal-userspace.py --tree "$UNIXNU_TREE" \
+            --os-image out/ipsw/21H461/044-76040-038.dmg \
             --data "$UNIXNU_OUTDIR/ram-data/data.dbrdisk" --original-trust "$UNIXNU_OUTDIR/original-static-system.bundle" \
             --output "$UNIXNU_OUTDIR/metal" 2>&1 | tee "$UNIXNU_OUTDIR/logs/metal.log"
       - name: Prepare the pinned translator for a verification-only run
