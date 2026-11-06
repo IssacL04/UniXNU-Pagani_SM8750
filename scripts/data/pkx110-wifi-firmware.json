@@ -1,0 +1,12 @@
+{
+  "peach/bdwlan.elf": {
+    "bytes": 125328,
+    "sha256": "9b48bc68f20a26eff07a0b66e4fced32e3107cf080506b0bef0c38021a23836d",
+    "phone_path": "/odm/etc/wifi/peach/bdwlan.elf"
+  },
+  "peach/regdb.bin": {
+    "bytes": 24278,
+    "sha256": "353df6eb96be7f4c8406f313020d2b52c55905908eacc056b880202801f4a429",
+    "phone_path": "/odm/etc/wifi/peach/regdb.bin"
+  }
+}

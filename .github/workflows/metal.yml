@@ -74,6 +74,30 @@ jobs:
                       output.addfile(member, previous.extractfile(member))
           PY
           python3 bootstrap/scripts/package-metal-ci.py restore --bundle "$RUNNER_TEMP/metal.tar.gz" --workspace source
+      - name: Restore pinned Peach board firmware
+        env:
+          PAGANI_WIFI_FIRMWARE_B64: ${{ secrets.PAGANI_WIFI_FIRMWARE_B64 }}
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, hashlib, json, os
+          from pathlib import Path
+          device = Path('source/UniXNU-Pagani_SM8750')
+          pins = json.loads((device / 'scripts/data/pkx110-wifi-firmware.json').read_text())
+          packed = base64.b64decode(os.environ['PAGANI_WIFI_FIRMWARE_B64'], validate=True)
+          files = json.loads(gzip.decompress(packed))
+          assert set(files) == set(pins) == {'peach/bdwlan.elf', 'peach/regdb.bin'}
+          decoded = {name: base64.b64decode(value, validate=True) for name, value in files.items()}
+          for name, data in decoded.items():
+              assert len(data) == pins[name]['bytes']
+              assert hashlib.sha256(data).hexdigest() == pins[name]['sha256']
+          root = device / '.cache/firmware/pkx110-wifi'
+          for name, data in decoded.items():
+              target = root / name
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_bytes(data)
+          (root / 'MANIFEST.json').write_text(json.dumps(pins, indent=2) + '\n')
+          print('PASS: two pinned Peach ODM files restored')
+          PY
       - name: Install build tools and check SDK
         run: |
           brew install cmake ninja unifdef llvm mtools openssl@3 dtc glslang shaderc spirv-tools bison flex rustup molten-vk
@@ -229,6 +253,7 @@ jobs:
         run: |
           python3 ../UniXNU-Pagani_SM8750/scripts/build-metal-userspace.py --tree "$UNIXNU_TREE" \
             --os-image out/ipsw/21H461/044-76040-038.dmg \
+            --wifi-firmware ../UniXNU-Pagani_SM8750/.cache/firmware/pkx110-wifi \
             --data "$UNIXNU_OUTDIR/ram-data/data.dbrdisk" --original-trust "$UNIXNU_OUTDIR/original-static-system.bundle" \
             --output "$UNIXNU_OUTDIR/metal" 2>&1 | tee "$UNIXNU_OUTDIR/logs/metal.log"
       - name: Prepare the pinned translator for a verification-only run
