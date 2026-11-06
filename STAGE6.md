@@ -1573,4 +1573,4 @@ Data 解包后的逻辑大小为 1 GiB，SHA-256 `fd4b9bf3f3c7e3e281f1ef70a75de9
 
 封装复用 Run 36 已测 UEFI（`ec397f5f4646a43fa2e9a6bf6372efd3010facf181e311f3a13df600a9cfac07`）和 stock DTB（`c63c09d164e7ed488157e76abea05a0b8a479887e981c78e6b0666502b48c1ff`），生成 176 MiB FAT 载荷。实际命令为 `PATH=/mnt/wsl/unixnu-build/workspace/rootfs/usr/bin:$PATH python3 out/oneplus13t/ci/package-integrated.py 40`（设备仓目录），打包日志为 `out/oneplus13t/boot/metal-main-40/packaging.log`。FAT 中的内核、Data、trust 与输入逐字节一致，启动参数回读通过；Android v4 的 gzip、BootShim、UEFI、DTB 和整个内嵌载荷回读通过，Android ramdisk 为零。
 
-镜像保持 A830/iPadOS 17.7.11、`sysmem,nocb`、4 GiB 内存窗、CPU governor 2 和原有外设开关。`pagani-wifi` 缺省为关闭，新栈和固件的实机验证仍需按驱动阶段启用。未临时启动或刷写手机；基本启动、触控、图标、GPU 帧时间及 Wi-Fi 连接结果留待用户手动验证。下载后构建卷约使用 22 GiB，D 盘 VHDX 为 31,209,816,064 字节，未达到 80 GB 清理阈值。
+镜像保持 A830/iPadOS 17.7.11、`sysmem,nocb`、4 GiB 内存窗、CPU governor 2 和原有外设开关。`pagani-wifi` 缺省为关闭，新栈和固件的实机验证仍需按驱动阶段启用。未临时启动或刷写手机；基本启动、触控、图标、GPU 帧时间及 Wi-Fi 连接结果留待用户手动验证。下载后构建卷约使用 22 GiB，D 盘 VHDX 为 31,545,360,384 字节，未达到 80 GB 清理阈值。
