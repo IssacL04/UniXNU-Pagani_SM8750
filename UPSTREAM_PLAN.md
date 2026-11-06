@@ -1,6 +1,6 @@
 # OnePlus 13T 上游适配计划
 
-本轮在 main 上适配 Metal、SMMU、Turnip、诊断、Wi-Fi、图标服务和触控优化，保持 SM8750 / Adreno830 / iPadOS 17.7.11（21H461）目标。2026-11-07 已迁入本轮源码，完成本地及 Actions ARM64 内核构建、macOS Metal/Turnip 与 Wi-Fi 服务构建、签名 Data/trust 打包和主机回归，并生成新的测试 `boot.img`。本轮实机验收留待用户手动进行。
+本轮在 main 上适配 Metal、SMMU、Turnip、诊断、Wi-Fi、USB、图标服务、触控和灭屏绘制，保持 SM8750 / Adreno830 / iPadOS 17.7.11（21H461）目标。2026-11-07 的 Run 41 已完成全新内核、macOS Metal/Turnip 与 Wi-Fi 服务构建、签名 Data/trust 打包和主机回归，并生成配套测试 `boot.img`。本轮实机验收留待用户手动进行。
 
 ## 基线
 
@@ -70,9 +70,11 @@ Peach 全栈检查还复现并修复了 MHI 上下文指针丢失 4 字节对齐
 - Wi-Fi：找到确定的配置遗漏，原镜像没有 `pagani-wifi`，驱动直接退出。新候选启用阶段 6，并显式提供 `product/wlan` ADT 节点；保留新版认证服务和本机 Peach 固件。
 - USB：移植 [QcomDwc3 e4efe95](https://github.com/UniXNU/QcomDwc3/tree/e4efe95) 的设备模式结构，按 PKX110 的 M31 PHY、PMIH010x repeater、GCC、IRQ 和 SID 重新实现接线。针对原始 21H461 验证 AppleUSBXDCI 的 267 个虚表槽、实例尺寸和字段指令后绑定。候选启用 `pagani-usb=1`，复用系统 USBMux；范围为 USB 2.0 设备模式，主机/OTG 和 USB 3 尚未实现。
 - 灭屏：黑帧路径原本保留日志区域，后台状态线程继续绘制。现已全屏清黑、停止休眠期间绘制，亮屏后重画；panic 显示保留。实际渲染器的 ASan/UBSan 检查覆盖黑屏、后台更新、恢复和 panic。
-- 桌面：对照 sheng 的双平面纹理修复、Adreno740 的连续分配退避，以及 [DroidVM](https://github.com/UniXNU/UniXNU-droidvm) 的 GPU 授权和 LaunchServices 扩展注册案例。当前源码已包含纹理和分配修复，Metal 进程规则实际允许请求设备的所有进程；扩展注册问题仍是待日志验证的假设，尚无证据宣布黑白小组件或冷启动白屏已修复。
+- 桌面：对照 [AdrenoMetal 双平面纹理修复](https://github.com/UniXNU/AdrenoMetal/commit/bcbbc707)、[Adreno740 连续分配退避](https://github.com/UniXNU/Adreno740/commit/01ed692a)，以及 DroidVM 的 [GPU 授权](https://github.com/Droid-VM/UniXNU-droidvm/commit/ede54445)和 [LaunchServices 扩展注册](https://github.com/Droid-VM/UniXNU-droidvm/commit/3bacdc96)案例。当前源码已包含纹理和分配修复，Metal 进程规则实际允许请求设备的所有进程；扩展注册问题仍是待日志验证的假设，尚无证据宣布黑白小组件或冷启动白屏已修复。
 
-配置与 USB 时钟、PHY、复位、SMMU 所有权模型检查通过；首次完整链接发现中断函数名称不匹配，已改用现有 `armcpu_spi_enable/disable`。清缓存后的策略输入恢复现已纳入构建入口。完整本地编译、链接和 USB 原版栈预链接通过，日志为 `/mnt/wsl/unixnu-build/artifacts/logs/wifi-usb-sleep-20261107-retry2.log`，内核 SHA-256 为 `a2dd30c00332094200361fab1f58e0962992e7c5ae51e0ee0450a06c5fa2c2d3`。下一步用同源快照进行 Actions 全量构建和配套镜像制作；实机由用户手动测试。
+配置与 USB 时钟、PHY、复位、SMMU 所有权模型检查通过；首次完整链接发现中断函数名称不匹配，已改用现有 `armcpu_spi_enable/disable`。清缓存后的策略输入恢复现已纳入构建入口。完整本地编译、链接和 USB 原版栈预链接通过，日志为 `/mnt/wsl/unixnu-build/artifacts/logs/wifi-usb-sleep-20261107-retry2.log`，内核 SHA-256 为 `a2dd30c00332094200361fab1f58e0962992e7c5ae51e0ee0450a06c5fa2c2d3`。
+
+[Run 41](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/42299358397) 使用设备提交 `38ba795` 和 v24 源码包，完成全新内核、49 项 A830 检查、XNU 补丁检查、Metal/Turnip、Wi-Fi 服务、签名 Data/trust 和 Metal 主机回归。新镜像为 `out/oneplus13t/boot/metal-main-41/boot.img`，102,264,832 字节，SHA-256 `b98238f44254083f1b1601af6ce339b2145acf38e17cc1abdae5d7ec7f09301f`。配套 UUID、Data 内容、trust、内核新增入口、FAT 文件、`pagani-wifi=6 pagani-usb=1`、wlan 节点和 Android v4 封装回读均通过。Run 40 镜像保留；本轮未操作手机，详细产物记录见 [STAGE6.md](STAGE6.md)。
 
 ## 推送前的本地编译检查
 

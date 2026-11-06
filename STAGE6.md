@@ -1577,3 +1577,31 @@ Data 解包后的逻辑大小为 1 GiB，SHA-256 `fd4b9bf3f3c7e3e281f1ef70a75de9
 
 
 后续临时启动（2026-11-07 04:44:51，Asia/Shanghai）：用户确认 fastboot 已连接并授权测试。重新核对镜像 SHA-256 与打包记录一致，目标为 `3B15BB01BAT00000`、`product=sun`、`is-userspace=no`。对上述同一镜像执行 `fastboot boot`，Sending 2.330 秒、Booting 0.337 秒均返回 `OKAY`，总计 3.045 秒，未刷写分区。日志为 `out/oneplus13t/boot/metal-main-40/fastboot-boot-20261107-044451.log`。当前仅确认 bootloader 接受临时启动；系统、画面、触控和滑动结果等待用户观察。
+
+
+## 2026-11-07 Run 41：Wi-Fi、USB 与灭屏候选
+
+Run 40 的后续用户观察已确认桌面、应用内显示和亮灭屏可以工作，但桌面掉帧、小组件黑白、冷启动白屏及灭屏日志残留仍存在。新候选源码为设备提交 `38ba795cf49fff3adc253d9e7d405debf3cbdc99`，源码补丁包 v24 的 SHA-256 为 `c33166d208b8c1ad168730b48b1b38520b66d66d34a24a607e59e629826f1543`。
+
+本轮确定修正了 Wi-Fi 启动参数遗漏和休眠诊断绘制，增加 PKX110 USB 2.0 设备模式。`pagani-wifi=6` 选择完整 Wi-Fi 栈；`pagani-usb=1` 启动设备控制器；ADT 显式提供 `product/wlan`。USB 基类绑定只接受原始 21H461 内核，校验实例尺寸、267 个虚表槽及关键字段指令。新原版预链接组件为 AppleUSBXDCI、AppleUSBDeviceMux、AppleUSBCommon 和 IOUSBDeviceFamily。USB 主机/OTG 与 USB 3 不在本轮实现范围。
+
+完整 Linux 内核编译、最终链接和预链接通过，产物为 `/mnt/wsl/unixnu-build/artifacts/wifi-usb-sleep-20261107/kernel.macho`，128,819,200 字节，SHA-256 `a2dd30c00332094200361fab1f58e0962992e7c5ae51e0ee0450a06c5fa2c2d3`。日志为 `/mnt/wsl/unixnu-build/artifacts/logs/wifi-usb-sleep-20261107-retry2.log`。首次链接的中断接口名称错误已修正；失败后按要求清缓存，重建原始 OS/SystemOS 签名策略输入再重试。该 Linux 内核保留本地 RAM Data UUID，不与 Run 40 的 Data 混用。
+
+实际 BootProgress 渲染器的 ASan/UBSan 检查、USB 时钟/PHY/复位失败与 SMMU 所有权模型、Metal 配置解析、13 个移植记录区域检查均通过。全量 [Run 41](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/42299358397) 已成功完成全新内核编译/链接/预链接、49 项 A830 检查（0 失败、0 跳过）、XNU 补丁检查、Metal/Turnip 与 Wi-Fi 服务构建、签名 Data/trust 和 Metal 主机回归。队列优先级、完成回调 QoS、诊断、内存复用、scanout 像素、两项编译器及两种接口模式均通过。接口测试继续使用 `MVK_CONFIG_USE_MTLHEAP=0`；手机 GPU 行为未据此认定通过。设备文档 [CI 42299336750](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/42299336750) 也已通过。
+
+产物 `oneplus13t-metal-41`（13546349542）下载至 `/mnt/wsl/unixnu-build/artifacts/actions-run41/`，工作区入口为 `out/oneplus13t/actions/metal-main-41/`。新 Data UUID 为 `1D440C39-B001-43C2-87E4-01F95329BB55`。
+
+| 产物 | 字节数 | SHA-256 |
+| --- | ---: | --- |
+| `kernel/kernel.macho` | 129638400 | `b3f5fced34dbd5a0932ae4a969a694d92b9f74fc36f87ce66ada7bc5aa008b9c` |
+| `metal/data.dbrdisk` | 38802848 | `3b9db9f3cbc18f38ac18dd1f59acfa988eef1919714d8fe1e31b57a91a6c802c` |
+| `metal/owner-trust.bundle` | 61504 | `6d9cc9a3d4e27b9c95a51f4edf7d5288e641a9af55073800b3e299f2b90325e6` |
+| `out/oneplus13t/boot/metal-main-41/boot.img` | 102264832 | `b98238f44254083f1b1601af6ce339b2145acf38e17cc1abdae5d7ec7f09301f` |
+
+本地解包检查确认 Data 的逻辑大小为 1 GiB，SHA-256 `9bae0dfb6c76ebe14cfd25afbec745643d97deef80c0d050d473a66dce901eee`。内核、config、seed UUID 一致；三个 Metal 和两个 Wi-Fi CDHash 与 owner trust 一致，两个原始 Apple trust 模块重组后的哈希仍为 `7416ca4f8377146626bb284e2133c76bee6cb4e3ee0af5d648b186235a7323a7`。两个 Peach 固件记录与锁定清单一致，launchd 保留原有 561 项。内核中 `pagani_usb_start`、`pagani_wifi_start`、`boot_progress_display_power` 均落在有文件内容的代码段。
+
+在设备仓执行 `PATH=/mnt/wsl/unixnu-build/workspace/rootfs/usr/bin:$PATH python3 out/oneplus13t/ci/package-integrated.py 41` 生成 176 MiB FAT 载荷和 Android v4 镜像，日志为 `out/oneplus13t/boot/metal-main-41/packaging.log`。FAT 内核、Data 和 trust 逐字节回读一致，实际 ADT 含 `product/wlan`，启动参数包含 `pagani-wifi=6 pagani-usb=1`；gzip、BootShim、UEFI、DTB 和内嵌载荷回读通过，Android ramdisk 为零。复用 Run 36 已测 UEFI/stock DTB，旧 Run 40 镜像保留。构建卷约使用 21 GiB，D 盘 VHDX 为 32,921,092,096 字节，低于 80 GB 上限。
+
+桌面截图中的 GPU 160 MHz / 68°C 与 profile 1 的 70°C 进入、60°C 解除降频规则相符，尚未证明它造成全部白屏和掉帧。已有上游双平面纹理、GPU 授权和连续分配退避修复均已核对；LaunchServices 扩展注册仍需运行日志。温控、GPU 启动 profile、SYSMEM 和内存窗保持当前配置。
+
+手动验收依次记录：正常启动与灭屏时全屏黑；Wi-Fi 启动阶段、扫描、关联、DHCP 和断线重连；电脑侧 USB 枚举、USBMux 和重新插拔。再分别观察冷启动、负一屏和小组件，保留对应时间的日志。构建检查不等于这些硬件功能已经通过。本轮未操作手机。
