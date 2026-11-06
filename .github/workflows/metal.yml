@@ -112,6 +112,7 @@ jobs:
           ASAN_OPTIONS: detect_leaks=0
         run: |
           python3 ../UniXNU-Pagani_SM8750/scripts/test-metal-profile.py
+          python3 ../UniXNU-Pagani_SM8750/scripts/test-metal-ci-package.py
           python3 ../UniXNU-Pagani_SM8750/scripts/test-gpu-firmware.py
           python3 ../UniXNU-Pagani_SM8750/scripts/check-gmu.py
           python3 scripts/check-adreno-a830.py

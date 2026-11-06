@@ -35,7 +35,8 @@ def create(output, sources_only=False):
         url = git(repo, 'remote', 'get-url', 'origin').decode().strip()
         if not re.fullmatch(r'https://github.com/[\w.-]+/[\w.-]+', url):
             raise ValueError('Require a public-source GitHub HTTPS origin: ' + name)
-        patch = git(repo, 'diff', '--binary', '--ignore-submodules=dirty', 'HEAD')
+        revision = git(repo, 'merge-base', 'HEAD', 'refs/remotes/origin/main').decode().strip()
+        patch = git(repo, 'diff', '--binary', '--ignore-submodules=dirty', revision)
         if patch:
             subprocess.run(['git', '-C', str(repo), 'apply', '--reverse', '--check', '-'], input=patch, check=True)
         patch_name = f'changes/{index}.patch'
@@ -51,7 +52,7 @@ def create(output, sources_only=False):
             archived = f'new/{index}/{name_in_repo}'
             files[archived] = source.read_bytes()
             additions.append({'path': name_in_repo, 'archive': archived, 'mode': source.stat().st_mode & 0o777})
-        manifest.append({'path': name, 'repository': url, 'revision': git(repo, 'rev-parse', 'HEAD').decode().strip(),
+        manifest.append({'path': name, 'repository': url, 'revision': revision,
                          'patch': patch_name, 'additions': additions})
     if not sources_only:
         pins = json.loads((ROOT / 'scripts/data/sm8750-gpu-inputs.json').read_text())['firmware']['files']
