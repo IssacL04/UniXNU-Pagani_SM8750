@@ -63,6 +63,17 @@ Peach 全栈检查还复现并修复了 MHI 上下文指针丢失 4 字节对齐
 
 最终下载后 D 盘构建卷约使用 22 GiB，VHDX 文件为 31,545,360,384 字节，低于 80 GB 清理阈值。
 
+## Run 40 后续：Wi-Fi、USB、灭屏与桌面排查
+
+用户反馈 Run 40 的桌面卡顿、负一屏和小组件黑白、冷启动白屏，以及灭屏后日志仍可见。桌面截图约 14 FPS、GPU 160 MHz / 68°C，应用内约 89 FPS、GPU 342 MHz。当前 profile 1 在达到 70°C 后限到 160 MHz，低于 60°C 才解除；这与桌面状态相符，但无法单独解释冷启动时的 idle。保留现有温控和 SYSMEM 策略，避免把未经实测的温度阈值或全套启动配置作为修复。
+
+- Wi-Fi：找到确定的配置遗漏，原镜像没有 `pagani-wifi`，驱动直接退出。新候选启用阶段 6，并显式提供 `product/wlan` ADT 节点；保留新版认证服务和本机 Peach 固件。
+- USB：移植 [QcomDwc3 e4efe95](https://github.com/UniXNU/QcomDwc3/tree/e4efe95) 的设备模式结构，按 PKX110 的 M31 PHY、PMIH010x repeater、GCC、IRQ 和 SID 重新实现接线。针对原始 21H461 验证 AppleUSBXDCI 的 267 个虚表槽、实例尺寸和字段指令后绑定。候选启用 `pagani-usb=1`，复用系统 USBMux；范围为 USB 2.0 设备模式，主机/OTG 和 USB 3 尚未实现。
+- 灭屏：黑帧路径原本保留日志区域，后台状态线程继续绘制。现已全屏清黑、停止休眠期间绘制，亮屏后重画；panic 显示保留。实际渲染器的 ASan/UBSan 检查覆盖黑屏、后台更新、恢复和 panic。
+- 桌面：对照 sheng 的双平面纹理修复、Adreno740 的连续分配退避，以及 [DroidVM](https://github.com/UniXNU/UniXNU-droidvm) 的 GPU 授权和 LaunchServices 扩展注册案例。当前源码已包含纹理和分配修复，Metal 进程规则实际允许请求设备的所有进程；扩展注册问题仍是待日志验证的假设，尚无证据宣布黑白小组件或冷启动白屏已修复。
+
+配置与 USB 时钟、PHY、复位、SMMU 所有权模型检查通过；首次完整链接发现中断函数名称不匹配，已改用现有 `armcpu_spi_enable/disable`。清缓存后的策略输入恢复现已纳入构建入口。完整本地编译、链接和 USB 原版栈预链接通过，日志为 `/mnt/wsl/unixnu-build/artifacts/logs/wifi-usb-sleep-20261107-retry2.log`，内核 SHA-256 为 `a2dd30c00332094200361fab1f58e0962992e7c5ae51e0ee0450a06c5fa2c2d3`。下一步用同源快照进行 Actions 全量构建和配套镜像制作；实机由用户手动测试。
+
 ## 推送前的本地编译检查
 
 仓库已有 Linux XNU 构建路径，可用于 WSL2 上的真实 ARM64 编译、归档和链接预检。现有入口是主仓的 `scripts/linux/setup-toolchain.py`、`scripts/unixnu/kernel.py` 和各组件构建脚本，无需另建一套编译系统。

@@ -46,19 +46,21 @@ def prepare(output, soc):
     board = tomllib.loads((ROOT / 'board.toml').read_text())
     board['board']['description'] = 'OnePlus 13T A830/Metal candidate; hardware qualification pending'
     extras = ['Adreno830', 'AdrenoMetal', 'PaganiAdsp', 'PaganiAudio', 'PaganiBattery', 'PaganiHaptics',
-              'PaganiSensors', 'PaganiSpeaker', 'PaganiWifi', 'PaganiBt', 'PaganiCamera', 'PaganiTorch']
+              'PaganiSensors', 'PaganiSpeaker', 'PaganiWifi', 'PaganiBt', 'PaganiCamera', 'PaganiTorch', 'PaganiUsb']
     board['components']['include'] += extras + ['AdrenoFirmware']
     board['kernel']['defconfig'] = 'oneplus13t_metal_defconfig'
     board['kernel']['archives'] += ['component:Adreno830', 'build-pagani-gpu.py',
                                     *('component:' + name for name in extras[2:])]
     board['kernel']['prelink']['roots'].append('com.apple.iokit.IOGPUFamily')
+    board['kernel']['prelink']['roots'] += ['com.apple.driver.AppleUSBXDCI', 'com.apple.driver.AppleUSBDeviceMux']
     board['payload']['title'] = 'OnePlus 13T A830 Metal candidate'
     # Panel TE and page flips stay opt-in until this build has device measurements.
     board['payload']['kernel_args'] = ['sheng-vsync=120' if arg == 'sheng-vsync=60' else arg
                                        for arg in board['payload']['kernel_args']]
     # shortcut: SYSMEM fixes observed A830 color corruption; restore GMEM after its load/store paths pass device checks.
     board['payload']['kernel_args'] += ['pagani-gpu=1', 'sheng-gpu-addon=1', 'sheng-gpu-metal-opens=0', 'sheng-fb-gpu=1', 'sheng-tu-debug=sysmem,nocb', 'sheng-gpu-sample=0',
-                                      'pagani-vsync=120', 'pagani-battery=1', 'pagani-cpufreq=2']
+                                      'pagani-vsync=120', 'pagani-battery=1', 'pagani-cpufreq=2', 'pagani-wifi=6', 'pagani-usb=1']
+    board.setdefault('adt', {}).setdefault('product', {})['wlan'] = {}
     config = (ROOT / 'configs/oneplus13t_defconfig').read_text()
     marker = '# CONFIG_XNU_NATIVE_ADRENO is not set'
     if config.count(marker) != 1:

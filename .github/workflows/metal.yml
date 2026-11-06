@@ -163,6 +163,7 @@ jobs:
           python3 "$UNIXNU_TREE/drivers/PaganiAdsp/Test/check-pagani-adsp-host.py" --adreno830 "$UNIXNU_TREE/drivers/Adreno830"
           python3 "$UNIXNU_TREE/drivers/PaganiSensors/Test/check-pagani-sensors-host.py" --no-adsp-suite
           python3 "$UNIXNU_TREE/drivers/PaganiAudio/scripts/check-pagani-audio-host.py"
+          python3 "$UNIXNU_TREE/drivers/PaganiUsb/Test/check-pagani-usb-host.py"
           cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
             -I "$UNIXNU_TREE/drivers/PaganiDarwinBoot/DarwinBootPkg/Driver" \
             "$UNIXNU_TREE/drivers/BootProgress/Test/console.c" -o /tmp/boot-progress-test

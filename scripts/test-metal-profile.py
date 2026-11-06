@@ -57,11 +57,15 @@ with tempfile.TemporaryDirectory(prefix='pagani-metal-profile-') as directory:
     assert any(kind == 'script' and entry.startswith('build-pagani-gpu') for kind, entry in plan)
     assert 'Adreno740' not in board['components']['include']
     assert {'PaganiAdsp', 'PaganiAudio', 'PaganiBattery', 'PaganiHaptics', 'PaganiSensors',
-            'PaganiSpeaker', 'PaganiWifi', 'PaganiBt', 'PaganiCamera', 'PaganiTorch'} <= set(components)
+            'PaganiSpeaker', 'PaganiWifi', 'PaganiBt', 'PaganiCamera', 'PaganiTorch', 'PaganiUsb'} <= set(components)
     assert board['userdata'] == tomllib.loads(baseline['board.toml'].decode())['userdata']
     assert 'pagani-battery=1' in board['payload']['kernel_args']
     assert 'pagani-cpufreq=2' in board['payload']['kernel_args']
-    for prefix in ('pagani-adsp=', 'pagani-wifi=', 'pagani-bt=', 'pagani-haptics=', 'pagani-cam=', 'pagani-fb-flip='):
+    assert board['payload']['kernel_args'].count('pagani-wifi=6') == 1
+    assert board['adt']['product']['wlan'] == {}
+    assert board['payload']['kernel_args'].count('pagani-usb=1') == 1
+    assert {'com.apple.driver.AppleUSBXDCI', 'com.apple.driver.AppleUSBDeviceMux'} <= set(board['kernel']['prelink']['roots'])
+    for prefix in ('pagani-adsp=', 'pagani-bt=', 'pagani-haptics=', 'pagani-cam=', 'pagani-fb-flip='):
         assert not any(arg.startswith(prefix) for arg in board['payload']['kernel_args'])
     assert all((ROOT / name).read_bytes() == data for name, data in baseline.items())
     checkout = runpy.run_path(str(ROOT / 'scripts/build-metal-userspace.py'))['checkout']
