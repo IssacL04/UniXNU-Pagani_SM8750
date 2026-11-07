@@ -1755,3 +1755,10 @@ Wi-Fi 在等待栈就绪时显示已有日志环的最后一条：`WIFI f… e�
 - 源码包：`.ci-inputs/oneplus13t-integrated-sources-20261108-v29.tar.gz`，431,518 字节，SHA-256 `4deeaba3ca9a52c8ad4ec0c93986ee586347a8e7029cc26ca381cbeb41e982ab`。
 
 实际内核中已检查 USB detach 和 Wi-Fi 日志格式及强入口；与 Run 42 的 UUID `E88AC71F-AF0E-485A-9077-4F7D81E3DC45`、Data/trust 配对。完整 Data、固件 pin、561 个原始 launchd job、owner/Apple trust、FAT、wlan ADT、启动参数和 Android v4 封装读回通过。保持 GPU 参数、已测 UEFI/DTB，UFS 持久日志关闭。没有运行新的云端内核构建，也没有临时启动第三轮镜像；USB 枚举和 Wi-Fi 栈停点待下一次实机验证。
+
+
+### 第三轮候选临时启动
+
+用户确认 Fastboot 已连接并要求继续测试。北京时间 2026-11-08 02:26:54，核对镜像大小/SHA-256、设备 `3B15BB01BAT00000`、产品 `sun`、`is-userspace=no` 后，执行临时 `fastboot boot`。Sending 返回 OKAY（2.335 秒），Booting 返回 OKAY（0.336 秒），总耗时 3.036 秒，退出码 0，未刷写分区。日志为 `out/oneplus13t/boot/metal-main-local-io3-20261108/fastboot-boot-20261108-022654.log`。
+
+02:27:12 的只读检查仍见 Android Bootloader Interface，fastboot 序列号显示问号；02:27:51 复查时接口已消失，fastboot 无设备，Windows 未发现匹配的 Apple/手机 USB 设备或 USB 错误。尚未收到系统界面、USB 新阶段及 Wi-Fi 栈日志；不能由 bootloader 接受镜像认定 SID 接管或网络恢复通过。未执行第二次启动或重启。

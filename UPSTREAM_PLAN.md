@@ -147,3 +147,6 @@ Linux 预检能覆盖大量编译和链接错误，但 Apple Clang、SDK、macOS
 
 
 第二轮用户反馈：Wi-Fi 固定在 `602/0 fw2 net0 irq52`，USB 为 `-7/d3 p6 r814 v80000040 x5`。第三轮候选在控制器停止后合并精确 USB SID 0x40 的重复项，保留其他 stream、旧 bank 和掩码冲突保护；Wi-Fi 等待行显示已有栈日志。旧 USB 实现复现回归失败，修正后 ASan/UBSan 和日志格式回归通过。完整本地 ARM64 内核/预链接及配对镜像读回通过，第三轮镜像为 `out/oneplus13t/boot/metal-main-local-io3-20261108/boot.img`，源码包 v29。沿用 Run 42 Data/trust，尚未实机启动。
+
+
+用户随后要求继续测试第三轮镜像。2026-11-08 02:26:54 的临时启动传输和 Booting 均 OKAY，总耗时 3.036 秒，未刷写。启动过渡期的 bootloader 接口于 02:27:51 消失，Windows 未见 Apple/手机 USB 设备或 USB 错误。USB 接管结果与 Wi-Fi 日志仍待用户观察。
