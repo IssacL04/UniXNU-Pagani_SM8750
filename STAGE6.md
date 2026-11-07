@@ -1780,3 +1780,10 @@ Wi-Fi 的错误位于 firmware-ready 通知后的 QMI 启动配置，最后一�
 - 源码包：`.ci-inputs/oneplus13t-integrated-sources-20261108-v30.tar.gz`，432,831 字节，SHA-256 `daff1676cc7be8198b0fd9d50e7ab0629dee7e1fa52daa0fce59aafc289dc3ab`。
 
 配对 Run 42 UUID `E88AC71F-AF0E-485A-9077-4F7D81E3DC45` 和未变 Data/trust。完整逻辑 Data、固件 pin、561 个原始 launchd job、owner/Apple trust、FAT 内容、wlan ADT、启动参数和 Android v4 读回通过。保留 GPU 参数及已测 UEFI/DTB，UFS 持久日志关闭。构建后 VHDX 为 35,303,456,768 字节，低于 80 GB。没有运行新的云端内核构建或操作手机；USB 枚举和 Wi-Fi 网络仍待实机。
+
+
+### 第四轮候选临时启动
+
+用户确认 Fastboot 已连接并要求继续测试。北京时间 2026-11-08 02:48:36，核对第四轮镜像大小/SHA-256、设备 `3B15BB01BAT00000`、产品 `sun`、`is-userspace=no` 后，执行临时 `fastboot boot`。Sending 返回 OKAY（2.275 秒），Booting 返回 OKAY（0.336 秒），总耗时 2.943 秒，退出码 0，未刷写分区。日志为 `out/oneplus13t/boot/metal-main-local-io4-20261108/fastboot-boot-20261108-024836.log`。系统界面、USB 新行和 Wi-Fi 启动请求错误待用户观察。
+
+02:48:54 首次只读检查仍见 Android Bootloader Interface，fastboot 序列号暂显示问号；02:49:21 复查时该接口已消失，fastboot 无设备，Windows 未发现匹配的 Apple/手机 USB 设备或 USB 错误。等待新的 USB `s/d/irq/on/dc/ev/f` 和 WIFI `L…a/b/c` 错误日志，未执行第二次启动或重启。
