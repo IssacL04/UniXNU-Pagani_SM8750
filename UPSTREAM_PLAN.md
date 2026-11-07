@@ -102,3 +102,11 @@ python3 scripts/linux/setup-toolchain.py --check
 Linux 预检能覆盖大量编译和链接错误，但 Apple Clang、SDK、macOS shell 工具和 Objective-C/Metal 运行时仍有差异。正式 Metal 用户态构建、签名、Data 制作及实际 Metal 主机测试继续在 macOS 完成。若有本地或远程 Mac，可在推送前使用与 Actions 相同的 Xcode/SDK 跑这些检查，进一步缩小差异。
 
 本地预检通过后才提交同一套输入进行云端完整验证。Run 36 本地基线和本轮候选均已通过 Linux 目标内核流程，后续继续以该流程作为提交门槛。
+
+## Run 41 后续：动态频率与温控
+
+用户观察到 342 MHz 时较流畅，降到 160 MHz 后桌面明显卡顿，并要求提高动态频率和各档降频温度。候选保留 profile 1 的启动、纯 bus 投票及失败停止行为，显式 `pagani-gpu-ttarget` 改为选择现有逐档温控。Metal 参数为 `pagani-gpu-maxlevel=9 pagani-gpu-dcvs-min=342 pagani-gpu-ttarget=85`。使用原 DT 频点 342/389/443/525/607/660/734 MHz，ACD 保持关闭。
+
+85°C 以上且温度未下降时每 500 ms 降一档上限，常规温控最低上限为 525 MHz；80°C 以下持续 2 秒后每次恢复一档。105°C 立即限到 389 MHz，低于 100°C 后恢复；传感器持续失效时上限 607 MHz。GPU 正常空闲底频为 342 MHz，触摸和唤醒提升沿用 525 MHz。`test_a830dcvs` 的 873 项 ASan/UBSan 检查与 profile 检查通过，启动参数回归待原生 ARM64 CI。完整本地 ARM64 内核编译、链接和预链接通过，产物为 128,819,200 字节，SHA-256 `e2bfaf0f18470a0fb90ee9aa5ed32477546705e201b629e31473677d71164d18`，保存在 `/mnt/wsl/unixnu-build/artifacts/gpu-thermal-20261107/`。云端配套构建待完成。
+
+提高频率和温控目标可能增加发热与耗电，仍需实机持续负载验证。Wi-Fi、USB 枚举、小组件和冷启动问题沿用 Run 41 的未解决记录。本轮不重启手机。

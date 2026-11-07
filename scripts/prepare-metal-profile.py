@@ -59,7 +59,8 @@ def prepare(output, soc):
                                        for arg in board['payload']['kernel_args']]
     # shortcut: SYSMEM fixes observed A830 color corruption; restore GMEM after its load/store paths pass device checks.
     board['payload']['kernel_args'] += ['pagani-gpu=1', 'sheng-gpu-addon=1', 'sheng-gpu-metal-opens=0', 'sheng-fb-gpu=1', 'sheng-tu-debug=sysmem,nocb', 'sheng-gpu-sample=0',
-                                      'pagani-vsync=120', 'pagani-battery=1', 'pagani-cpufreq=2', 'pagani-wifi=6', 'pagani-usb=1']
+                                      'pagani-vsync=120', 'pagani-battery=1', 'pagani-cpufreq=2', 'pagani-wifi=6', 'pagani-usb=1',
+                                      'pagani-gpu-maxlevel=9', 'pagani-gpu-dcvs-min=342', 'pagani-gpu-ttarget=85']
     board.setdefault('adt', {}).setdefault('product', {})['wlan'] = {}
     config = (ROOT / 'configs/oneplus13t_defconfig').read_text()
     marker = '# CONFIG_XNU_NATIVE_ADRENO is not set'

@@ -27,6 +27,9 @@ with tempfile.TemporaryDirectory(prefix='pagani-metal-profile-') as directory:
     assert board['kernel']['archives'].count('component:Adreno830') == 1
     assert 'com.apple.iokit.IOGPUFamily' in board['kernel']['prelink']['roots']
     assert 'pagani-gpu=1' in board['payload']['kernel_args']
+    for arg in ('pagani-gpu-maxlevel=9', 'pagani-gpu-dcvs-min=342', 'pagani-gpu-ttarget=85'):
+        assert board['payload']['kernel_args'].count(arg) == 1
+    assert not any(arg.startswith(('pagani-gpu-profile=', 'pagani-gpu-acd=')) for arg in board['payload']['kernel_args'])
     assert board['payload']['kernel_args'].count('sheng-vsync=120') == 1
     assert 'sheng-vsync=60' not in board['payload']['kernel_args']
     assert 'sheng-diag=1' not in board['payload']['kernel_args']

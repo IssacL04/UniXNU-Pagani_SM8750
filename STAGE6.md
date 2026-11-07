@@ -1609,3 +1609,9 @@ Run 40 的后续用户观察已确认桌面、应用内显示和亮灭屏可以�
 后续临时启动（2026-11-07 21:41:19，Asia/Shanghai）：用户确认 fastboot 已连接并要求测试。核对上述 Run 41 镜像的大小和 SHA-256 一致，目标为 `3B15BB01BAT00000`、`product=sun`、`is-userspace=no`，随后执行 `fastboot boot`。Sending 2.329 秒、Booting 0.336 秒均返回 `OKAY`，总计 3.208 秒，未刷写分区。日志为 `out/oneplus13t/boot/metal-main-41/fastboot-boot-20261107-214119.log`。21:42:37 的只读检查显示设备已退出 fastboot，Windows 未发现 Apple USB 设备或所筛选厂商的 USB 接口；这不能证明系统已进入桌面或 USB 初始化成功。桌面启动、Wi-Fi、USB 和灭屏效果等待用户观察。
 
 Run 41 用户实机反馈（2026-11-07）：已进入桌面。用户更正此前选择后确认灭屏时屏幕全黑，屏幕日志停止更新，重新亮屏后恢复；该项修复通过本次人工观察，不能据此推断后台日志是否停止收集。系统显示充电，电脑仍未识别 USB 设备，USB 数据枚举未通过。Wi-Fi 在控制中心开启后自动熄灭，设置内开关无法开启，尚未进入扫描或连接验收。桌面和负一屏小组件渲染异常、冷启动动画卡顿仍存在。用户保留本次运行，计划灭屏静置半小时至一小时后比较 GPU 表现；目前没有运行证据证明这段时间会持续编译着色器，后续应同时记录温度、频率、忙闲状态和冷/热启动差异。停止继续修改已确认正常的灭屏逻辑；本次反馈后未修改运行代码、重启或替换内核。
+
+## GPU frequency and thermal candidate after Run 41 (2026-11-07)
+
+The user reports smoother composition at 342 MHz and visible desktop slowdown at 160 MHz. The candidate keeps profile 1 startup and enables the existing stepped thermal loop through explicit `pagani-gpu-ttarget=85`. The Metal profile adds `pagani-gpu-maxlevel=9` and `pagani-gpu-dcvs-min=342`, using stock DT points up to the existing ACD-off 734 MHz cap. Emergency limiting at 105°C and sensor-loss fallback remain active.
+
+`test_a830dcvs` passes 873 checks with ASan/UBSan, including the new profile 1 thermal path and original profile behavior; `scripts/test-metal-profile.py` passes. Local x86 cannot compile the ARM64 instructions in `test_start`; the native ARM64 workflow will run it. The complete local ARM64 kernel/prelink passes: 128819200 bytes, SHA-256 `e2bfaf0f18470a0fb90ee9aa5ed32477546705e201b629e31473677d71164d18`, saved under `/mnt/wsl/unixnu-build/artifacts/gpu-thermal-20261107/`. The fresh cloud build is pending. No phone operation is performed.
