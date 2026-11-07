@@ -169,3 +169,6 @@ Linux 预检能覆盖大量编译和链接错误，但 Apple Clang、SDK、macOS
 
 
 TWRP root ADB 已验证分区边界并完整备份 32 MiB 日志区，内容全零；reader 的 Windows adb 多余引号已修正并通过实际读取。03:30:55 按用户确认的流程临时启动落盘镜像，Sending/Booting OKAY，3.069 秒，无分区镜像刷写。下一步回 recovery 导出实际日志并核验 CRC。
+
+
+落盘日志已在 TWRP 导出：89 轮、0 次写入错误、5,665 条 CRC 有效记录。Peach 在校准请求后进入固件断言；USBMux 已激活，Windows Mobile Device 和爱思服务现已运行。用户要求同时修复 USB/Wi-Fi 并生成新镜像，本轮补全配对身份、SystemOS 根卷 FSID 和临时无密码状态，修正 CALDB 下载长度、按固件能力发送 AUX、校准失败停止，以及已签名 supplicant 的限定启动兼容。11 种栈仿真、KeyStore/服务边界、完整 ARM64 内核/预链接及 FAT/ADT/Android-v4 读回均通过。第六份镜像位于 `out/oneplus13t/boot/metal-main-local-io6-20261108/boot.img`，源码包 v32，配对 Run 42 Data/trust；爱思识别、Trust 和实际联网待实机验证。详见 [记录](STAGE6.md#combined-io6)。

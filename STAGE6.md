@@ -1839,3 +1839,25 @@ Linux 完整内核/预链接、诊断入口和字符串、Run 42 Data UUID/内�
 用户确认进入 recovery 后，实际识别 PKX110 / `3.7.1_16-OnePlus_13_T`，`id -u` 为 0，目标节点为 `/dev/block/sda16`。原 reader 在 Windows `adb.exe` 下把多余的 `sh -c` 引号带入远端，`id -u` 被当作单个程序名，造成 root 误判。改为直接传给 `exec-out` 的命令字符串；实际身份、链接与二进制零字节读取恢复正常，原 root/几何/短读/禁止覆盖检查仍通过。
 
 修正后的 reader 核对起点和容量与 `board.toml` 一致，完整读取 33,554,432 字节到 `out/oneplus13t/logs/ufslog-before-20261108.bin`，全区为零。随后按用户确认的流程执行 `adb reboot bootloader`，再次核对 `sun`、非 userspace 模式与落盘镜像哈希。2026-11-08 03:30:55（Asia/Shanghai）临时启动：Sending OKAY 2.334 秒、Booting OKAY 0.337 秒，总计 3.069 秒，退出码 0。未刷写分区镜像；本次启动会请求已授权日志预留区的周期写入。日志位于镜像旁 `fastboot-boot-20261108-033055.log`。等待运行约两分钟后回 recovery 读取实际日志，不再要求手工抄屏。
+
+
+<a id="combined-io6"></a>
+### USB 配对与 Peach 校准修正（2026-11-08）
+
+落盘日志已从 TWRP 读回。`out/oneplus13t/logs/ufslog-after-20261108.bin` 为完整 32 MiB；解码目录为 `out/oneplus13t/logs/decoded/20261108-033821-io5-ufslog/`。日志头记录 89 轮、20 个有效槽、0 次写入错误，5,665 条记录通过 CRC，97 个序号因环形缓冲区覆盖等原因缺失。启动参数和本次运行相符；这是已完成的实机保存与恢复导出验证。原始日志和手机固件留在本地忽略目录。
+
+Wi-Fi 在约 38.877 秒完成校准报告，39.037 秒进入 RDDM。有效故障文本为 `cmnos_assert_patched.c:604:0x8Asserted in:0x1a9046c:0x1a90c80, line#192`。扫描内存中的其他 assertion/AUX 字符串不能直接当作本次原因。USB 日志记录 AppleUSBMux 注册、480 Mbps 连接、配置 1 及接口激活；Windows 的 Apple Mobile Device Service、27015 USBMux 端口和爱思助手服务均已运行。此前“缺少电脑服务”的观察已过时。
+
+本轮修正以下已确认问题：
+
+- 实际 ADT 缺少 `board-id` 和 `security-domain`。Metal profile 补上 21H461/iPad7,1 的 `12` 和 `1`，保留 `chip-id=0x8011`。沿用上游 `native-union-statfs-fsid.patch`，使覆盖根卷的 SystemOS 与原系统文件报告同一文件系统标识，供 Trust 提示判断。`sheng-aks-sls=3` 只在已启用的临时 KeyStore 环境返回无密码状态；未启用、其他参数及 CPU 默认 profile 保持原值。
+- `peach.py` 原先把 CALDB 分配容量报为已下载校准文件长度，但该路径没有恢复文件。现在报告 0，让固件执行冷启动校准；校准报告、mode 7 或完成等待失败后停止本次启动。原厂 CNSS2 的文件下载返回实际文件长度，再用于 CAL_REPORT；见 [官方校准流程](https://github.com/OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8750/blob/6a196f79/vendor/qcom/opensource/wlan/platform/cnss2/main.c)。这修正上报语义，尚未证明消除实机断言。
+- AUX 请求只在目标 `fw_caps` 的 `0x04` 位有效时发送，与 [官方 WLFW 定义](https://github.com/OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8750/blob/6a196f79/vendor/qcom/opensource/wlan/platform/cnss_utils/wlan_firmware_service_v01.h)及 CNSS2 能力检查一致；缺失能力时不发送。日志打印目标能力和 AUX 决策。
+- 日志反复出现 supplicant 的 Launch Constraint Violation。`phone-wifi-service-launch.patch` 仅允许 stage 6 中具有 `CS_VALID|CS_SIGNED`、实际 vnode 路径恰为 `/usr/libexec/unixnu-wpa_supplicant` 的服务跨过该类别限制。先前的 MAC exec、签名错误检查和后续签名/代码页验证继续执行；其他程序仍经过原检查。没有启用全局 `sheng-no-lc`。
+
+`peach-sim.sh out/sim-io6` 的 WCN7850 加十种 Peach 情况通过 ASan/UBSan，包括 capability 为零/缺失、CAL_REPORT 拒绝和 mode 7 拒绝；实际 QMI 解码确认报告长度为零且失败时没有 mission 请求。`test-mobile-services.py` 检查真实补丁函数的路径/签名/模式边界、临时 KeyStore 门限和根卷 FSID 条件；`test-metal-profile.py` 检查身份字段、参数唯一性及 CPU profile 隔离，均通过。完整内核与容器检查也已通过，手机测试待进行。GPU 策略保持 342 至 734 MHz、85°C 常规控制和 105°C 紧急限制，日志继续写入既有 32 MiB 预留区。
+
+
+第六份镜像已生成：`out/oneplus13t/boot/metal-main-local-io6-20261108/boot.img`，102,178,816 字节，SHA-256 `29da45b386ecbdcaeafaed835001178b0484d0f980ffa8bdd358f95b2db1491c`。完整 Linux ARM64 构建和预链接成功，新内核 SHA-256 为 `5a961e5e477d88450d77930cf57ad32a40100d250b2f06108da125f46cd5e455`；内核实际包含能力协商、失败停止和 AKS 参数，新 XNU 源含两个服务/FSID 补丁。构建日志在 `/mnt/wsl/unixnu-build/artifacts/logs/usb-wifi-io6-20261108.log`。
+
+配对检查确认沿用 Run 42 的签名 Data/trust 和 UUID `E88AC71F-AF0E-485A-9077-4F7D81E3DC45`，561 个原始 launchd job 和原始 Apple trust 模块不变。最终 FAT 逐文件读回、ADT 中 `0x8011/12/1` 身份、所有启动参数及 Android v4 完整解包读回通过；`packaging.log` 位于镜像旁。原有 KeyStore lifecycle/selector 边界使用 Clang 的 ASan/UBSan 通过；宿主 GCC 因既有 Clang pragma 拒绝编译，未更改驱动以迁就该工具差异。`test-mobile-services.py` 已接入 Metal CI。源码包 v32 仅含七仓库源码差异及测试，无手机固件或原始日志。此轮未临时启动或刷写手机；爱思识别、Trust、Wi-Fi 校准完成和联网仍待这份镜像的实测。
