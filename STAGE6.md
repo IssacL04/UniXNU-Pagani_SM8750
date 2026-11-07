@@ -1706,3 +1706,9 @@ D 盘隔离工具链执行完整 `./unixnu kernel -j 6`，ARM64 组件编译、U
 - 源码输入：`.ci-inputs/oneplus13t-integrated-sources-20261108-v27.tar.gz`，393,541 字节，SHA-256 `5db5f85b9636f95b2e5aa384442751393c6413e45b3786f7edfdfdebe674a575`；七个源码仓库，不含固件或运行时 DTB。
 
 保持原 Run 42 的 GPU/Wi-Fi/USB 参数、已测 UEFI 和原机 DTB。实际 FAT 中的 kernel/Data/trust、wlan ADT、启动参数及完整 Android v4 镜像读回通过，打包日志为镜像旁的 `packaging.log`。UFS 持久日志仍关闭。本轮没有重启或刷写手机；USB 枚举及 Wi-Fi 根因仍需下一次临时启动的 `USB` 和 `WIFI pm/p/a` 行确认。
+
+### 本地候选临时启动
+
+用户确认回到 Fastboot 并要求继续测试。2026-11-08 01:47:29 +08:00，再次核对新镜像大小/SHA-256、设备 `3B15BB01BAT00000`、产品 `sun` 和 `is-userspace=no`，执行临时 `fastboot boot`。Sending 返回 OKAY（2.332 秒），Booting 返回 OKAY（0.337 秒），总耗时 3.040 秒，退出码 0，未刷写分区。日志为 `out/oneplus13t/boot/metal-main-local-io-20261108/fastboot-boot-20261108-014729.log`。
+
+01:47:54 只读检查确认手机离开 Fastboot，Windows 未发现匹配的 Apple/手机 USB 设备或 USB 错误。系统界面、USB 新阶段和 Wi-Fi 的 `pm/p/a` 值等待用户观察；bootloader 接受镜像不代表 USB/Wi-Fi 已恢复。

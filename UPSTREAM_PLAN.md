@@ -136,3 +136,5 @@ Linux 预检能覆盖大量编译和链接错误，但 Apple Clang、SDK、macOS
 用户观察到 GPU 较流畅，App Library/冷启动长帧和小组件仍有问题，本轮依其要求延后。当前截图不能证明进程反复崩溃；Wi-Fi/USB 的功能恢复仍需新内核的实机结果。
 
 本地完整 ARM64 内核和预链接已通过，配对 Run 42 的未变签名 Data/trust，生成 `out/oneplus13t/boot/metal-main-local-io-20261108/boot.img`。实际内容、Data UUID、固件/trust、FAT/ADT/参数和 Android v4 读回通过；源码包为 v27。这次未运行新的 macOS Actions，也未操作手机。下一步需要临时启动该镜像，确认 USB 是否越过 DMA，并读取 Wi-Fi 的具体 PMIC 错误。
+
+用户随后确认 Fastboot 已连接并要求继续测试。01:47:29 的临时启动通过传输和 Booting，总耗时 3.040 秒，未刷写；01:47:54 Windows 未见 Apple/手机 USB 设备或 USB 错误。当前等待新镜像的界面状态和 WIFI/USB 行，尚无功能恢复结论。
