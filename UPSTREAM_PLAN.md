@@ -172,3 +172,10 @@ TWRP root ADB 已验证分区边界并完整备份 32 MiB 日志区，内容全�
 
 
 落盘日志已在 TWRP 导出：89 轮、0 次写入错误、5,665 条 CRC 有效记录。Peach 在校准请求后进入固件断言；USBMux 已激活，Windows Mobile Device 和爱思服务现已运行。用户要求同时修复 USB/Wi-Fi 并生成新镜像，本轮补全配对身份、SystemOS 根卷 FSID 和临时无密码状态，修正 CALDB 下载长度、按固件能力发送 AUX、校准失败停止，以及已签名 supplicant 的限定启动兼容。11 种栈仿真、KeyStore/服务边界、完整 ARM64 内核/预链接及 FAT/ADT/Android-v4 读回均通过。第六份镜像位于 `out/oneplus13t/boot/metal-main-local-io6-20261108/boot.img`，源码包 v32，配对 Run 42 Data/trust；爱思识别、Trust 和实际联网待实机验证。详见 [记录](STAGE6.md#combined-io6)。
+
+
+## 第七版 I/O 候选（2026-11-08）
+
+第六版实机进入 SpringBoard 重复 SIGABRT，Wi-Fi 仍触发相同固件断言；USBMux 可发现设备并接受端口连接，但 lockdown 查询超时。第七版撤回破坏卷/文件 ID 一致性的 statfs 改写，补齐 Peach 校准天线请求、修正主机平台标志，并阻止启动失败被后续通知清除。AUX 兼容缩到已观察到的状态 90。USB 日志排除帧号变化，保留连接与故障信息。详细证据与镜像记录见 [STAGE6](STAGE6.md#combined-io7)。本轮不操作手机。
+
+第七份 `metal-main-local-io7-20261108/boot.img` 已通过完整 ARM64 构建和配对容器读回；20 项完整栈模拟及 USB/服务策略检查通过，沿用 Run 42 Data/trust。实际桌面恢复、Trust/爱思与联网待用户醒来后的测试。

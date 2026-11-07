@@ -1855,9 +1855,42 @@ Wi-Fi 在约 38.877 秒完成校准报告，39.037 秒进入 RDDM。有效故障
 - AUX 请求只在目标 `fw_caps` 的 `0x04` 位有效时发送，与 [官方 WLFW 定义](https://github.com/OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8750/blob/6a196f79/vendor/qcom/opensource/wlan/platform/cnss_utils/wlan_firmware_service_v01.h)及 CNSS2 能力检查一致；缺失能力时不发送。日志打印目标能力和 AUX 决策。
 - 日志反复出现 supplicant 的 Launch Constraint Violation。`phone-wifi-service-launch.patch` 仅允许 stage 6 中具有 `CS_VALID|CS_SIGNED`、实际 vnode 路径恰为 `/usr/libexec/unixnu-wpa_supplicant` 的服务跨过该类别限制。先前的 MAC exec、签名错误检查和后续签名/代码页验证继续执行；其他程序仍经过原检查。没有启用全局 `sheng-no-lc`。
 
-`peach-sim.sh out/sim-io6` 的 WCN7850 加十种 Peach 情况通过 ASan/UBSan，包括 capability 为零/缺失、CAL_REPORT 拒绝和 mode 7 拒绝；实际 QMI 解码确认报告长度为零且失败时没有 mission 请求。`test-mobile-services.py` 检查真实补丁函数的路径/签名/模式边界、临时 KeyStore 门限和根卷 FSID 条件；`test-metal-profile.py` 检查身份字段、参数唯一性及 CPU profile 隔离，均通过。完整内核与容器检查也已通过，手机测试待进行。GPU 策略保持 342 至 734 MHz、85°C 常规控制和 105°C 紧急限制，日志继续写入既有 32 MiB 预留区。
+`peach-sim.sh out/sim-io6` 的 WCN7850 加十种 Peach 情况通过 ASan/UBSan，包括 capability 为零/缺失、CAL_REPORT 拒绝和 mode 7 拒绝；实际 QMI 解码确认报告长度为零且失败时没有 mission 请求。`test-mobile-services.py` 检查真实补丁函数的路径/签名/模式边界、临时 KeyStore 门限和根卷 FSID 条件；`test-metal-profile.py` 检查身份字段、参数唯一性及 CPU profile 隔离，均通过。完整内核与容器检查也已通过。GPU 策略保持 342 至 734 MHz、85°C 常规控制和 105°C 紧急限制，日志继续写入既有 32 MiB 预留区。
 
 
 第六份镜像已生成：`out/oneplus13t/boot/metal-main-local-io6-20261108/boot.img`，102,178,816 字节，SHA-256 `29da45b386ecbdcaeafaed835001178b0484d0f980ffa8bdd358f95b2db1491c`。完整 Linux ARM64 构建和预链接成功，新内核 SHA-256 为 `5a961e5e477d88450d77930cf57ad32a40100d250b2f06108da125f46cd5e455`；内核实际包含能力协商、失败停止和 AKS 参数，新 XNU 源含两个服务/FSID 补丁。构建日志在 `/mnt/wsl/unixnu-build/artifacts/logs/usb-wifi-io6-20261108.log`。
 
-配对检查确认沿用 Run 42 的签名 Data/trust 和 UUID `E88AC71F-AF0E-485A-9077-4F7D81E3DC45`，561 个原始 launchd job 和原始 Apple trust 模块不变。最终 FAT 逐文件读回、ADT 中 `0x8011/12/1` 身份、所有启动参数及 Android v4 完整解包读回通过；`packaging.log` 位于镜像旁。原有 KeyStore lifecycle/selector 边界使用 Clang 的 ASan/UBSan 通过；宿主 GCC 因既有 Clang pragma 拒绝编译，未更改驱动以迁就该工具差异。`test-mobile-services.py` 已接入 Metal CI。源码包 v32 仅含七仓库源码差异及测试，无手机固件或原始日志。此轮未临时启动或刷写手机；爱思识别、Trust、Wi-Fi 校准完成和联网仍待这份镜像的实测。
+配对检查确认沿用 Run 42 的签名 Data/trust 和 UUID `E88AC71F-AF0E-485A-9077-4F7D81E3DC45`，561 个原始 launchd job 和原始 Apple trust 模块不变。最终 FAT 逐文件读回、ADT 中 `0x8011/12/1` 身份、所有启动参数及 Android v4 完整解包读回通过；`packaging.log` 位于镜像旁。原有 KeyStore lifecycle/selector 边界使用 Clang 的 ASan/UBSan 通过；宿主 GCC 因既有 Clang pragma 拒绝编译，未更改驱动以迁就该工具差异。`test-mobile-services.py` 已接入 Metal CI。源码包 v32 仅含七仓库源码差异及测试，无手机固件或原始日志。生成镜像时未操作手机；爱思识别、Trust、Wi-Fi 校准完成和联网仍待这份镜像的实测。
+
+2026-11-08 04:02:19 Asia/Shanghai，用户确认 Fastboot 就绪并要求测试。再次核对镜像 SHA-256、序列号 `3B15BB01BAT00000`、`product=sun` 和 `is-userspace=no` 后，仅执行 `fastboot -s 3B15BB01BAT00000 boot <上述 boot.img>`。发送返回 `OKAY`（2.323 秒），启动返回 `OKAY`（0.338 秒），总计 3.027 秒，退出码 0；没有执行分区刷写。日志位于镜像目录的 `fastboot-boot-20261108-040219.log`。04:02:37 仍短暂显示 bootloader USB，04:02:57 已消失；这两次 USBMux 列表均为空，继续等待系统完成启动。
+
+04:04:06，Windows 出现 `05AC:12AB` 的 Apple Mobile Device USB Composite Device 和 USB Device，均为 `OK`，USBMux `ListDevices` 返回本机，DeviceID 为 6。04:05:02 的新连接为 DeviceID 7，USBMux 对 `Connect` 到 62078 返回 0，但随后 `lockdownd QueryType` 在 5 秒内未返回完整响应。这里仅确认枚举、USBMux 发现和端口连接，未确认爱思设备信息、Trust 配对或 Wi-Fi 联网；手机界面及本轮落盘日志待反馈/导出。两份只读探针日志为镜像目录下 `usb-windows-check.log` 和 `lockdown-readonly-check.log`。
+
+用户随后确认：屏幕日志正常更新，但第六版停在苹果 logo，尚未进入桌面。USB 枚举/USBMux 发现不代表完整系统启动通过；当前将此版本记录为启动回归，后续日志与修正见下节。
+
+
+<a id="combined-io7"></a>
+### 第七版：启动回归与 I/O 故障边界（2026-11-08）
+
+第六版日志已从 Android root ADB 只读导出到 `out/oneplus13t/logs/ufslog-io6-20261108.bin`；解码目录为 `out/oneplus13t/logs/decoded/20261108-041127-io6-apple-logo/`。148 轮写入、18 个槽、0 次写入错误，5,280 条记录通过 CRC，30 个序号缺失。内核持续运行至约 399 秒，SpringBoard 在 34.262 至 397.386 秒间出现 17 次相同 SIGABRT。Wi-Fi 在 39.041 秒再次进入 RDDM，断言与第五版相同；AUX 返回状态 90。supplicant 已通过签名检查，但无线接口尚未完成初始化，进程仍退出重试。
+
+用原始 21H461 dyld cache 的匹配符号定位，SpringBoard 栈落在 `SBApplicationController _loadApplications:remove:`，对初始化阶段取得的应用对象执行 `removeObject:` 时进入 CoreFoundation 异常路径。第六版的 `native-union-statfs-fsid.patch` 只改写 `statfs.f_fsid`，而 `getattrlist` 与 `fsgetpath` 的实际 mount/file-ID 映射未同步；后者仍通过 `mount_lookupby_volfsid` 查找真实卷。这会破坏文件身份往返，与空应用对象崩溃相符。第七版撤回该补丁，生成后的 XNU 源确认恢复原卷标识。是否消除手机崩溃仍待复测；原 ADT 身份、临时 KeyStore 状态和有签名/路径限制的 supplicant 启动规则保留。
+
+Wi-Fi 根据同一份 [OnePlus CNSS2 启动流程](https://github.com/OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8750/blob/6a196f79/vendor/qcom/opensource/wlan/platform/cnss2/main.c) 和 [QMI 描述表](https://github.com/OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8750/blob/6a196f79/vendor/qcom/opensource/wlan/platform/cnss_utils/wlan_firmware_service_v01.c) 修正三处行为：
+
+- 冷启动校准前先发送空的 antenna-switch 请求（0x47），再发送有效的零 antenna-grant（0x48，TLV 0x10/u64）。零值对应没有 modem coexistence 服务的初始授权；失败时停止，不继续校准。
+- Peach/SM8750 不再上报标识非高通主机的 `HOST_CSTATE` 位，保留内部时钟和已实现的 PCIe global reset 能力。其他芯片路径保持原值。
+- 复用现有 QMI 失败标志，在首次启动失败后阻止重复 FW_READY 清除它。迟到 CAL_DONE 也不能把失败启动变为成功。AUX 只保留实机已出现的状态 90 兼容处理；其他拒绝、发送错误和超时均停止启动。状态 90 的固件含义尚未完成硬件验证，该例外已在源码标明。
+
+USB 继续使用已通过枚举和 USBMux 发现验证的 21H461 原生栈。连接状态不变时，DSTS 帧号仍不断变化，旧比较逻辑因此每秒写出快照。现在比较时仅排除 SOF 位 16:3，保留速率、链路、停机、FIFO 和所有故障状态；有实际变化时仍打印完整原始 DSTS。字段依据 [Linux DWC3 寄存器定义](https://github.com/torvalds/linux/blob/v6.12/drivers/usb/dwc3/core.h)。USB host fixture 检查帧号去重及每个其他位的保留，并通过原有时钟、PHY、复位、SMMU 和日志暂停检查。
+
+手机保留在 Android；本轮只在开发环境工作。Trust、爱思设备信息、Wi-Fi 校准完成、扫描和联网仍需新镜像的实机测试。
+
+
+第七份镜像已生成：`out/oneplus13t/boot/metal-main-local-io7-20261108/boot.img`，102,178,816 字节，SHA-256 `ac1785baaf119bd6b5e1a88b125566e68522295c3d7cab71b2709c1fc90af6f8`。最终内核为 128,819,200 字节，SHA-256 `644e2b798090e9c0870f3ec3051a87fa57be313ace9b3f6b3e78519689dc4438`；构建日志为 `/mnt/wsl/unixnu-build/artifacts/logs/usb-wifi-io7-final-20261108.log`。较早的 io7 中间构建未封装交付，最终镜像包含 AUX 错误边界修正。
+
+WCN7850 和 19 个 Peach 场景共 20 项完整栈 ASan/UBSan 检查通过，包括 AUX 状态 90、其他拒绝、超时及重复通知。USB 硬件/日志检查、移动服务策略与 profile 隔离检查通过。完整 ARM64 内核编译、21H461 USB ABI 绑定和预链接通过。检查实际内核中的新请求/故障入口及 Data UUID，确认与 Run 42 签名 Data/trust 配对，561 个原始 launchd job、固件清单和原始 Apple trust 模块保持一致。FAT 逐文件、ADT `0x8011/12/1`、全部启动参数和 Android v4 容器读回通过；`packaging.log` 位于镜像旁。
+
+GPU 仍为 342–734 MHz、85°C 常规控制和 105°C 紧急限制，`sysmem,nocb` 不变。日志仍每 3 秒写入此前已验证并获准使用的 32 MiB 预留区。D 盘 VHDX 约 38 GB，未到 80 GB 阈值，本轮构建没有失败。没有新云端内核任务，也没有重启、临时启动或刷写手机。下一次先验证桌面启动，再检查 lockdown/Trust 与 Wi-Fi，并在再次启动 UniXNU 前导出本轮日志。
+
+源码快照为 `.ci-inputs/oneplus13t-integrated-sources-20261108-v33.tar.gz`（544,817 字节，SHA-256 `13349ed1c6a04d9dce2c085935cca91754b52e619171830a318f0a24a4605b83`），包含七仓库源码、已有测试和说明；已核对文件系统补丁删除、最终 QMI 故障处理及 USB 状态比较均在包内，不含手机固件或原始日志。

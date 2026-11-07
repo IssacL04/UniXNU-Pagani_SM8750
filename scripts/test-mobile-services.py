@@ -16,7 +16,8 @@ def additions(name):
 
 launch = additions('phone-wifi-service-launch.patch')
 launch = launch[:launch.index('\n\tif (!pagani_wifi_owner_launch')]
-fsid = additions('native-union-statfs-fsid.patch')
+# statfs must retain the mount identity used by getattrlist and fsgetpath.
+assert 'native-union-statfs-fsid.patch' not in (ROOT / 'patches/xnu/series').read_text().splitlines()
 probe = (ROOT.parent / 'UniXNU-Pagani-Drivers/drivers/Stage7Probe/Stage7Probe.cpp').read_text()
 aks = re.search(r'uint32_t native_aks_lock_state\(void\) \{.*?\n\}', probe, re.S).group()
 source = r'''
@@ -44,18 +45,6 @@ static int vn_getpath(void *vp, char *path, int *length) {
     return path_error;
 }
 ''' + launch + '\n' + aks + r'''
-#define MNT_UNION 1
-#define MNT_ROOTFS 2
-#define VROOT 1
-struct fsstat { int f_fsid; };
-struct mount;
-struct vnode { unsigned v_flag; struct mount *v_mount; };
-struct mount { unsigned mnt_flag; struct vnode *mnt_vnodecovered; struct fsstat mnt_vfsstat; };
-static int identity(struct mount *mp) {
-    struct fsstat result = mp->mnt_vfsstat, *sfs = &result;
-''' + fsid + r'''
-    return result.f_fsid;
-}
 int main(void) {
     struct image_params p = {(void *)1, CS_VALID | CS_SIGNED};
     assert(pagani_wifi_owner_launch(&p));
@@ -71,14 +60,6 @@ int main(void) {
     for (sls = 0; sls < 5; ++sls) assert(native_aks_lock_state() == (sls == 3 ? 3 : 0));
     sls = 3; ephemeralState = false; assert(native_aks_lock_state() == 0);
     ephemeralState = true; supplied = false; assert(native_aks_lock_state() == 0);
-    struct mount root = {MNT_ROOTFS, NULL, {10}};
-    struct vnode covered = {VROOT, &root};
-    struct mount system = {MNT_UNION, &covered, {20}};
-    assert(identity(&system) == 10);
-    system.mnt_flag = 0; assert(identity(&system) == 20); system.mnt_flag = MNT_UNION;
-    covered.v_flag = 0; assert(identity(&system) == 20); covered.v_flag = VROOT;
-    root.mnt_flag = 0; assert(identity(&system) == 20); root.mnt_flag = MNT_ROOTFS;
-    system.mnt_vnodecovered = NULL; assert(identity(&system) == 20);
 }
 '''
 with tempfile.TemporaryDirectory(prefix='pagani-mobile-services-') as directory:
@@ -87,4 +68,4 @@ with tempfile.TemporaryDirectory(prefix='pagani-mobile-services-') as directory:
     subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-Wall', '-Wextra', '-Werror',
                     '-fsanitize=address,undefined', str(path / 'policy.c'), '-o', str(path / 'policy')], check=True)
     subprocess.run([str(path / 'policy')], check=True)
-print('PASS: signed Wi-Fi service scope, ephemeral lock state and union-root filesystem identity')
+print('PASS: signed Wi-Fi service scope, ephemeral lock state and unchanged mount identities')
