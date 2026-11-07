@@ -150,3 +150,6 @@ Linux 预检能覆盖大量编译和链接错误，但 Apple Clang、SDK、macOS
 
 
 用户随后要求继续测试第三轮镜像。2026-11-08 02:26:54 的临时启动传输和 Booting 均 OKAY，总耗时 3.036 秒，未刷写。启动过渡期的 bootloader 接口于 02:27:51 消失，Windows 未见 Apple/手机 USB 设备或 USB 错误。USB 接管结果与 Wi-Fi 日志仍待用户观察。
+
+
+第三轮实机已越过 USB DMA/发布，读数 `s13 d8 irq0 c1 fs400`；`d8` 来自未初始化的 PM 请求，`fs400` 只是页表格式。第四轮候选按 21H461 精确 ABI 恢复原版传输槽位，改用 gated cable 通知和存在于原版的 standardBringup USBMux 配置。Wi-Fi 报 `failed to start firmware: -5`，位置在 firmware-ready 后的 QMI 配置；候选轮显最近日志全文以读取具体请求失败。主机回归、原版/编译 ABI 检查、完整本地 ARM64 构建及配对镜像读回通过。第四轮镜像为 `out/oneplus13t/boot/metal-main-local-io4-20261108/boot.img`，源码包 v30，沿用未变 Run 42 Data/trust；未操作手机，GPU/小组件继续延后。

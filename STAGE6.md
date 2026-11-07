@@ -1762,3 +1762,21 @@ Wi-Fi 在等待栈就绪时显示已有日志环的最后一条：`WIFI f… e�
 用户确认 Fastboot 已连接并要求继续测试。北京时间 2026-11-08 02:26:54，核对镜像大小/SHA-256、设备 `3B15BB01BAT00000`、产品 `sun`、`is-userspace=no` 后，执行临时 `fastboot boot`。Sending 返回 OKAY（2.335 秒），Booting 返回 OKAY（0.336 秒），总耗时 3.036 秒，退出码 0，未刷写分区。日志为 `out/oneplus13t/boot/metal-main-local-io3-20261108/fastboot-boot-20261108-022654.log`。
 
 02:27:12 的只读检查仍见 Android Bootloader Interface，fastboot 序列号显示问号；02:27:51 复查时接口已消失，fastboot 无设备，Windows 未发现匹配的 Apple/手机 USB 设备或 USB 错误。尚未收到系统界面、USB 新阶段及 Wi-Fi 栈日志；不能由 bootloader 接受镜像认定 SID 接管或网络恢复通过。未执行第二次启动或重启。
+
+
+### 第三轮实机结果与 USB 接口修正
+
+用户读回 `WIFI f2 e0 i52 11235 3 failed to start firmware: -5`、`USB s13 d8 irq0 c1 dsd23e74(变化) fs400`。USB 已越过 DMA 和控制器发布并检测到线缆；`d8` 是 `kIOPMNotYetInitialized`，来自当前直接调用的电源请求。SMMU FSR `0x400` 只表示翻译格式，没有故障标志。
+
+核对 21H461 原版二进制，slot 227 实为传输函数 `ioGated`，此前误命名为 desiredPower 并覆盖；原版也没有 `standardMuxOnly` 配置。第四轮候选保留 slot 227，使用原版经过 command gate 的 cableConnect/cableDisconnect（204/205），记录 goOnBus（177）的返回值，选用原版 `standardBringup` 中的 AppleUSBMux 配置。构建时校验槽位、指令字节、on-bus 字段和配置 personality；偏移槽位的负例被拒绝。新 USB 行为 `s/d/irq/on/dc/ev/f`，分别包含阶段、总线请求返回值、中断、实际 on-bus、DCTL、事件计数、排除格式位后的 SMMU 故障。
+
+Wi-Fi 的错误位于 firmware-ready 通知后的 QMI 启动配置，最后一条汇总覆盖了具体失败请求。候选在等待时逆序轮显最近 12 条已有日志，每条分 a/b/c 三页、每页最多 44 字符、每三秒切换；屏幕移除时间/级别前缀，RAM 日志不变。实际格式函数通过完整尾段、前一条错误、环绕和错误优先级的 ASan/UBSan 检查。未改动固件请求流程。USB 主机回归、精确 ABI 检查及完整内核构建通过。手机继续运行第三轮镜像，USB 枚举和 Wi-Fi 网络恢复尚未验证。
+
+
+第四轮完整本地 `./unixnu kernel -j 6`、最终链接与预链接通过，日志 `/mnt/wsl/unixnu-build/artifacts/logs/usb-cable-wifi-qmi-20261108.log`。实际 ARM64 ABI 审计确认 177 为原版 goOnBus 绑定，204/205 为正确线缆方法，227 继承原版传输函数。实际内核含 standardBringup 和新诊断格式，旧 standardMuxOnly 和误命名 desiredPower 符号已移除。
+
+- 内核：`out/oneplus13t/actions/metal-main-local-io4-20261108/kernel/kernel.macho`，128,819,200 字节，SHA-256 `f26f1e778ad86b715fad30d1ff3f787e58faef7fe6c50cc96b6674d0c887801f`。
+- 镜像：`out/oneplus13t/boot/metal-main-local-io4-20261108/boot.img`，102,178,816 字节，SHA-256 `2573a5c1787eaf0c4ce7cd79409078ec1a442ed4abe62433d6b5fdc3e9ac92f2`。
+- 源码包：`.ci-inputs/oneplus13t-integrated-sources-20261108-v30.tar.gz`，432,831 字节，SHA-256 `daff1676cc7be8198b0fd9d50e7ab0629dee7e1fa52daa0fce59aafc289dc3ab`。
+
+配对 Run 42 UUID `E88AC71F-AF0E-485A-9077-4F7D81E3DC45` 和未变 Data/trust。完整逻辑 Data、固件 pin、561 个原始 launchd job、owner/Apple trust、FAT 内容、wlan ADT、启动参数和 Android v4 读回通过。保留 GPU 参数及已测 UEFI/DTB，UFS 持久日志关闭。构建后 VHDX 为 35,303,456,768 字节，低于 80 GB。没有运行新的云端内核构建或操作手机；USB 枚举和 Wi-Fi 网络仍待实机。
