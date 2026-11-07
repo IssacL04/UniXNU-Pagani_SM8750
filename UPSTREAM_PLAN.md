@@ -144,3 +144,6 @@ Linux 预检能覆盖大量编译和链接错误，但 Apple Clang、SDK、macOS
 
 
 用户随后确认 Fastboot 已连接。第二轮镜像于 2026-11-08 02:11:06 临时启动，传输和 Booting 均 OKAY，总耗时 3.123 秒，未刷写。启动过渡期短暂出现 bootloader 接口，02:12:03 已消失；Windows 未见 Apple/手机 USB 枚举或 USB 错误。新的 WIFI/USB 诊断和系统界面状态待用户观察。
+
+
+第二轮用户反馈：Wi-Fi 固定在 `602/0 fw2 net0 irq52`，USB 为 `-7/d3 p6 r814 v80000040 x5`。第三轮候选在控制器停止后合并精确 USB SID 0x40 的重复项，保留其他 stream、旧 bank 和掩码冲突保护；Wi-Fi 等待行显示已有栈日志。旧 USB 实现复现回归失败，修正后 ASan/UBSan 和日志格式回归通过。完整本地 ARM64 内核/预链接及配对镜像读回通过，第三轮镜像为 `out/oneplus13t/boot/metal-main-local-io3-20261108/boot.img`，源码包 v29。沿用 Run 42 Data/trust，尚未实机启动。

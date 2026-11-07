@@ -1737,3 +1737,21 @@ USB 保留规划器的全部拒绝条件，新增 `p/r/v/x`：原因、寄存器
 用户确认 Fastboot 已连接并要求继续测试。2026-11-08 02:11:06 +08:00，核对第二轮镜像大小/SHA-256、设备 `3B15BB01BAT00000`、产品 `sun` 和 `is-userspace=no` 后，执行临时 `fastboot boot`。Sending 返回 OKAY（2.329 秒），Booting 返回 OKAY（0.337 秒），总耗时 3.123 秒，退出码 0，未刷写分区。日志为 `out/oneplus13t/boot/metal-main-local-io2-20261108/fastboot-boot-20261108-021106.log`。
 
 02:11:23 首次只读检查仍看到 Android Bootloader Interface，fastboot 序列号暂显示问号。02:12:03 再次检查确认该接口消失，fastboot 无设备，Windows 未发现匹配的 Apple/手机 USB 设备或 USB 错误。尚未收到新镜像的界面状态和完整 WIFI/USB 行；无法据此认定 PCIe 或 SMMU 停点已越过。未执行再次启动或重启。
+
+
+### 第二轮实机停点与第三轮候选
+
+用户读回 `WIFI s602 e0 fw2 net0 mac3 irq52`、`USB s-7 d3 p6 r814 v80000040 x5`，静置及插拔 USB 后 Wi-Fi 数值仍不变。Wi-Fi 已越过 PCIe 和栈启动调用，但 `fw2` 仅由 PCI probe 返回设置，不能据此确认固件就绪；接口尚未发布。USB `p6` 明确来自第二个精确匹配 SID `0x40` 的 SMR：offset `0x814`、value `0x80000040`，对应 S2CR `0x5`。
+
+第三轮候选在 USB 控制器停止、持有 AppsSmmuLock、页表准备成功后，清除并读回全部精确 USB SID 项，再向未占用 bank 建立唯一映射。带掩码的重叠继续拒绝，旧 bank 和非 USB stream 保留；无效计划不写寄存器，清除被拒绝时返回 DMA detail 9。保留 128 个可靠匹配项的范围，额外 Qualcomm 项的固件访问差异参见 [Linux qcom_smmu_cfg_probe](https://github.com/torvalds/linux/blob/master/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c)。重复项回归在旧实现上失败，修正后通过；ASan/UBSan 还检查共享旧 bank、UFS、其他 SID、额外项不变以及清除失败路径。
+
+Wi-Fi 在等待栈就绪时显示已有日志环的最后一条：`WIFI f… e… i…` 加相对时间、日志级别和文本前缀，网络 ready 后恢复常规行。真实格式函数的环绕、长度、PMIC/PCIe 错误优先级和 ready 切换测试通过。暂不依据 `fw2` 猜测并修改固件流程。第三轮完整内核和镜像已构建，未操作手机。
+
+
+第三轮完整本地 `./unixnu kernel -j 6`、USB 21H461 ABI 检查、最终链接与预链接通过；日志 `/mnt/wsl/unixnu-build/artifacts/logs/usb-duplicate-wifi-stack-20261108.log`。
+
+- 内核：`out/oneplus13t/actions/metal-main-local-io3-20261108/kernel/kernel.macho`，128,819,200 字节，SHA-256 `7878b58be93425a9367ddda07813a30820dbc5c5804a974fb30ac44ca8ada913`。
+- 镜像：`out/oneplus13t/boot/metal-main-local-io3-20261108/boot.img`，102,178,816 字节，SHA-256 `d54883bbd466165ca27381622c51039472faf50bde4236e6435bea6a398de37d`。
+- 源码包：`.ci-inputs/oneplus13t-integrated-sources-20261108-v29.tar.gz`，431,518 字节，SHA-256 `4deeaba3ca9a52c8ad4ec0c93986ee586347a8e7029cc26ca381cbeb41e982ab`。
+
+实际内核中已检查 USB detach 和 Wi-Fi 日志格式及强入口；与 Run 42 的 UUID `E88AC71F-AF0E-485A-9077-4F7D81E3DC45`、Data/trust 配对。完整 Data、固件 pin、561 个原始 launchd job、owner/Apple trust、FAT、wlan ADT、启动参数和 Android v4 封装读回通过。保持 GPU 参数、已测 UEFI/DTB，UFS 持久日志关闭。没有运行新的云端内核构建，也没有临时启动第三轮镜像；USB 枚举和 Wi-Fi 栈停点待下一次实机验证。
