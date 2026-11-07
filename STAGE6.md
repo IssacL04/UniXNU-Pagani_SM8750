@@ -1712,3 +1712,21 @@ D 盘隔离工具链执行完整 `./unixnu kernel -j 6`，ARM64 组件编译、U
 用户确认回到 Fastboot 并要求继续测试。2026-11-08 01:47:29 +08:00，再次核对新镜像大小/SHA-256、设备 `3B15BB01BAT00000`、产品 `sun` 和 `is-userspace=no`，执行临时 `fastboot boot`。Sending 返回 OKAY（2.332 秒），Booting 返回 OKAY（0.337 秒），总耗时 3.040 秒，退出码 0，未刷写分区。日志为 `out/oneplus13t/boot/metal-main-local-io-20261108/fastboot-boot-20261108-014729.log`。
 
 01:47:54 只读检查确认手机离开 Fastboot，Windows 未发现匹配的 Apple/手机 USB 设备或 USB 错误。系统界面、USB 新阶段和 Wi-Fi 的 `pm/p/a` 值等待用户观察；bootloader 接受镜像不代表 USB/Wi-Fi 已恢复。
+
+
+### local-io 实机结果与第二轮候选
+
+用户读回 `WIFI s-306 e-11 fw0 net0 mac3 irq0`、`USB s-7 d3 irq0 c-1 ds0 fs0`。Wi-Fi 本次已越过 S7I 读取与电源阶段，停在 PCIe 一秒内未进入 L0；不能由一次通过认定此前的 PMIC 读取问题稳定消失。USB 仍在 SMMU 规划阶段失败，尚未写入该映射或发布 AppleUSBXDCI。
+
+对照 PaganiBt、原机时钟资料和 [Linux SM8750 时钟表](https://github.com/torvalds/linux/blob/master/drivers/clk/qcom/clk-rpmh.c)，Wi-Fi 上电路径缺少 RF_CLK1 的 `rfclka1 +4 = 1` 请求。第二轮候选在 WLAN_EN 前通过现有 RPMh VRM 接口请求时钟，失败返回 `-202/-16`，保留 S7I 保护。PCIe 超时行改为显示 `d` PORT_DEBUG0/1、`ph` PCS status、`sl` sleep-clock result、`rf` RF_CLK1 request result，均使用已采集状态。
+
+USB 保留规划器的全部拒绝条件，新增 `p/r/v/x`：原因、寄存器偏移、值和关联值。原因 1 为 stage/granule，2 为布局，3 为地址宽度，4 为无效 bank 引用，5 为 masked SID 重叠，6 为重复 SID，7 为无空闲 stream slot，8 为无空闲 bank。失败后不写 SMMU；不会为了越过 `d3` 接管冲突映射。八类拒绝条件及实际 36 位 ID 模型通过 ASan/UBSan；Wi-Fi bring-up 17,868 项及 quiet 检查通过。完整新内核与启动镜像已完成，实机功能仍待确认。
+
+
+第二轮完整构建由 D 盘隔离工具链执行 `./unixnu kernel -j 6`，Wi-Fi/USB 组件、USB 21H461 ABI、最终链接和预链接通过，日志 `/mnt/wsl/unixnu-build/artifacts/logs/wifi-refclk-usb-plan-20261108.log`。本地构建没有触发新的 macOS Actions。
+
+- 内核：`out/oneplus13t/actions/metal-main-local-io2-20261108/kernel/kernel.macho`，128,819,200 字节，SHA-256 `07306d7b37105421f94fff5506a4b76f4ebdc3dac0357a7e57d420fad1a95aed`。
+- 镜像：`out/oneplus13t/boot/metal-main-local-io2-20261108/boot.img`，102,178,816 字节，SHA-256 `5ffbbc7acf3a6ad56477a22e0e9546e64feb08e01ab350e676fd5a8ca3938e87`。
+- 源码包：`.ci-inputs/oneplus13t-integrated-sources-20261108-v28.tar.gz`，428,125 字节，SHA-256 `f5336cff429ed0d7a8004aa5cef4381f362f87d12299645ccf83d617028f3b8b`。
+
+实际内核含 RF_CLK1 请求和新的 WIFI/USB 格式；配对 Run 42 UUID `E88AC71F-AF0E-485A-9077-4F7D81E3DC45`。完整 Data、固件 pin、561 个原始 launchd job、owner CDHash、原版 Apple trust，以及 FAT 文件、wlan ADT、启动参数和 Android v4 封装读回通过。保留原 GPU 参数、已测 UEFI/DTB、UFS 持久日志关闭。旧 local-io 镜像保留。第二轮候选尚未临时启动，Wi-Fi 连接和 USB 枚举仍未恢复验证。

@@ -138,3 +138,6 @@ Linux 预检能覆盖大量编译和链接错误，但 Apple Clang、SDK、macOS
 本地完整 ARM64 内核和预链接已通过，配对 Run 42 的未变签名 Data/trust，生成 `out/oneplus13t/boot/metal-main-local-io-20261108/boot.img`。实际内容、Data UUID、固件/trust、FAT/ADT/参数和 Android v4 读回通过；源码包为 v27。这次未运行新的 macOS Actions，也未操作手机。下一步需要临时启动该镜像，确认 USB 是否越过 DMA，并读取 Wi-Fi 的具体 PMIC 错误。
 
 用户随后确认 Fastboot 已连接并要求继续测试。01:47:29 的临时启动通过传输和 Booting，总耗时 3.040 秒，未刷写；01:47:54 Windows 未见 Apple/手机 USB 设备或 USB 错误。当前等待新镜像的界面状态和 WIFI/USB 行，尚无功能恢复结论。
+
+
+第二轮实机读数为 Wi-Fi `-306/-11`（PCIe 未进入 L0）和 USB `-7/d3`（SMMU 规划拒绝）。候选补上 WLAN_EN 前的 RF_CLK1 请求，并在屏幕保留 PCIe debug/PHY/clock 状态及 SMMU 拒绝原因/寄存器值。主机回归通过，保留 S7I、SID 冲突与 bank 占用检查；完整 ARM64 内核/预链接及配对镜像读回通过，第二轮镜像为 `out/oneplus13t/boot/metal-main-local-io2-20261108/boot.img`，源码包 v28，沿用 Run 42 的未变 Data/trust。尚未临时启动；GPU/小组件继续延后。
