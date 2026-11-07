@@ -1683,4 +1683,4 @@ Windows 可用 `py -3` 替换 `python3`，或通过 `--adb C:/path/to/adb.exe` �
 
 用户确认 Fastboot 已连接并要求测试。启动前重新核对 `boot.img` 的 102,273,024 字节大小和 SHA-256 `073a16ce49ababa5b638f49dee09f5018eab1e9a4427c426af316880fd254ec0`，目标为 `3B15BB01BAT00000`、产品 `sun`、`is-userspace=no`。北京时间 01:02:43 使用指定 Windows platform-tools 执行 `fastboot -s 3B15BB01BAT00000 boot <Run 42 boot.img>`；Sending 返回 OKAY（2.300 秒），Booting 返回 OKAY（0.337 秒），总耗时 3.043 秒，退出码 0。未刷写分区。日志为 `out/oneplus13t/boot/metal-main-42/fastboot-boot-20261108-010243.log`。
 
-01:03:14 的只读主机检查确认设备已离开 Fastboot，Windows 未发现匹配的 Apple/手机 USB 设备或 USB 错误。该结果只记录当时的主机枚举状态；系统是否进入桌面、GPU 频率/温度及 WIFI/USB/LOG 三行数值等待用户观察。
+01:03:14 的只读主机检查确认设备已离开 Fastboot，Windows 未发现匹配的 Apple/手机 USB 设备或 USB 错误。用户随后确认 Run 42 已进入桌面。01:18:00 再次只读检查 Windows，仍未发现匹配的 Apple/手机 USB 设备或 USB 错误。系统启动已通过本次人工观察；GPU 频率/温度、流畅度和 WIFI/USB/LOG 三行数值尚未取得，不能据此确认调频效果或 Wi-Fi/USB 可用性。

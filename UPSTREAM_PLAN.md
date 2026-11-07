@@ -126,4 +126,4 @@ Linux 预检能覆盖大量编译和链接错误，但 Apple Clang、SDK、macOS
 本地启动镜像为 `out/oneplus13t/boot/metal-main-42/boot.img`，102,273,024 字节，SHA-256 `073a16ce49ababa5b638f49dee09f5018eab1e9a4427c426af316880fd254ec0`。实际内核与云端哈希、Data UUID/完整内容、固件记录、owner/Apple trust、FAT 文件和启动参数、Android v4 封装回读全部通过。持久日志仍关闭；本轮未操作手机，GPU 持续负载与温控、Wi-Fi 连接和 USB 枚举待实机验证。
 
 
-2026-11-08，用户连接 Fastboot 并要求测试。Run 42 镜像哈希和 `sun`/bootloader 身份核对后，临时 `fastboot boot` 的传输与启动均返回 OKAY，总耗时 3.043 秒，未刷写分区。设备已离开 Fastboot；第一次 Windows 检查未见 Apple/手机 USB 枚举或 USB 错误。系统启动与新诊断行的实机结果待用户观察，详见 STAGE6.md。
+2026-11-08，用户连接 Fastboot 并要求测试。Run 42 镜像哈希和 `sun`/bootloader 身份核对后，临时 `fastboot boot` 的传输与启动均返回 OKAY，总耗时 3.043 秒，未刷写分区。设备已离开 Fastboot；第一次 Windows 检查未见 Apple/手机 USB 枚举或 USB 错误。用户随后确认 Run 42 已进入桌面；01:18:00 再次检查 Windows，仍未见 Apple/手机 USB 设备或 USB 错误。GPU 调频效果及新诊断行数值待观察，详见 STAGE6.md。
