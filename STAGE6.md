@@ -1787,3 +1787,17 @@ Wi-Fi 的错误位于 firmware-ready 通知后的 QMI 启动配置，最后一�
 用户确认 Fastboot 已连接并要求继续测试。北京时间 2026-11-08 02:48:36，核对第四轮镜像大小/SHA-256、设备 `3B15BB01BAT00000`、产品 `sun`、`is-userspace=no` 后，执行临时 `fastboot boot`。Sending 返回 OKAY（2.275 秒），Booting 返回 OKAY（0.336 秒），总耗时 2.943 秒，退出码 0，未刷写分区。日志为 `out/oneplus13t/boot/metal-main-local-io4-20261108/fastboot-boot-20261108-024836.log`。系统界面、USB 新行和 Wi-Fi 启动请求错误待用户观察。
 
 02:48:54 首次只读检查仍见 Android Bootloader Interface，fastboot 序列号暂显示问号；02:49:21 复查时该接口已消失，fastboot 无设备，Windows 未发现匹配的 Apple/手机 USB 设备或 USB 错误。等待新的 USB `s/d/irq/on/dc/ev/f` 和 WIFI `L…a/b/c` 错误日志，未执行第二次启动或重启。
+
+### 第四轮 USB 枚举与社区对照
+
+用户随后报告 `USB s13 d0 irq1176 on1 dc80600000 ev0 f0`。北京时间 2026-11-08 02:59 的 Windows 只读检查识别到 `VID_05AC&PID_12AB`，设备名称为 Apple Mobile Device USB Composite Device 和 Apple Mobile Device USB Device，状态均为 OK；03:04 复查结果相同。第四轮镜像已通过 USB 枚举。`ev0` 是当时事件计数快照，不能据此否定已完成的枚举。Windows 接口 ID 含 `RESTORE_MODE`；这不能证明手机进入了 recovery，也不能证明正常数据服务已就绪。本机未安装 Apple Mobile Device 服务，TCP 27015 没有 USBMux 监听，尚未验证配对、lockdown 或数据传输。
+
+Wi-Fi 读数为 `WIFI f2 L03a qmi failed to set mode request`，完整模式编号和错误码尚缺。`L01` 到 `L12` 逆序轮播已有日志，每条 a/b/c 各三秒；短日志后续页面为空属于正常显示。数字变化本身不代表新增故障。需要完整同编号的 a/b/c 才能区分 mode 7 校准、mode 4 关闭和 mode 0 正常启动，以及发送、等待或固件拒绝。
+
+按用户要求更新相关社区仓库引用并核对实现：
+
+- [QcomDwc3 e4efe95](https://github.com/UniXNU/QcomDwc3/tree/e4efe95c903a737e0f5955e5b50a8fb4d2a7d718) 已记录 SM8550／iPadOS 27 的 USB 2/3 枚举、信任、配对和 lockdown。其独立 SID 0x40 一致性映射及原版 USB 栈接入方式已用于本地设计；本地继续使用 21H461 线缆 ABI、SM8750 M31 PHY 和原版存在的 standardBringup 配置。社区的 USB 3、host 或其他系统 ABI 不能直接作为本机验证结果。
+- [Ath12kWifi 4377166](https://github.com/UniXNU/Ath12kWifi/commit/437716609021d0b9df1cfc1a067ca2bf801ceafd) 保留 MHI 固件缓冲区供运行时分页，[26058d8](https://github.com/UniXNU/Ath12kWifi/commit/26058d877b00cbafe9ce0cbe8ecdc743702a129b) 补上按需内存的 QMI 能力回应；当前源码和实际构建输入已包含这些修复及后续更新。
+- [sheng 的实机记录](https://github.com/UniXNU/UniXNU-sheng/commit/08cde20edc3254ed6f7df8d0f5384fb887786e8f) 有 WCN7850 扫描、WPA2、DHCP 和流量证据。本机为 Peach/WCN7880 家族，另有冷启动校准与重启流程；已对照其校准 hooks，当前局部日志不足以判断失败的是哪次模式切换。OnePlus 13T 参考仓库仍把网络列为 planned，DroidVM 的网络依赖虚拟设备，均未提供可直接套用的本机 Wi-Fi 成功证据。
+
+本次只更新观察与比较记录，没有改动运行代码、重建镜像或再次操作手机。下一步读取具体 QMI 请求错误，再选择针对性修正；GPU/小组件继续延后。

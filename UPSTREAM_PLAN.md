@@ -156,3 +156,7 @@ Linux 预检能覆盖大量编译和链接错误，但 Apple Clang、SDK、macOS
 
 
 用户随后确认 Fastboot 已连接。第四轮镜像于 2026-11-08 02:48:36 临时启动，Sending、Booting 均 OKAY，总耗时 2.943 秒，未刷写。过渡期 bootloader 接口于 02:49:21 消失，Windows 未见 Apple/手机 USB 设备或 USB 错误。等待 USB 新行及 Wi-Fi 最近日志的完整请求错误；尚无功能恢复结论。
+
+第四轮后续读数为 `USB s13 d0 irq1176 on1 dc80600000 ev0 f0`。02:59 和 03:04 的 Windows 检查均识别 `05AC:12AB`，Apple USB Composite Device 与 USB Device 状态为 OK，USB 枚举已通过。本机缺少 Apple Mobile Device 服务及 USBMux 监听，配对和数据服务仍未验证。Wi-Fi 停在 `f2`，日志指向 QMI mode request，但模式编号和错误码待补全；L01-L12 是历史日志轮播。
+
+社区对照确认 QcomDwc3 的独立 SID 一致性映射、Ath12kWifi 的 MHI 固件缓冲区保留与 QMI 按需内存修复均已纳入当前设计或构建输入。sheng 已有 WCN7850 联网实测，Peach 的校准/重启过程仍需本机完整日志判断；OnePlus 13T 参考仓库尚无网络成功验收。引用及证据见 [STAGE6](STAGE6.md#第四轮-usb-枚举与社区对照)。本次未改代码或替换镜像。
