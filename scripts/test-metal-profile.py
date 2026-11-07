@@ -27,7 +27,8 @@ with tempfile.TemporaryDirectory(prefix='pagani-metal-profile-') as directory:
     assert board['kernel']['archives'].count('component:Adreno830') == 1
     assert 'com.apple.iokit.IOGPUFamily' in board['kernel']['prelink']['roots']
     assert 'pagani-gpu=1' in board['payload']['kernel_args']
-    for arg in ('pagani-gpu-maxlevel=9', 'pagani-gpu-dcvs-min=342', 'pagani-gpu-ttarget=85'):
+    for arg in ('pagani-gpu-maxlevel=9', 'pagani-gpu-dcvs-min=342', 'pagani-gpu-ttarget=85',
+                'pagani-ramoops=1', 'pagani-wifi-log=7', 'pagani-gpu-trace=0'):
         assert board['payload']['kernel_args'].count(arg) == 1
     assert not any(arg.startswith(('pagani-gpu-profile=', 'pagani-gpu-acd=')) for arg in board['payload']['kernel_args'])
     assert board['payload']['kernel_args'].count('sheng-vsync=120') == 1
@@ -67,6 +68,7 @@ with tempfile.TemporaryDirectory(prefix='pagani-metal-profile-') as directory:
     assert board['payload']['kernel_args'].count('pagani-wifi=6') == 1
     assert board['adt']['product']['wlan'] == {}
     assert board['payload']['kernel_args'].count('pagani-usb=1') == 1
+    assert not any(arg.startswith('sheng-log=') for arg in board['payload']['kernel_args'])
     assert {'com.apple.driver.AppleUSBXDCI', 'com.apple.driver.AppleUSBDeviceMux'} <= set(board['kernel']['prelink']['roots'])
     for prefix in ('pagani-adsp=', 'pagani-bt=', 'pagani-haptics=', 'pagani-cam=', 'pagani-fb-flip='):
         assert not any(arg.startswith(prefix) for arg in board['payload']['kernel_args'])

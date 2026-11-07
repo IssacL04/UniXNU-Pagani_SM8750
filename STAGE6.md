@@ -1615,3 +1615,52 @@ Run 41 用户实机反馈（2026-11-07）：已进入桌面。用户更正此前
 The user reports smoother composition at 342 MHz and visible desktop slowdown at 160 MHz. The candidate keeps profile 1 startup and enables the existing stepped thermal loop through explicit `pagani-gpu-ttarget=85`. The Metal profile adds `pagani-gpu-maxlevel=9` and `pagani-gpu-dcvs-min=342`, using stock DT points up to the existing ACD-off 734 MHz cap. Emergency limiting at 105°C and sensor-loss fallback remain active.
 
 `test_a830dcvs` passes 873 checks with ASan/UBSan, including the new profile 1 thermal path and original profile behavior; `scripts/test-metal-profile.py` passes. Local x86 cannot compile the ARM64 instructions in `test_start`; the native ARM64 workflow will run it. The complete local ARM64 kernel/prelink passes: 128819200 bytes, SHA-256 `e2bfaf0f18470a0fb90ee9aa5ed32477546705e201b629e31473677d71164d18`, saved under `/mnt/wsl/unixnu-build/artifacts/gpu-thermal-20261107/`. The fresh cloud build is pending. No phone operation is performed.
+
+
+<a id="usb-wifi-logs"></a>
+
+## USB / Wi-Fi 日志补充（2026-11-07，尚未生成新启动镜像）
+
+Run 41 的最新实机反馈为：插线后电脑完全没有枚举反应，Wi-Fi 地址为 N/A；熄屏全黑和唤醒恢复日志已确认正常。本轮保留已完成的 GPU 342–734 MHz / 85°C 候选，只补 USB 和 Wi-Fi 的诊断；小组件问题暂停，完整内核和云端构建也暂停。
+
+CPU 行下方增加三行，随显示探针区域下移，熄屏期间不绘制：
+
+| 行 | 字段 |
+| --- | --- |
+| `WIFI s… e… fw… net… mac… irq…` | `s` 为最后完成或失败的步骤；负数是失败步骤，`e` 为初始化或协议栈错误。101–104 为硬件调查，201–208 为供电，301–307 为 PCIe，401–406 为端点/DMA，501–506 为独立固件加载，601/602/603 为协议栈启动/启动返回/网络服务发布。`fw` 是协议栈内部阶段，`net=1` 为网络服务发布。`mac` 是位掩码：1=从 unique-chip-id 推导，2=`/chosen` 属性存在，4=`arm-io/wlan` 属性存在；7 表示这三项完成，不代表已经联网。`irq` 为 MSI 次数。 |
+| `USB s… d… irq… c… ds… fs…` | 1=线程启动，2=映射，3=供电，4=时钟，5=PMIC repeater，6=PHY，7=core reset，8=DMA，9=硬件准备完成，10=加载 AppleUSBXDCI，11=发布控制器，12=已发布/等待接线，13=检测到接线，14=请求电源状态。负数为失败；`d` 是十六进制详情，`c=-1/0/1` 为未知或读取失败/未接线/接线，`ds` 为 DSTS，`fs` 为 SMMU fault。检测到接线不能证明 USB 枚举成功。 |
+| `LOG …` | `RAM only; UFS off` 仅存内存；`waiting` 等待根布局或硬件操作释放；`UFS saved rounds=N err=M` 表示已完成 N 轮保存、累计 M 次写入错误；`UFS held` 暂停写入；拒绝/停止原因也会显示。 |
+
+USB 同时把阶段和变化后的 DSTS/DCTL/event count/SMMU fault、IRQ、PMIC cable、复位/电源结果送入 `[usb]` 日志和内核消息缓冲；每秒至多一次状态快照。Wi-Fi 在每个完成的步骤更新行，运行时每秒刷新；详细 `[wifi]` 记录和现有 QMI 调试限流保持。截图包含三行即可先判断停在哪一层；完整日志供后续分析具体寄存器和固件交互。
+
+### 分区保存
+
+新 profile 默认添加 `pagani-ramoops=1 pagani-wifi-log=7 pagani-gpu-trace=0`，目前仍关闭磁盘写入。需要持久保存的下一版 payload 再加入 `sheng-log=1 pagani-ufslog-ms=3000`。启动参数变更须重新生成 payload/boot，不能让正在运行的 Run 41 追溯保存旧日志。
+
+复用 NativeUfs 的日志区：`unixnu` 分区末尾 32 MiB，绝对 4096 字节 LBA `61697792..61705983`，相对块 `16769024..16777215`。普通根卷和 DataStore 写入保持关闭。已有写入通道还包含其下方 256 MiB 的 export 区；本次不启用 Wi-Fi RDDM/其他大块导出，不能把底层接口描述成只有 32 MiB 写权限。
+
+写入前检查布局、GPT 和区域首尾内容，连续三轮写入失败或 GPT 变化会关闭日志窗口。现有内容门禁只读区域首尾，不能据此证明整个预留区为空；首次启用前应在 recovery 核对预留区用途和内容。USB 初始化与电源请求使用独立的 quiet bit 7：先给步骤记录落盘时间，再暂停 writer，正常退出和失败都释放该位；Wi-Fi 保留 bit 3。暂停沿用现有 writer 的 drain 等待机制，不能保证突然掉电无风险。该设备记录的 `bDataReliability=0`，异常掉电期间的 UFS 写入风险仍然存在。
+
+### 回到 recovery 后只读提取
+
+需要 recovery 的 root ADB，电脑上有 Python 3.11+ 和 adb。在设备仓库目录运行，序列号使用 `adb devices` 列出的值：
+
+```sh
+python3 scripts/read-recovery-ufslog.py --serial SERIAL --output ufslog-window.bin
+python3 ../UniXNU-OnePlus13T-reference/tools/gpu-test-loop/read-ufslog.py --from-file ufslog-window.bin --no-export --runs out/ufslog
+```
+
+Windows 可用 `py -3` 替换 `python3`，或通过 `--adb C:/path/to/adb.exe` 指定 adb。脚本用二进制管道读取，不依赖 PowerShell 的重定向编码；不会执行 `su`、手机端 `dd of=`、挂载、格式化或写分区。
+
+提取前要求 root、`/dev/block/by-name/unixnu` 的真实起点/容量与 `board.toml` 一致；固定核对完整 32 MiB 长度，拒绝覆盖已有输出。解码复用现有 CRC 校验与多快照合并工具。保留原始 `ufslog-window.bin` 和 `out/ufslog` 下本次解码目录；若内容全空，通常表示尚未启用保存；无法识别的内容应保留检查，不要清零。日志可能含设备和网络标识，分享前检查。
+
+### 本地验证
+
+新增状态行的实际渲染器、睡眠/唤醒、截断、边界和 panic 所有权检查通过；UfsLog writer、USB 硬件/quiet 位模型、Wi-Fi bring-up 的 17,739 项断言，以及 NativeUfs 的读写范围/日志端到端测试通过 ASan/UBSan。recovery 工具的 root、错误几何、短读、二进制保真及禁止覆盖检查通过。BootProgress、PaganiUsb 和 PaganiWifi 已通过实际 ARM64 组件编译；USB 的 21H461 ABI 检查通过。完整内核链接、云端构建和手机验证尚未执行；这些变更提供诊断信息，未证明修复 Wi-Fi 或 USB。
+
+
+## GPU / Wi-Fi / USB 合并构建（2026-11-07）
+
+用户已要求构建包含 GPU 调频与 Wi-Fi/USB 诊断的新内核。本轮重新生成 Metal profile，将前述全部改动纳入同一份源码输入，先跑 D 盘隔离工具链的完整内核，再运行全新的 GitHub Actions 构建和配套用户态/Data/trust 制作，不复用 Run 41 内核。日志参数保留 `pagani-ramoops=1 pagani-wifi-log=7 pagani-gpu-trace=0`，`sheng-log=1` 仍未启用。
+
+本地与云端结果待补充；当前阶段未生成新启动镜像，也未操作手机。
