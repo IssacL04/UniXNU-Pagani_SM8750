@@ -1614,14 +1614,14 @@ Run 41 用户实机反馈（2026-11-07）：已进入桌面。用户更正此前
 
 The user reports smoother composition at 342 MHz and visible desktop slowdown at 160 MHz. The candidate keeps profile 1 startup and enables the existing stepped thermal loop through explicit `pagani-gpu-ttarget=85`. The Metal profile adds `pagani-gpu-maxlevel=9` and `pagani-gpu-dcvs-min=342`, using stock DT points up to the existing ACD-off 734 MHz cap. Emergency limiting at 105°C and sensor-loss fallback remain active.
 
-`test_a830dcvs` passes 873 checks with ASan/UBSan, including the new profile 1 thermal path and original profile behavior; `scripts/test-metal-profile.py` passes. Local x86 cannot compile the ARM64 instructions in `test_start`; the native ARM64 workflow will run it. The complete local ARM64 kernel/prelink passes: 128819200 bytes, SHA-256 `e2bfaf0f18470a0fb90ee9aa5ed32477546705e201b629e31473677d71164d18`, saved under `/mnt/wsl/unixnu-build/artifacts/gpu-thermal-20261107/`. The fresh cloud build is pending. No phone operation is performed.
+`test_a830dcvs` passes 873 checks with ASan/UBSan, including the new profile 1 thermal path and original profile behavior; `scripts/test-metal-profile.py` passes. Local x86 cannot compile the ARM64 instructions in `test_start`; the native ARM64 workflow will run it. The complete local ARM64 kernel/prelink passes: 128819200 bytes, SHA-256 `e2bfaf0f18470a0fb90ee9aa5ed32477546705e201b629e31473677d71164d18`, saved under `/mnt/wsl/unixnu-build/artifacts/gpu-thermal-20261107/`. The combined Run 42 cloud build subsequently passed; see the build record below. No phone operation is performed.
 
 
 <a id="usb-wifi-logs"></a>
 
-## USB / Wi-Fi 日志补充（2026-11-07，尚未生成新启动镜像）
+## USB / Wi-Fi 日志补充（2026-11-07，已纳入 Run 42）
 
-Run 41 的最新实机反馈为：插线后电脑完全没有枚举反应，Wi-Fi 地址为 N/A；熄屏全黑和唤醒恢复日志已确认正常。本轮保留已完成的 GPU 342–734 MHz / 85°C 候选，只补 USB 和 Wi-Fi 的诊断；小组件问题暂停，完整内核和云端构建也暂停。
+Run 41 的最新实机反馈为：插线后电脑完全没有枚举反应，Wi-Fi 地址为 N/A；熄屏全黑和唤醒恢复日志已确认正常。诊断开发阶段保留 GPU 342–734 MHz / 85°C 候选，只补 USB 和 Wi-Fi 的诊断，并暂停小组件处理和完整构建。用户随后恢复合并构建，以下变更已纳入 Run 42。
 
 CPU 行下方增加三行，随显示探针区域下移，熄屏期间不绘制：
 
@@ -1656,11 +1656,24 @@ Windows 可用 `py -3` 替换 `python3`，或通过 `--adb C:/path/to/adb.exe` �
 
 ### 本地验证
 
-新增状态行的实际渲染器、睡眠/唤醒、截断、边界和 panic 所有权检查通过；UfsLog writer、USB 硬件/quiet 位模型、Wi-Fi bring-up 的 17,739 项断言，以及 NativeUfs 的读写范围/日志端到端测试通过 ASan/UBSan。recovery 工具的 root、错误几何、短读、二进制保真及禁止覆盖检查通过。BootProgress、PaganiUsb 和 PaganiWifi 已通过实际 ARM64 组件编译；USB 的 21H461 ABI 检查通过。完整内核链接、云端构建和手机验证尚未执行；这些变更提供诊断信息，未证明修复 Wi-Fi 或 USB。
+新增状态行的实际渲染器、睡眠/唤醒、截断、边界和 panic 所有权检查通过；UfsLog writer、USB 硬件/quiet 位模型、Wi-Fi bring-up 的 17,739 项断言，以及 NativeUfs 的读写范围/日志端到端测试通过 ASan/UBSan。recovery 工具的 root、错误几何、短读、二进制保真及禁止覆盖检查通过。BootProgress、PaganiUsb 和 PaganiWifi 已通过实际 ARM64 组件编译；USB 的 21H461 ABI 检查通过。后续完整内核与云端构建已通过，见下文；手机验证尚未执行。这些变更提供诊断信息，未证明修复 Wi-Fi 或 USB。
 
 
 ## GPU / Wi-Fi / USB 合并构建（2026-11-07）
 
 用户已要求构建包含 GPU 调频与 Wi-Fi/USB 诊断的新内核。本轮重新生成 Metal profile，将前述全部改动纳入同一份源码输入，先跑 D 盘隔离工具链的完整内核，再运行全新的 GitHub Actions 构建和配套用户态/Data/trust 制作，不复用 Run 41 内核。日志参数保留 `pagani-ramoops=1 pagani-wifi-log=7 pagani-gpu-trace=0`，`sheng-log=1` 仍未启用。
 
-本地与云端结果待补充；当前阶段未生成新启动镜像，也未操作手机。
+本地完整 ARM64 编译、最终链接和预链接通过。新内核为 128,819,200 字节，SHA-256 `a779853ec7f0a4be73069611131989dacc00ff2204582b463955c7c8fd89ad03`，保存在 `/mnt/wsl/unixnu-build/artifacts/gpu-wifi-usb-20261107/`。检查确认实际产物包含 WIFI/USB/LOG 文本，`boot_progress_io_row`、`pagani_wifi_start`、`pagani_usb_start`、`ufs_log_start` 位于可执行段并具备实际实现。本地预检沿用与已验证 Run 36 Data 镜像匹配的 UUID；云端重新生成配套 Data，不能混用两套输入。
+
+用户明确批准推送和 Actions 后，设备仓库提交 `9528af9` 与 v26 源码包已发布。源码包为 1,004,720 字节，SHA-256 `92271324f856786ef804330c93b524a2f34c937889f7353e0930516c847ee002`。[Run 42](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/42383781767) 已全部成功，移植记录 CI `42383768533` 通过。全新内核编译/链接/预链接、49 项 A830 检查（0 失败、0 跳过）、导入的 XNU 回归、Metal/Turnip/Wi-Fi 构建、签名 Data/trust 及 Metal 接口/编译器/堆复用/扫描输出回归全部通过。下载产物为 `oneplus13t-metal-42`（artifact `13580991125`），保存在 D 盘 `artifacts/actions-run42`，工作区入口为 `out/oneplus13t/actions/metal-main-42/`。
+
+| 产物 | 字节数 | SHA-256 |
+| --- | ---: | --- |
+| `kernel/kernel.macho` | 129638400 | `2d3e9494517870954a8b4e05384cfcc3528bbf2e2bdb4be064a5b277b564815e` |
+| `metal/data.dbrdisk` | 38790624 | `66d53c55d66cd4c59f18fd4ca37740bd9aabab45b176cb7d8a743375a785cc6b` |
+| `metal/owner-trust.bundle` | 61504 | `415b14f909368dcfe7d7f2a3db7f4af5e1ed9015c226f0aa005d62a00bc61563` |
+| `out/oneplus13t/boot/metal-main-42/boot.img` | 102273024 | `073a16ce49ababa5b638f49dee09f5018eab1e9a4427c426af316880fd254ec0` |
+
+配对 Data UUID 为 `E88AC71F-AF0E-485A-9077-4F7D81E3DC45`，完整 1 GiB 逻辑内容的 SHA-256 为 `e1284d812b03e842ad0f0dc7c38074b1d7224f70bbf464a616c78eca0d12fb13`。实际内核与云端哈希一致，新增诊断入口位于可执行段；Data 的逻辑内容、固件 pin、561 个原始 launchd job、owner CDHash 与原始 Apple trust 模块均已核对。
+
+使用现有 `package-integrated.py 42` 打包，保留 Run 36 已测 UEFI 和原机 DTB；176 MiB FAT、配套 kernel/Data/trust、实际 ADT wlan 节点和全部 GPU/Wi-Fi/USB/日志参数、Android v4 完整封装回读通过，Android ramdisk 为零。打包日志保存在 `out/oneplus13t/boot/metal-main-42/packaging.log`。UFS 持久日志参数仍未启用。本轮未操作手机；GPU 性能/温控、Wi-Fi 连接、USB 枚举待实机验证，小组件与冷启动问题没有新增修复结论。

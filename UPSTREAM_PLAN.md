@@ -107,18 +107,20 @@ Linux 预检能覆盖大量编译和链接错误，但 Apple Clang、SDK、macOS
 
 用户观察到 342 MHz 时较流畅，降到 160 MHz 后桌面明显卡顿，并要求提高动态频率和各档降频温度。候选保留 profile 1 的启动、纯 bus 投票及失败停止行为，显式 `pagani-gpu-ttarget` 改为选择现有逐档温控。Metal 参数为 `pagani-gpu-maxlevel=9 pagani-gpu-dcvs-min=342 pagani-gpu-ttarget=85`。使用原 DT 频点 342/389/443/525/607/660/734 MHz，ACD 保持关闭。
 
-85°C 以上且温度未下降时每 500 ms 降一档上限，常规温控最低上限为 525 MHz；80°C 以下持续 2 秒后每次恢复一档。105°C 立即限到 389 MHz，低于 100°C 后恢复；传感器持续失效时上限 607 MHz。GPU 正常空闲底频为 342 MHz，触摸和唤醒提升沿用 525 MHz。`test_a830dcvs` 的 873 项 ASan/UBSan 检查与 profile 检查通过，启动参数回归待原生 ARM64 CI。完整本地 ARM64 内核编译、链接和预链接通过，产物为 128,819,200 字节，SHA-256 `e2bfaf0f18470a0fb90ee9aa5ed32477546705e201b629e31473677d71164d18`，保存在 `/mnt/wsl/unixnu-build/artifacts/gpu-thermal-20261107/`。云端配套构建待完成。
+85°C 以上且温度未下降时每 500 ms 降一档上限，常规温控最低上限为 525 MHz；80°C 以下持续 2 秒后每次恢复一档。105°C 立即限到 389 MHz，低于 100°C 后恢复；传感器持续失效时上限 607 MHz。GPU 正常空闲底频为 342 MHz，触摸和唤醒提升沿用 525 MHz。`test_a830dcvs` 的 873 项 ASan/UBSan 检查与 profile 检查通过，启动参数回归已随 Run 42 的原生 ARM64 驱动检查通过。完整本地 ARM64 内核编译、链接和预链接通过，产物为 128,819,200 字节，SHA-256 `e2bfaf0f18470a0fb90ee9aa5ed32477546705e201b629e31473677d71164d18`，保存在 `/mnt/wsl/unixnu-build/artifacts/gpu-thermal-20261107/`。后续 Run 42 已完成包含 USB/Wi-Fi 诊断的完整云端构建，见下文。
 
 提高频率和温控目标可能增加发热与耗电，仍需实机持续负载验证。Wi-Fi、USB 枚举、小组件和冷启动问题沿用 Run 41 的未解决记录。本轮不重启手机。
 
 
 ## USB / Wi-Fi 可观察性跟进
 
-用户将本轮范围收敛为较高 GPU 动态频率及 USB/Wi-Fi，暂停小组件处理和新内核构建。Run 41 的 USB 无枚举、Wi-Fi 地址 N/A，需要新的初始化证据。BootProgress 增加 WIFI/USB/LOG 三行，驱动记录完成/失败步骤、MAC 发布和电缆/IRQ/控制器状态。RAM 日志加入候选参数，磁盘保存保留 `sheng-log=1` 显式开关；USB 的独立 quiet bit 避免在高风险初始化时继续日志写入。recovery 读取脚本核对本机分区几何，仅导出末尾 32 MiB，解析复用现有工具。
+诊断开发期间，用户将范围收敛为较高 GPU 动态频率及 USB/Wi-Fi，曾暂停小组件处理和新内核构建；后续合并构建已恢复并完成。Run 41 的 USB 无枚举、Wi-Fi 地址 N/A，需要新的初始化证据。BootProgress 增加 WIFI/USB/LOG 三行，驱动记录完成/失败步骤、MAC 发布和电缆/IRQ/控制器状态。RAM 日志加入候选参数，磁盘保存保留 `sheng-log=1` 显式开关；USB 的独立 quiet bit 避免在高风险初始化时继续日志写入。recovery 读取脚本核对本机分区几何，仅导出末尾 32 MiB，解析复用现有工具。
 
-主机回归和三个 ARM64 组件编译已通过，完整内核/云端构建未启动。详见 [日志状态及 recovery 命令](STAGE6.md#usb-wifi-logs)。旧 v25 源码包只包含 GPU 候选；恢复构建前需重新打包本轮日志修改。
+诊断开发阶段的主机回归和三个 ARM64 组件编译已通过；后续完整构建结果见下文。详见 [日志状态及 recovery 命令](STAGE6.md#usb-wifi-logs)。v26 已替换只包含 GPU 候选的 v25，纳入全部日志修改。
 
 
 ### 合并构建已恢复
 
-用户随后明确要求生成包含 GPU 调频和 Wi-Fi/USB 诊断的新内核。本次构建将更新源码包，使用完整本地内核预检与全新 Actions 运行，最终校验配套的 kernel/Data/trust 和 boot.img。持久日志仍为显式开关，手机操作不在本轮范围内。
+用户随后要求合并构建，并明确批准推送与 Actions。设备源码 `9528af9` 和 v26 源码包已发布；[Run 42](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/42383781767) 通过全新内核编译/链接/预链接、49 项 A830 检查（0 失败、0 跳过）、导入的 XNU 回归、Metal/Turnip/Wi-Fi 构建、签名 Data/trust 和全部 Metal 主机回归。
+
+本地启动镜像为 `out/oneplus13t/boot/metal-main-42/boot.img`，102,273,024 字节，SHA-256 `073a16ce49ababa5b638f49dee09f5018eab1e9a4427c426af316880fd254ec0`。实际内核与云端哈希、Data UUID/完整内容、固件记录、owner/Apple trust、FAT 文件和启动参数、Android v4 封装回读全部通过。持久日志仍关闭；本轮未操作手机，GPU 持续负载与温控、Wi-Fi 连接和 USB 枚举待实机验证。
