@@ -1636,7 +1636,7 @@ USB 同时把阶段和变化后的 DSTS/DCTL/event count/SMMU fault、IRQ、PMIC
 
 ### 分区保存
 
-新 profile 默认添加 `pagani-ramoops=1 pagani-wifi-log=7 pagani-gpu-trace=0`，目前仍关闭磁盘写入。需要持久保存的下一版 payload 再加入 `sheng-log=1 pagani-ufslog-ms=3000`。启动参数变更须重新生成 payload/boot，不能让正在运行的 Run 41 追溯保存旧日志。
+Run 42 至第五份 I/O 镜像使用 `pagani-ramoops=1 pagani-wifi-log=7 pagani-gpu-trace=0`，只存内存。2026-11-08 用户明确要求落盘后，当前 Metal profile 加入 `sheng-log=1 pagani-ufslog-ms=3000`，已重新生成独立启动镜像。当前运行中的第五份镜像无法追溯保存旧日志，须重新启动落盘镜像后采集。
 
 复用 NativeUfs 的日志区：`unixnu` 分区末尾 32 MiB，绝对 4096 字节 LBA `61697792..61705983`，相对块 `16769024..16777215`。普通根卷和 DataStore 写入保持关闭。已有写入通道还包含其下方 256 MiB 的 export 区；本次不启用 Wi-Fi RDDM/其他大块导出，不能把底层接口描述成只有 32 MiB 写权限。
 
@@ -1821,3 +1821,16 @@ Linux 完整内核/预链接、诊断入口和字符串、Run 42 Data UUID/内�
 用户确认回到 Fastboot 后，再次核对镜像 SHA-256、设备序列号和 `sun` / `is-userspace: no`。2026-11-08 03:18:29（Asia/Shanghai）执行第五份镜像的临时 `fastboot boot`，Sending `OKAY` 2.336 秒、Booting `OKAY` 0.337 秒，总计 3.076 秒，退出码 0。未刷写分区；日志位于镜像旁的 `fastboot-boot-20261108-031829.log`。桌面状态及新增 `WIFI R` 崩溃记录等待观察。
 
 03:19:08 首次检查时 Fastboot 已消失，Windows 尚无匹配 USB 设备。03:19:48 复查出现 `05AC:12AB`，Apple Mobile Device USB Composite Device 和 USB Device 均为 OK，确认第五份镜像仍可完成 USB 枚举。配对与数据服务未测试。
+
+
+### 第五份内核的 UFS 日志镜像（2026-11-08）
+
+用户表示屏幕轮显难以抄录，明确要求把日志写入存储，并确认第三方 recovery 与 Android root ADB 均可用。本轮只在 Metal profile 启用现有 UFS writer，每 3 秒保存；不改内核、校准流程或日志格式。`pagani-wifi-log=7` 保持完整固件二进制导出关闭，保存内核消息及 ramoops 中的 Wi-Fi/USB/RDDM 文本。底层日志接口仍包含其下方 256 MiB export 区，本次参数不请求写入该区。
+
+镜像为 `out/oneplus13t/boot/metal-main-local-io5-ufslog-20261108/boot.img`，102,178,816 字节，SHA-256 `5db6d78cff20fad41de257e76311367c6bcb63ab49bfa00ec405338c595b6cdd`。沿用第五份内核 `d8f8549e…`、v31 源输入、Run 42 Data/trust 和已验证 UEFI/DTB。实际 FAT/ADT 参数与完整 Android v4 容器读回通过。profile 隔离检查、recovery root/几何/短读/二进制/拒绝覆盖检查和现有 UFS writer ASan/UBSan 均通过；其真实输出样本由现有 reader 解码出 1,129 条 CRC 验证记录。
+
+首次启用顺序：先进入 root recovery，用上方读取命令备份完整 32 MiB 到新的 `ufslog-before.bin` 并核对内容。确认预留区后，以 `adb reboot bootloader` 回到 Fastboot，再临时启动本镜像。进入系统后等待至少 30 秒，并确认 `LOG UFS saved rounds=N err=0` 的 N 增长；`waiting`、`held` 或 `refused` 不能作为保存成功证据。
+
+采集后优先使用系统关机界面，待关机完成再进入 recovery。关机后电源键加音量减是[一加官方手册](https://service.oneplus.com/content/dam/support/user-manuals/common/OnePlus_11_5G_User_Manual_EN.pdf)列出的 recovery 组合；若已在 Android，用 `adb reboot recovery`，若已在 Fastboot，用 `fastboot reboot recovery`。进入 recovery 后重新列出 ADB 序列号，再按上方命令读到新的 `ufslog-window.bin` 并离线解码。不要在导出前再次启动启用日志的 UniXNU 镜像，因为新一轮会重写日志头。Fastboot 本身不提供这份脚本使用的 root shell/分区片段读取，实际提取通过 recovery ADB 完成。
+
+当前落盘镜像尚未启动，预留区的 recovery 检查与实际日志保存/导出仍待执行。持久写入受现有范围门禁与电源键暂停保护，但异常掉电期间的 UFS 风险仍存在。

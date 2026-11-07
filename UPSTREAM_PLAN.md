@@ -163,3 +163,6 @@ Linux 预检能覆盖大量编译和链接错误，但 Apple Clang、SDK、macOS
 
 
 完整日志进一步定位到校准 mode 7 期间的固件 system error，后续 INI `-5` 是下游错误，AUX 的 error 90 是状态不兼容。第五轮候选修复现有 RDDM 读取器被零调试掩码屏蔽的问题，屏幕优先显示崩溃记录；校准与微码策略保持。针对性 ASan/UBSan 检查、完整 Linux ARM64 内核/预链接及配对镜像读回均通过；第五份镜像为 `out/oneplus13t/boot/metal-main-local-io5-20261108/boot.img`，源输入 v31，沿用 Run 42 Data/trust。用户确认 Fastboot 就绪后，03:18:29 临时启动获 Sending/Booting OKAY，总计 3.076 秒，无分区刷写。03:19:48 Windows 再次枚举两个状态正常的 05AC:12AB Apple USB 设备；Wi-Fi 崩溃根因仍需新增固件断言。
+
+
+用户要求把滚动日志保存到存储。当前 Metal profile 启用 `sheng-log=1 pagani-ufslog-ms=3000`；独立镜像 `out/oneplus13t/boot/metal-main-local-io5-ufslog-20261108/boot.img` 复用第五份内核，参数及容器读回、writer 与 recovery reader 检查通过。首次启用前先在 root recovery 备份并核对 `unixnu` 末尾日志区，随后临时启动和采集。实际保存及导出尚未验证；完整 RDDM 二进制导出保持关闭。
