@@ -1628,6 +1628,7 @@ CPU 行下方增加三行，随显示探针区域下移，熄屏期间不绘制�
 | 行 | 字段 |
 | --- | --- |
 | `WIFI s… e… fw… net… mac… irq…` | `s` 为最后完成或失败的步骤；负数是失败步骤，`e` 为初始化或协议栈错误。101–104 为硬件调查，201–208 为供电，301–307 为 PCIe，401–406 为端点/DMA，501–506 为独立固件加载，601/602/603 为协议栈启动/启动返回/网络服务发布。`fw` 是协议栈内部阶段，`net=1` 为网络服务发布。`mac` 是位掩码：1=从 unique-chip-id 推导，2=`/chosen` 属性存在，4=`arm-io/wlan` 属性存在；7 表示这三项完成，不代表已经联网。`irq` 为 MSI 次数。 |
+| `WIFI s… e… pm… p… a…` | 后续候选在 PMIC 读取失败时使用此行：`pm` 是底层错误，`p` 是十六进制 PPID，`a` 是 APID（查找失败时为负数）。-19=无通道，-13=拒绝，-11=丢弃，-5=失败，-110=超时，-95=布局不支持，-14=MMIO 映射失败。 |
 | `USB s… d… irq… c… ds… fs…` | 1=线程启动，2=映射，3=供电，4=时钟，5=PMIC repeater，6=PHY，7=core reset，8=DMA，9=硬件准备完成，10=加载 AppleUSBXDCI，11=发布控制器，12=已发布/等待接线，13=检测到接线，14=请求电源状态。负数为失败；`d` 是十六进制详情，`c=-1/0/1` 为未知或读取失败/未接线/接线，`ds` 为 DSTS，`fs` 为 SMMU fault。检测到接线不能证明 USB 枚举成功。 |
 | `LOG …` | `RAM only; UFS off` 仅存内存；`waiting` 等待根布局或硬件操作释放；`UFS saved rounds=N err=M` 表示已完成 N 轮保存、累计 M 次写入错误；`UFS held` 暂停写入；拒绝/停止原因也会显示。 |
 
@@ -1684,3 +1685,24 @@ Windows 可用 `py -3` 替换 `python3`，或通过 `--adb C:/path/to/adb.exe` �
 用户确认 Fastboot 已连接并要求测试。启动前重新核对 `boot.img` 的 102,273,024 字节大小和 SHA-256 `073a16ce49ababa5b638f49dee09f5018eab1e9a4427c426af316880fd254ec0`，目标为 `3B15BB01BAT00000`、产品 `sun`、`is-userspace=no`。北京时间 01:02:43 使用指定 Windows platform-tools 执行 `fastboot -s 3B15BB01BAT00000 boot <Run 42 boot.img>`；Sending 返回 OKAY（2.300 秒），Booting 返回 OKAY（0.337 秒），总耗时 3.043 秒，退出码 0。未刷写分区。日志为 `out/oneplus13t/boot/metal-main-42/fastboot-boot-20261108-010243.log`。
 
 01:03:14 的只读主机检查确认设备已离开 Fastboot，Windows 未发现匹配的 Apple/手机 USB 设备或 USB 错误。用户随后确认 Run 42 已进入桌面。01:18:00 再次只读检查 Windows，仍未发现匹配的 Apple/手机 USB 设备或 USB 错误。系统启动已通过本次人工观察；GPU 频率/温度、流畅度和 WIFI/USB/LOG 三行数值尚未取得，不能据此确认调频效果或 Wi-Fi/USB 可用性。
+
+
+## Run 42 的 USB / Wi-Fi 停点与修复候选（2026-11-08）
+
+用户确认运行更流畅，但 App Library 和应用冷启动仍有长帧，小组件仍不可见。截图显示 GPU 734 MHz、71°C，SLOW 约 555 ms、gap 约 557 ms、copy 约 9.7 ms。用户要求先处理 Wi-Fi 和 USB；GPU/小组件的进一步分析延后。截图没有进程崩溃记录，不能据此确认组件反复崩溃。
+
+本次截图的 Wi-Fi 为 `s-202 e-3 fw0 net0 mac3 irq0`，USB 为 `s-7 d0 irq0 c-1 ds0 fs0`，LOG 为 RAM only / UFS off。Wi-Fi 停在 S7I 读取失败、尚未投票七路电源和加载固件；USB 已越过电源、时钟、repeater、PHY 与控制器复位，停在 DMA 准备，尚未发布 AppleUSBXDCI。
+
+USB 规划器错误要求 OAS 至少 40 位，而此前本机只读采集为 `IDR0=0x4c017e84 IDR1=0x60000053 IDR2=0x5111`，IAS/OAS/UBS 均为 36 位。这些实际值让旧实现的主机回归失败；候选接受 36 位，TCR2.PASize 与页表物理地址上限同步改为 36 位，保留 2–64 GiB identity table、stream 冲突、context bank 占用和映射边界检查。修复后的 ASan/UBSan 模型通过。`s-7` 的 detail 分别为 map 1、锁 2、规划 3、分配 4、prepare 5、物理地址 6、TLB 超时 7、读回 8。
+
+Wi-Fi 的 `0x8ad` 与原机 `regulator-ocp-notifier/periph-8ad-supply` 对应的 S7I 一致；SPMI 主总线与 observer 布局也与原机 DT 和同版 Linux 驱动一致。现有信息不足以确认失败来自 APID 缺失、权限、超时还是版本检查。候选保留 PMIC 返回码，屏幕失败行显示 `pm` 错误、`p` PPID、`a` APID；RAM/IOLog 保留 owner、原始 status、arbiter version/count。读取错误与 RPMh 投票错误分开保存。拒绝/丢弃/失败/超时和 S7I 失败后零投票回归通过：PMIC 1,313 项、bring-up 17,741 项检查。没有启用跳过 S7I 检查的参数。
+
+### 本地测试镜像
+
+D 盘隔离工具链执行完整 `./unixnu kernel -j 6`，ARM64 组件编译、USB 21H461 ABI 检查、最终链接和预链接通过。日志为 `/mnt/wsl/unixnu-build/artifacts/logs/usb36-wifi-pmic-20261108.log`；实际内核包含新的 PMIC 错误格式和强 Wi-Fi/USB/诊断入口，配对 UUID 为 Run 42 的 `E88AC71F-AF0E-485A-9077-4F7D81E3DC45`。这是本地 Linux 构建，不是新的 Actions 结果。用户态未变，沿用 Run 42 已验证的 Metal/Wi-Fi Data 与 trust，完整逻辑 Data、固件 pin、561 个原始 launchd job、CDHash 和原版 Apple trust 再次核对通过。
+
+- 内核：`out/oneplus13t/actions/metal-main-local-io-20261108/kernel/kernel.macho`，128,819,200 字节，SHA-256 `dea263b48d027778d5946ad02ef2944b1e4fb4b3743d843b48a206f2ddcebecd`。
+- 启动镜像：`out/oneplus13t/boot/metal-main-local-io-20261108/boot.img`，102,178,816 字节，SHA-256 `64d131c39681d36ecb6dc63bccdde19ecc43456216f728d63641402283f06ab5`。
+- 源码输入：`.ci-inputs/oneplus13t-integrated-sources-20261108-v27.tar.gz`，393,541 字节，SHA-256 `5db5f85b9636f95b2e5aa384442751393c6413e45b3786f7edfdfdebe674a575`；七个源码仓库，不含固件或运行时 DTB。
+
+保持原 Run 42 的 GPU/Wi-Fi/USB 参数、已测 UEFI 和原机 DTB。实际 FAT 中的 kernel/Data/trust、wlan ADT、启动参数及完整 Android v4 镜像读回通过，打包日志为镜像旁的 `packaging.log`。UFS 持久日志仍关闭。本轮没有重启或刷写手机；USB 枚举及 Wi-Fi 根因仍需下一次临时启动的 `USB` 和 `WIFI pm/p/a` 行确认。

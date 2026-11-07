@@ -127,3 +127,12 @@ Linux 预检能覆盖大量编译和链接错误，但 Apple Clang、SDK、macOS
 
 
 2026-11-08，用户连接 Fastboot 并要求测试。Run 42 镜像哈希和 `sun`/bootloader 身份核对后，临时 `fastboot boot` 的传输与启动均返回 OKAY，总耗时 3.043 秒，未刷写分区。设备已离开 Fastboot；第一次 Windows 检查未见 Apple/手机 USB 枚举或 USB 错误。用户随后确认 Run 42 已进入桌面；01:18:00 再次检查 Windows，仍未见 Apple/手机 USB 设备或 USB 错误。GPU 调频效果及新诊断行数值待观察，详见 STAGE6.md。
+
+
+### Run 42 实机停点跟进
+
+2026-11-08 用户截图确认 Wi-Fi 停在 `-202/-3`（S7I 电源状态读取），USB 停在 `-7`（DMA）。USB 使用本机 SMMU 的 36 位地址能力修复错误的 40 位前置条件，并同步 TCR2/页表地址检查。真实 ID 回归先失败、修复后通过。Wi-Fi 的 PPID 与原机 DT 一致，底层错误此前被丢弃；候选增加具体 PMIC 返回码、APID 和原始控制器状态，保留 S7I 读取失败即停止的保护。
+
+用户观察到 GPU 较流畅，App Library/冷启动长帧和小组件仍有问题，本轮依其要求延后。当前截图不能证明进程反复崩溃；Wi-Fi/USB 的功能恢复仍需新内核的实机结果。
+
+本地完整 ARM64 内核和预链接已通过，配对 Run 42 的未变签名 Data/trust，生成 `out/oneplus13t/boot/metal-main-local-io-20261108/boot.img`。实际内容、Data UUID、固件/trust、FAT/ADT/参数和 Android v4 读回通过；源码包为 v27。这次未运行新的 macOS Actions，也未操作手机。下一步需要临时启动该镜像，确认 USB 是否越过 DMA，并读取 Wi-Fi 的具体 PMIC 错误。
