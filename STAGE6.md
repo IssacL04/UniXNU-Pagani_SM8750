@@ -1730,3 +1730,10 @@ USB 保留规划器的全部拒绝条件，新增 `p/r/v/x`：原因、寄存器
 - 源码包：`.ci-inputs/oneplus13t-integrated-sources-20261108-v28.tar.gz`，428,125 字节，SHA-256 `f5336cff429ed0d7a8004aa5cef4381f362f87d12299645ccf83d617028f3b8b`。
 
 实际内核含 RF_CLK1 请求和新的 WIFI/USB 格式；配对 Run 42 UUID `E88AC71F-AF0E-485A-9077-4F7D81E3DC45`。完整 Data、固件 pin、561 个原始 launchd job、owner CDHash、原版 Apple trust，以及 FAT 文件、wlan ADT、启动参数和 Android v4 封装读回通过。保留原 GPU 参数、已测 UEFI/DTB、UFS 持久日志关闭。旧 local-io 镜像保留。第二轮候选尚未临时启动，Wi-Fi 连接和 USB 枚举仍未恢复验证。
+
+
+### 第二轮候选临时启动
+
+用户确认 Fastboot 已连接并要求继续测试。2026-11-08 02:11:06 +08:00，核对第二轮镜像大小/SHA-256、设备 `3B15BB01BAT00000`、产品 `sun` 和 `is-userspace=no` 后，执行临时 `fastboot boot`。Sending 返回 OKAY（2.329 秒），Booting 返回 OKAY（0.337 秒），总耗时 3.123 秒，退出码 0，未刷写分区。日志为 `out/oneplus13t/boot/metal-main-local-io2-20261108/fastboot-boot-20261108-021106.log`。
+
+02:11:23 首次只读检查仍看到 Android Bootloader Interface，fastboot 序列号暂显示问号。02:12:03 再次检查确认该接口消失，fastboot 无设备，Windows 未发现匹配的 Apple/手机 USB 设备或 USB 错误。尚未收到新镜像的界面状态和完整 WIFI/USB 行；无法据此认定 PCIe 或 SMMU 停点已越过。未执行再次启动或重启。

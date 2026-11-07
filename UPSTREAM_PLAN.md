@@ -141,3 +141,6 @@ Linux 预检能覆盖大量编译和链接错误，但 Apple Clang、SDK、macOS
 
 
 第二轮实机读数为 Wi-Fi `-306/-11`（PCIe 未进入 L0）和 USB `-7/d3`（SMMU 规划拒绝）。候选补上 WLAN_EN 前的 RF_CLK1 请求，并在屏幕保留 PCIe debug/PHY/clock 状态及 SMMU 拒绝原因/寄存器值。主机回归通过，保留 S7I、SID 冲突与 bank 占用检查；完整 ARM64 内核/预链接及配对镜像读回通过，第二轮镜像为 `out/oneplus13t/boot/metal-main-local-io2-20261108/boot.img`，源码包 v28，沿用 Run 42 的未变 Data/trust。尚未临时启动；GPU/小组件继续延后。
+
+
+用户随后确认 Fastboot 已连接。第二轮镜像于 2026-11-08 02:11:06 临时启动，传输和 Booting 均 OKAY，总耗时 3.123 秒，未刷写。启动过渡期短暂出现 bootloader 接口，02:12:03 已消失；Windows 未见 Apple/手机 USB 枚举或 USB 错误。新的 WIFI/USB 诊断和系统界面状态待用户观察。
