@@ -74,7 +74,7 @@ Peach 全栈检查还复现并修复了 MHI 上下文指针丢失 4 字节对齐
 
 配置与 USB 时钟、PHY、复位、SMMU 所有权模型检查通过；首次完整链接发现中断函数名称不匹配，已改用现有 `armcpu_spi_enable/disable`。清缓存后的策略输入恢复现已纳入构建入口。完整本地编译、链接和 USB 原版栈预链接通过，日志为 `/mnt/wsl/unixnu-build/artifacts/logs/wifi-usb-sleep-20261107-retry2.log`，内核 SHA-256 为 `a2dd30c00332094200361fab1f58e0962992e7c5ae51e0ee0450a06c5fa2c2d3`。
 
-[Run 41](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/42299358397) 使用设备提交 `38ba795` 和 v24 源码包，完成全新内核、49 项 A830 检查、XNU 补丁检查、Metal/Turnip、Wi-Fi 服务、签名 Data/trust 和 Metal 主机回归。新镜像为 `out/oneplus13t/boot/metal-main-41/boot.img`，102,264,832 字节，SHA-256 `b98238f44254083f1b1601af6ce339b2145acf38e17cc1abdae5d7ec7f09301f`。配套 UUID、Data 内容、trust、内核新增入口、FAT 文件、`pagani-wifi=6 pagani-usb=1`、wlan 节点和 Android v4 封装回读均通过。Run 40 镜像保留；本轮未操作手机，详细产物记录见 [STAGE6.md](STAGE6.md)。
+[Run 41](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/42299358397) 使用设备提交 `38ba795` 和 v24 源码包，完成全新内核、49 项 A830 检查、XNU 补丁检查、Metal/Turnip、Wi-Fi 服务、签名 Data/trust 和 Metal 主机回归。新镜像为 `out/oneplus13t/boot/metal-main-41/boot.img`，102,264,832 字节，SHA-256 `b98238f44254083f1b1601af6ce339b2145acf38e17cc1abdae5d7ec7f09301f`。配套 UUID、Data 内容、trust、内核新增入口、FAT 文件、`pagani-wifi=6 pagani-usb=1`、wlan 节点和 Android v4 封装回读均通过。Run 40 镜像保留。随后于 2026-11-07 21:41 经用户授权执行 Run 41 临时启动，Sending/Booting 均返回 OKAY，总计 3.208 秒，未刷写分区；设备已退出 fastboot，首次电脑检查尚未发现 Apple USB 枚举。系统启动、Wi-Fi 和灭屏效果等待用户观察，详细产物与启动记录见 [STAGE6.md](STAGE6.md)。
 
 ## 推送前的本地编译检查
 

@@ -1605,3 +1605,5 @@ Run 40 的后续用户观察已确认桌面、应用内显示和亮灭屏可以�
 桌面截图中的 GPU 160 MHz / 68°C 与 profile 1 的 70°C 进入、60°C 解除降频规则相符，尚未证明它造成全部白屏和掉帧。已有上游双平面纹理、GPU 授权和连续分配退避修复均已核对；LaunchServices 扩展注册仍需运行日志。温控、GPU 启动 profile、SYSMEM 和内存窗保持当前配置。
 
 手动验收依次记录：正常启动与灭屏时全屏黑；Wi-Fi 启动阶段、扫描、关联、DHCP 和断线重连；电脑侧 USB 枚举、USBMux 和重新插拔。再分别观察冷启动、负一屏和小组件，保留对应时间的日志。构建检查不等于这些硬件功能已经通过。本轮未操作手机。
+
+后续临时启动（2026-11-07 21:41:19，Asia/Shanghai）：用户确认 fastboot 已连接并要求测试。核对上述 Run 41 镜像的大小和 SHA-256 一致，目标为 `3B15BB01BAT00000`、`product=sun`、`is-userspace=no`，随后执行 `fastboot boot`。Sending 2.329 秒、Booting 0.336 秒均返回 `OKAY`，总计 3.208 秒，未刷写分区。日志为 `out/oneplus13t/boot/metal-main-41/fastboot-boot-20261107-214119.log`。21:42:37 的只读检查显示设备已退出 fastboot，Windows 未发现 Apple USB 设备或所筛选厂商的 USB 接口；这不能证明系统已进入桌面或 USB 初始化成功。桌面启动、Wi-Fi、USB 和灭屏效果等待用户观察。
