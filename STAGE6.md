@@ -1677,3 +1677,10 @@ Windows 可用 `py -3` 替换 `python3`，或通过 `--adb C:/path/to/adb.exe` �
 配对 Data UUID 为 `E88AC71F-AF0E-485A-9077-4F7D81E3DC45`，完整 1 GiB 逻辑内容的 SHA-256 为 `e1284d812b03e842ad0f0dc7c38074b1d7224f70bbf464a616c78eca0d12fb13`。实际内核与云端哈希一致，新增诊断入口位于可执行段；Data 的逻辑内容、固件 pin、561 个原始 launchd job、owner CDHash 与原始 Apple trust 模块均已核对。
 
 使用现有 `package-integrated.py 42` 打包，保留 Run 36 已测 UEFI 和原机 DTB；176 MiB FAT、配套 kernel/Data/trust、实际 ADT wlan 节点和全部 GPU/Wi-Fi/USB/日志参数、Android v4 完整封装回读通过，Android ramdisk 为零。打包日志保存在 `out/oneplus13t/boot/metal-main-42/packaging.log`。UFS 持久日志参数仍未启用。本轮未操作手机；GPU 性能/温控、Wi-Fi 连接、USB 枚举待实机验证，小组件与冷启动问题没有新增修复结论。
+
+
+### Run 42 临时启动（2026-11-08）
+
+用户确认 Fastboot 已连接并要求测试。启动前重新核对 `boot.img` 的 102,273,024 字节大小和 SHA-256 `073a16ce49ababa5b638f49dee09f5018eab1e9a4427c426af316880fd254ec0`，目标为 `3B15BB01BAT00000`、产品 `sun`、`is-userspace=no`。北京时间 01:02:43 使用指定 Windows platform-tools 执行 `fastboot -s 3B15BB01BAT00000 boot <Run 42 boot.img>`；Sending 返回 OKAY（2.300 秒），Booting 返回 OKAY（0.337 秒），总耗时 3.043 秒，退出码 0。未刷写分区。日志为 `out/oneplus13t/boot/metal-main-42/fastboot-boot-20261108-010243.log`。
+
+01:03:14 的只读主机检查确认设备已离开 Fastboot，Windows 未发现匹配的 Apple/手机 USB 设备或 USB 错误。该结果只记录当时的主机枚举状态；系统是否进入桌面、GPU 频率/温度及 WIFI/USB/LOG 三行数值等待用户观察。

@@ -124,3 +124,6 @@ Linux 预检能覆盖大量编译和链接错误，但 Apple Clang、SDK、macOS
 用户随后要求合并构建，并明确批准推送与 Actions。设备源码 `9528af9` 和 v26 源码包已发布；[Run 42](https://github.com/IssacL04/UniXNU-Pagani_SM8750/actions/runs/42383781767) 通过全新内核编译/链接/预链接、49 项 A830 检查（0 失败、0 跳过）、导入的 XNU 回归、Metal/Turnip/Wi-Fi 构建、签名 Data/trust 和全部 Metal 主机回归。
 
 本地启动镜像为 `out/oneplus13t/boot/metal-main-42/boot.img`，102,273,024 字节，SHA-256 `073a16ce49ababa5b638f49dee09f5018eab1e9a4427c426af316880fd254ec0`。实际内核与云端哈希、Data UUID/完整内容、固件记录、owner/Apple trust、FAT 文件和启动参数、Android v4 封装回读全部通过。持久日志仍关闭；本轮未操作手机，GPU 持续负载与温控、Wi-Fi 连接和 USB 枚举待实机验证。
+
+
+2026-11-08，用户连接 Fastboot 并要求测试。Run 42 镜像哈希和 `sun`/bootloader 身份核对后，临时 `fastboot boot` 的传输与启动均返回 OKAY，总耗时 3.043 秒，未刷写分区。设备已离开 Fastboot；第一次 Windows 检查未见 Apple/手机 USB 枚举或 USB 错误。系统启动与新诊断行的实机结果待用户观察，详见 STAGE6.md。
