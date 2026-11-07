@@ -166,3 +166,6 @@ Linux 预检能覆盖大量编译和链接错误，但 Apple Clang、SDK、macOS
 
 
 用户要求把滚动日志保存到存储。当前 Metal profile 启用 `sheng-log=1 pagani-ufslog-ms=3000`；独立镜像 `out/oneplus13t/boot/metal-main-local-io5-ufslog-20261108/boot.img` 复用第五份内核，参数及容器读回、writer 与 recovery reader 检查通过。首次启用前先在 root recovery 备份并核对 `unixnu` 末尾日志区，随后临时启动和采集。实际保存及导出尚未验证；完整 RDDM 二进制导出保持关闭。
+
+
+TWRP root ADB 已验证分区边界并完整备份 32 MiB 日志区，内容全零；reader 的 Windows adb 多余引号已修正并通过实际读取。03:30:55 按用户确认的流程临时启动落盘镜像，Sending/Booting OKAY，3.069 秒，无分区镜像刷写。下一步回 recovery 导出实际日志并核验 CRC。

@@ -1833,4 +1833,9 @@ Linux 完整内核/预链接、诊断入口和字符串、Run 42 Data UUID/内�
 
 采集后优先使用系统关机界面，待关机完成再进入 recovery。关机后电源键加音量减是[一加官方手册](https://service.oneplus.com/content/dam/support/user-manuals/common/OnePlus_11_5G_User_Manual_EN.pdf)列出的 recovery 组合；若已在 Android，用 `adb reboot recovery`，若已在 Fastboot，用 `fastboot reboot recovery`。进入 recovery 后重新列出 ADB 序列号，再按上方命令读到新的 `ufslog-window.bin` 并离线解码。不要在导出前再次启动启用日志的 UniXNU 镜像，因为新一轮会重写日志头。Fastboot 本身不提供这份脚本使用的 root shell/分区片段读取，实际提取通过 recovery ADB 完成。
 
-当前落盘镜像尚未启动，预留区的 recovery 检查与实际日志保存/导出仍待执行。持久写入受现有范围门禁与电源键暂停保护，但异常掉电期间的 UFS 风险仍存在。
+落盘镜像已在下述预检后临时启动，实际日志保存/导出仍待执行。持久写入受现有范围门禁与电源键暂停保护，但异常掉电期间的 UFS 风险仍存在。
+
+
+用户确认进入 recovery 后，实际识别 PKX110 / `3.7.1_16-OnePlus_13_T`，`id -u` 为 0，目标节点为 `/dev/block/sda16`。原 reader 在 Windows `adb.exe` 下把多余的 `sh -c` 引号带入远端，`id -u` 被当作单个程序名，造成 root 误判。改为直接传给 `exec-out` 的命令字符串；实际身份、链接与二进制零字节读取恢复正常，原 root/几何/短读/禁止覆盖检查仍通过。
+
+修正后的 reader 核对起点和容量与 `board.toml` 一致，完整读取 33,554,432 字节到 `out/oneplus13t/logs/ufslog-before-20261108.bin`，全区为零。随后按用户确认的流程执行 `adb reboot bootloader`，再次核对 `sun`、非 userspace 模式与落盘镜像哈希。2026-11-08 03:30:55（Asia/Shanghai）临时启动：Sending OKAY 2.334 秒、Booting OKAY 0.337 秒，总计 3.069 秒，退出码 0。未刷写分区镜像；本次启动会请求已授权日志预留区的周期写入。日志位于镜像旁 `fastboot-boot-20261108-033055.log`。等待运行约两分钟后回 recovery 读取实际日志，不再要求手工抄屏。

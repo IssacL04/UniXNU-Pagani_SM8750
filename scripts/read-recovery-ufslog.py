@@ -3,7 +3,6 @@
 import argparse
 from pathlib import Path
 import re
-import shlex
 import subprocess
 import tomllib
 
@@ -12,7 +11,7 @@ LOG_BLOCKS = 8192
 
 
 def shell(adb, command):
-    result = subprocess.run([*adb, 'exec-out', 'sh', '-c', shlex.quote(command)],
+    result = subprocess.run([*adb, 'exec-out', command],
                             capture_output=True, timeout=180)
     if result.returncode:
         raise RuntimeError(result.stderr.decode(errors='replace').strip() or 'ADB command failed')
