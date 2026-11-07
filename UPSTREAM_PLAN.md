@@ -160,3 +160,6 @@ Linux 预检能覆盖大量编译和链接错误，但 Apple Clang、SDK、macOS
 第四轮后续读数为 `USB s13 d0 irq1176 on1 dc80600000 ev0 f0`。02:59 和 03:04 的 Windows 检查均识别 `05AC:12AB`，Apple USB Composite Device 与 USB Device 状态为 OK，USB 枚举已通过。本机缺少 Apple Mobile Device 服务及 USBMux 监听，配对和数据服务仍未验证。Wi-Fi 停在 `f2`，日志指向 QMI mode request，但模式编号和错误码待补全；L01-L12 是历史日志轮播。
 
 社区对照确认 QcomDwc3 的独立 SID 一致性映射、Ath12kWifi 的 MHI 固件缓冲区保留与 QMI 按需内存修复均已纳入当前设计或构建输入。sheng 已有 WCN7850 联网实测，Peach 的校准/重启过程仍需本机完整日志判断；OnePlus 13T 参考仓库尚无网络成功验收。引用及证据见 [STAGE6](STAGE6.md#第四轮-usb-枚举与社区对照)。本次未改代码或替换镜像。
+
+
+完整日志进一步定位到校准 mode 7 期间的固件 system error，后续 INI `-5` 是下游错误，AUX 的 error 90 是状态不兼容。第五轮候选修复现有 RDDM 读取器被零调试掩码屏蔽的问题，屏幕优先显示崩溃记录；校准与微码策略保持。针对性 ASan/UBSan 检查、完整 Linux ARM64 内核/预链接及配对镜像读回均通过；第五份镜像为 `out/oneplus13t/boot/metal-main-local-io5-20261108/boot.img`，源输入 v31，沿用 Run 42 Data/trust。用户确认 Fastboot 就绪后，03:18:29 临时启动获 Sending/Booting OKAY，总计 3.076 秒，无分区刷写。03:19:48 Windows 再次枚举两个状态正常的 05AC:12AB Apple USB 设备；Wi-Fi 崩溃根因仍需新增固件断言。

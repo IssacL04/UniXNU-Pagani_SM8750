@@ -1801,3 +1801,23 @@ Wi-Fi 读数为 `WIFI f2 L03a qmi failed to set mode request`，完整模式编�
 - [sheng 的实机记录](https://github.com/UniXNU/UniXNU-sheng/commit/08cde20edc3254ed6f7df8d0f5384fb887786e8f) 有 WCN7850 扫描、WPA2、DHCP 和流量证据。本机为 Peach/WCN7880 家族，另有冷启动校准与重启流程；已对照其校准 hooks，当前局部日志不足以判断失败的是哪次模式切换。OnePlus 13T 参考仓库仍把网络列为 planned，DroidVM 的网络依赖虚拟设备，均未提供可直接套用的本机 Wi-Fi 成功证据。
 
 本次只更新观察与比较记录，没有改动运行代码、重建镜像或再次操作手机。下一步读取具体 QMI 请求错误，再选择针对性修正；GPU/小组件继续延后。
+
+
+### Peach 校准阶段崩溃与第五轮诊断候选
+
+用户补充的日志按发生顺序为：AUX_UC 请求返回 result 1 / error 90，校准报告成功，随后 `system error detected`、`ignore reset dev flags 0x12`，mode 7 请求以 `-110` 超时；继续尝试正常模式时，WLAN INI 发送返回 `-5`。因此最后的 `failed to start firmware: -5` 是崩溃后的下游错误。QMI error 90 是 `INCOMPATIBLE_STATE`，不能单凭它断言固件文件损坏或 AUX 是崩溃根因。
+
+对照本机固件对应的 [OnePlusOSS cnss2](https://github.com/OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8750/tree/6a196f79/vendor/qcom/opensource/wlan/platform/cnss2)，厂商同样在 M3 后发送 AUX，且根据目标能力决定是否发送；简单调换两步顺序没有证据。Peach Linux 分支仍是 bring-up，未找到已通过本机无线校准的社区修复。校准/微码策略保持原样，先取得固件自己的崩溃记录。
+
+当前源码有两个诊断问题：`ath12k_debug_mask=0` 隐藏了 BOOT 类的 `MHI_CB_EE_RDDM` 通知，使依赖它的已有读取器未被调用；固件在 `QMI_FW_READY_COMPLETE` 前崩溃时，原版 reset 路径又直接返回。候选启用 BOOT 类，保留 HTT/WMI 等包调试关闭。读取结束后，屏幕从现有环形日志中优先轮显 `rddm` 断言和读取摘要，标为 `R01a/b/c` 等；若没有相关记录，继续显示原来的 `L` 日志。RAM 日志及校准流程不变。
+
+实际状态行的环绕、早期断言优先级、完整分页、读取失败回退和错误优先级检查通过 ASan/UBSan；现有 RDDM 读取器 253 项边界检查及 quiet 检查通过。导出到 recovery reader 的附加检查因本地缺少 `工具/gpu-test-loop` 未执行，本次没有修改导出路径。首次完整构建发现状态行使用了内核 shim 未声明的 `strstr`；改为复用已有 `has`，清理构建缓存后重建通过。实际 ARM64 启动对象确认通过 `ath12k_debug_mask` 写入 BOOT 掩码 `0x20`。手机继续运行已通过 USB 枚举的第四份镜像，未重启或刷写。
+
+
+第五份镜像 `out/oneplus13t/boot/metal-main-local-io5-20261108/boot.img` 已完成：102,178,816 字节，SHA-256 `f7aaf61f334403e76ce7c23d6cdd1b2734138561940d50ac8bf48cf4f20341f2`。新内核 128,819,200 字节，SHA-256 `d8f8549efa9d11532b8ab5e3910f8077df52dfddbd6f6e935e9941efee8436b7`。源输入为 `.ci-inputs/oneplus13t-integrated-sources-20261108-v31.tar.gz`（432,386 字节，SHA-256 `6ef21eddfad5724ebc902af79f792ac435cd618d946c6a77175cfd8066e0d90a`）。
+
+Linux 完整内核/预链接、诊断入口和字符串、Run 42 Data UUID/内容、签名信任缓存与原有 Apple 模块、Wi-Fi 固件清单和 561 个 launchd 原条目均通过核验。FAT 文件、ADT 参数和完整 Android v4 容器读回通过，记录在镜像旁的 `packaging.log`。复用已验证 UEFI/DTB、Run 42 Data/trust 与现有 GPU 参数，UFS 写入仍关闭。D 盘 VHDX 为 35,672,555,520 字节，未达到 80 GB 清理阈值。本轮没有新增云端内核构建；Wi-Fi 修复需后续固件断言与联网实测。
+
+用户确认回到 Fastboot 后，再次核对镜像 SHA-256、设备序列号和 `sun` / `is-userspace: no`。2026-11-08 03:18:29（Asia/Shanghai）执行第五份镜像的临时 `fastboot boot`，Sending `OKAY` 2.336 秒、Booting `OKAY` 0.337 秒，总计 3.076 秒，退出码 0。未刷写分区；日志位于镜像旁的 `fastboot-boot-20261108-031829.log`。桌面状态及新增 `WIFI R` 崩溃记录等待观察。
+
+03:19:08 首次检查时 Fastboot 已消失，Windows 尚无匹配 USB 设备。03:19:48 复查出现 `05AC:12AB`，Apple Mobile Device USB Composite Device 和 USB Device 均为 OK，确认第五份镜像仍可完成 USB 枚举。配对与数据服务未测试。
