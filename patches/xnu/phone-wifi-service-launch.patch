@@ -1,0 +1,36 @@
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -9832,6 +9832,23 @@
+ 	return error;
+ }
+ 
++/* The owner-signed Wi-Fi daemon is a system launchd job; its signature and MAC exec checks still apply. */
++static bool
++pagani_wifi_owner_launch(struct image_params *imgp)
++{
++	uint32_t wifi = 0;
++	char path[MAXPATHLEN];
++	int length = sizeof(path);
++
++	if (imgp == NULL || imgp->ip_vp == NULLVP ||
++	    (imgp->ip_csflags & (CS_VALID | CS_SIGNED)) != (CS_VALID | CS_SIGNED) ||
++	    !PE_parse_boot_argn("pagani-wifi", &wifi, sizeof(wifi)) || wifi != 6) {
++		return false;
++	}
++	return vn_getpath(imgp->ip_vp, path, &length) == 0 &&
++	       strcmp(path, "/usr/libexec/unixnu-wpa_supplicant") == 0;
++}
++
+ static int
+ process_signature(proc_t p, struct image_params *imgp)
+ {
+@@ -9890,7 +9907,8 @@
+ 	/* call the launch constraints hook */
+ 	os_reason_t launch_constraint_reason;
+ 	/* PaganiDiag: the daemon's own image passes, everything else as ever */
+-	if ((error = pagani_diag_launch_constraints(p, imgp, &launch_constraint_reason)) != 0) {
++	if (!pagani_wifi_owner_launch(imgp) &&
++	    (error = pagani_diag_launch_constraints(p, imgp, &launch_constraint_reason)) != 0) {
+ 		signature_failure_reason = launch_constraint_reason;
+ 		goto done;
+ 	}

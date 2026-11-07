@@ -62,8 +62,10 @@ def prepare(output, soc):
                                       'pagani-vsync=120', 'pagani-battery=1', 'pagani-cpufreq=2', 'pagani-wifi=6', 'pagani-usb=1',
                                       'pagani-gpu-maxlevel=9', 'pagani-gpu-dcvs-min=342', 'pagani-gpu-ttarget=85',
                                       'pagani-ramoops=1', 'pagani-wifi-log=7', 'pagani-gpu-trace=0',
-                                      'sheng-log=1', 'pagani-ufslog-ms=3000']
+                                      'sheng-log=1', 'pagani-ufslog-ms=3000', 'sheng-aks-sls=3']
     board.setdefault('adt', {}).setdefault('product', {})['wlan'] = {}
+    # MobileDevice matches the iPad7,1 identity selected by the 21H461 profile.
+    board['adt'].setdefault('chosen', {}).setdefault('u32', {}).update({'board-id': 12, 'security-domain': 1})
     config = (ROOT / 'configs/oneplus13t_defconfig').read_text()
     marker = '# CONFIG_XNU_NATIVE_ADRENO is not set'
     if config.count(marker) != 1:
